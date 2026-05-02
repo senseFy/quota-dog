@@ -61,6 +61,47 @@ export QUOTADOG_KEY_ALIAS=...
 export QUOTADOG_KEY_PASSWORD=...
 ```
 
+App version is read from env vars at build time so CI can inject it from a tag:
+
+```bash
+export RELEASE_VERSION=1.2.0       # versionName + Compose Desktop packageVersion (MAJOR must be >= 1)
+export RELEASE_VERSION_CODE=42     # Android versionCode (monotonically increasing int)
+```
+
+Local builds without these vars use a default of `1.0.0`.
+(Compose Desktop's installer formats reject `MAJOR=0`, so `0.x.y` cannot be the
+fallback. Use a `RELEASE_VERSION` env var if you need a different number.)
+
+### Publishing a GitHub Release
+
+Pushing a `vX.Y.Z` tag triggers
+[`.github/workflows/release.yml`](.github/workflows/release.yml), which builds
+and attaches:
+
+- Android: signed `*.apk` and `*.aab`
+- Desktop: macOS `*.dmg`, Windows `*.msi`, Linux `*.deb`
+
+iOS is intentionally not published this way — distribute via TestFlight / App
+Store instead.
+
+The workflow expects four GitHub Actions secrets in the repository
+(Settings → Secrets and variables → Actions):
+
+| Secret | Value |
+|---|---|
+| `QUOTADOG_KEYSTORE_BASE64` | `base64 -i keystore.jks` (single line) |
+| `QUOTADOG_KEYSTORE_PASSWORD` | keystore password |
+| `QUOTADOG_KEY_ALIAS` | key alias inside the keystore |
+| `QUOTADOG_KEY_PASSWORD` | key password |
+
+To cut a release (note: `MAJOR` must be `>= 1` due to Compose Desktop's
+installer-format validation):
+
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
+
 ### iOS
 
 The repository includes a minimal Xcode project at `iosApp/iosApp.xcodeproj`.
