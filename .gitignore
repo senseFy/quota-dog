@@ -1,0 +1,100 @@
+# Gradle
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+!**/src/**/build/
+!**/src/**/*.gradle/
+
+# Kotlin / KMP
+.kotlin/
+kotlin-js-store/
+local.properties
+
+# IntelliJ IDEA / Android Studio
+.idea/
+*.iml
+*.ipr
+*.iws
+out/
+.shelf/
+
+# VS Code
+.vscode/
+*.code-workspace
+
+# Android
+*.apk
+*.aab
+*.ap_
+*.dex
+*.class
+captures/
+.cxx/
+local.properties
+
+# Xcode / iOS
+xcuserdata/
+*.xcuserstate
+*.xcworkspace/xcuserdata/
+*.xcodeproj/xcuserdata/
+*.xcodeproj/project.xcworkspace/xcuserdata/
+DerivedData/
+build/
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# CocoaPods
+Pods/
+Podfile.lock
+
+# Swift Package Manager
+.swiftpm/
+.build/
+Package.resolved
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+._*
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Linux
+*~
+.directory
+.Trash-*
+
+# Logs / temp
+*.log
+*.tmp
+*.bak
+*.swp
+*.swo
+
+# Node (if any tooling)
+node_modules/
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+*.keystore
+*.jks
+*.p12
+*.p8
+*.pem
+*.key
+*.mobileprovision
+google-services.json
+GoogleService-Info.plist
+
+# Local app data
+.quotadog/
