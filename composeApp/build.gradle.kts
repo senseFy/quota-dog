@@ -8,6 +8,14 @@ plugins {
     alias(libs.plugins.composeCompiler)
 }
 
+// App version is read from env vars so CI release jobs can inject the tag-derived
+// version. Local builds fall back to `1.0.0` because Compose Desktop's installer
+// formats reject MAJOR=0; that constraint also rules out "*-dev" suffixes here.
+val releaseVersionName: String =
+    System.getenv("RELEASE_VERSION")?.takeIf { it.isNotBlank() } ?: "1.0.0"
+val releaseVersionCode: Int =
+    System.getenv("RELEASE_VERSION_CODE")?.toIntOrNull() ?: 1
+
 kotlin {
     androidTarget {
         compilerOptions {
@@ -66,8 +74,8 @@ android {
         applicationId = "saien.quotadog"
         minSdk = libs.versions.android.minSdk.get().toInt()
         targetSdk = libs.versions.android.targetSdk.get().toInt()
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = releaseVersionCode
+        versionName = releaseVersionName
     }
 
     compileOptions {
@@ -117,9 +125,14 @@ compose.desktop {
         mainClass = "saien.quotadog.MainKt"
 
         nativeDistributions {
-            targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Exe)
+            // Dmg = macOS, Msi = Windows installer, Deb = Debian/Ubuntu Linux.
+            targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb)
             packageName = "QuotaDog"
-            packageVersion = "1.0.0"
+            // Compose Desktop requires strict semver `X.Y.Z`; strip any suffix
+            // such as "-dev" or "-rc.1" so local dev versions still package.
+            packageVersion = releaseVersionName.substringBefore('-').let { stripped ->
+                if (stripped.matches(Regex("\\d+\\.\\d+\\.\\d+"))) stripped else "1.0.0"
+            }
         }
     }
 }
