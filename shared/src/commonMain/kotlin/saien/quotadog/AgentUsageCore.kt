@@ -24,6 +24,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.datetime.Clock
 import kotlinx.datetime.Instant
 import kotlinx.serialization.SerialName
@@ -422,6 +424,8 @@ class QuotaDogStore(
     private val usageSnapshotStore: SettingsUsageSnapshotStore = SettingsUsageSnapshotStore()
 ) {
     private val storeScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val refreshMutex = Mutex()
+    private val activeRefreshes = mutableSetOf<AccountKey>()
     private var detectStarted = false
     private val _state = MutableStateFlow(DashboardState())
     val state: StateFlow<DashboardState> = _state
@@ -468,7 +472,11 @@ class QuotaDogStore(
             val accounts = state.value.accounts.values
                 .filter { it.added && (it.authState == AuthState.LoggedIn || it.authState == AuthState.TokenExpired) }
                 .map { it.accountKey }
-            accounts.forEach { refresh(it) }
+            coroutineScope {
+                accounts.forEach { accountKey ->
+                    launch { refresh(accountKey) }
+                }
+            }
         }
     }
 
@@ -609,6 +617,7 @@ class QuotaDogStore(
     }
 
     suspend fun refresh(accountKey: AccountKey) {
+        if (!beginRefresh(accountKey)) return
         update(accountKey) { it.copy(added = true, busy = true, message = null) }
         try {
             val snapshot = client.refreshUsage(accountKey)
@@ -642,6 +651,8 @@ class QuotaDogStore(
                     message = safeUserMessage(error, "Refresh failed. Please try again.")
                 )
             }
+        } finally {
+            endRefresh(accountKey)
         }
     }
 
@@ -683,6 +694,18 @@ class QuotaDogStore(
         _state.update { current ->
             val existing = current.accounts[accountKey] ?: AccountUiState(accountKey)
             current.copy(accounts = current.accounts + (accountKey to transform(existing)))
+        }
+    }
+
+    private suspend fun beginRefresh(accountKey: AccountKey): Boolean {
+        return refreshMutex.withLock {
+            if (accountKey in activeRefreshes) false else activeRefreshes.add(accountKey)
+        }
+    }
+
+    private suspend fun endRefresh(accountKey: AccountKey) {
+        refreshMutex.withLock {
+            activeRefreshes.remove(accountKey)
         }
     }
 }
