@@ -138,6 +138,9 @@ private fun QuotaDogScreen(store: QuotaDogStore, preferences: AppPreferences) {
     val accounts = state.accounts.values
         .filter { it.shouldShowAccount() }
         .sortedWith(compareBy<AccountUiState> { it.providerId.ordinal }.thenBy { it.accountSortLabel() })
+    val refreshableAccounts = accounts.filter { it.canRefreshUsage() }
+    val refreshAllBusy = refreshableAccounts.any { it.busy }
+    val refreshAllEnabled = refreshableAccounts.any { !it.busy }
 
     // Edge-to-edge: outer Box paints the theme background under status bar and home indicator,
     // inner content respects safe drawing insets.
@@ -254,9 +257,14 @@ private fun QuotaDogScreen(store: QuotaDogStore, preferences: AppPreferences) {
                     tone = QdSnackbarTone.Success,
                 )
             },
+            refreshAllBusy = refreshAllBusy,
+            refreshAllEnabled = refreshAllEnabled,
             onRefreshAll = {
                 store.startRefreshAll()
-                snackbar.show("Refreshing all accounts...")
+                snackbar.show(
+                    text = if (refreshAllBusy) "Refreshing remaining accounts..." else "Refreshing all accounts...",
+                    tone = QdSnackbarTone.Info,
+                )
             },
             onDismiss = { showSettings = false },
             versionLabel = "v1.0.0",
@@ -734,6 +742,10 @@ private fun AccountUiState.shouldShowAccount(): Boolean {
         snapshot != null ||
         loginStart != null ||
         busy
+}
+
+private fun AccountUiState.canRefreshUsage(): Boolean {
+    return added && (authState == AuthState.LoggedIn || authState == AuthState.TokenExpired)
 }
 
 private fun AccountUiState.accountTitle(emailPrivacyMode: EmailPrivacyMode = EmailPrivacyMode.Visible): String {

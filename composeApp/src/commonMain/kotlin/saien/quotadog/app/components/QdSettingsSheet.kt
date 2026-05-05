@@ -52,6 +52,8 @@ fun QdSettingsSheet(
     onEmailPrivacyModeChange: (EmailPrivacyMode) -> Unit,
     autoRefreshMinutes: Int,
     onAutoRefreshChange: (Int) -> Unit,
+    refreshAllBusy: Boolean,
+    refreshAllEnabled: Boolean,
     onRefreshAll: () -> Unit,
     onDismiss: () -> Unit,
     versionLabel: String,
@@ -205,13 +207,18 @@ fun QdSettingsSheet(
                     // Manual refresh.
                     QdSettingsRow(
                         title = "Refresh now",
-                        description = "Pull every signed-in provider immediately.",
+                        description = if (refreshAllBusy) {
+                            "Refreshing signed-in providers concurrently."
+                        } else {
+                            "Pull every signed-in provider immediately."
+                        },
                         trailing = {
                             QdButton(
-                                text = "Refresh all",
+                                text = if (refreshAllBusy) "Refreshing" else "Refresh all",
                                 onClick = onRefreshAll,
                                 variant = QdButtonVariant.Secondary,
                                 size = QdButtonSize.Small,
+                                enabled = refreshAllEnabled,
                                 leading = {
                                     QdRefreshIcon(tint = colors.textPrimary, size = 14.dp)
                                 },
