@@ -128,6 +128,10 @@ compose.desktop {
             // Dmg = macOS, Msi = Windows installer, Deb = Debian/Ubuntu Linux.
             targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb)
             packageName = "QuotaDog"
+            // The desktop app uses the Ktor Java engine (`java.net.http`) and a local OAuth
+            // callback server (`jdk.httpserver`). jlink does not infer these reliably from the
+            // packaged classpath, so include them explicitly in the runtime image.
+            modules("java.net.http", "jdk.httpserver")
             // Compose Desktop requires strict semver `X.Y.Z`; strip any suffix
             // such as "-dev" or "-rc.1" so local dev versions still package.
             packageVersion = releaseVersionName.substringBefore('-').let { stripped ->
