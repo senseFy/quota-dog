@@ -48,6 +48,8 @@ fun QdSettingsSheet(
     onThemeChange: (ThemeMode) -> Unit,
     usageDisplayMode: UsageDisplayMode,
     onUsageDisplayModeChange: (UsageDisplayMode) -> Unit,
+    showProjectedUsage: Boolean,
+    onShowProjectedUsageChange: (Boolean) -> Unit,
     emailPrivacyMode: EmailPrivacyMode,
     onEmailPrivacyModeChange: (EmailPrivacyMode) -> Unit,
     autoRefreshMinutes: Int,
@@ -161,6 +163,22 @@ fun QdSettingsSheet(
                                 ),
                                 selected = usageDisplayMode,
                                 onSelect = onUsageDisplayModeChange,
+                            )
+                        },
+                    )
+
+                    // Usage estimate.
+                    QdSettingsRow(
+                        title = "Usage estimate",
+                        description = "Project session and weekly totals from the current pace.",
+                        control = {
+                            QdSegmentedControl(
+                                options = listOf(
+                                    "Off" to false,
+                                    "On" to true,
+                                ),
+                                selected = showProjectedUsage,
+                                onSelect = onShowProjectedUsageChange,
                             )
                         },
                     )
