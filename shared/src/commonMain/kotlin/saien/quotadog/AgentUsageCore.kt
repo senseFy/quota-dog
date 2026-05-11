@@ -98,7 +98,8 @@ data class UsageWindow(
     val label: String,
     val usedRatio: Double,
     val resetsAt: Instant?,
-    val source: UsageSource = UsageSource.ServerAuthoritative
+    val source: UsageSource = UsageSource.ServerAuthoritative,
+    val durationSeconds: Long? = null
 ) {
     val remainingRatio: Double = (1.0 - usedRatio).coerceIn(0.0, 1.0)
 }
@@ -722,7 +723,13 @@ private fun parseCodexWindow(id: String, element: JsonElement?): UsageWindow? {
     }
     val resetAt = obj["reset_at"]?.jsonPrimitive?.contentOrNull?.toLongOrNull()
         ?.let { Instant.fromEpochSeconds(it) }
-    return UsageWindow(id, label, normalizeUtilization(used), resetAt)
+    return UsageWindow(
+        id = id,
+        label = label,
+        usedRatio = normalizeUtilization(used),
+        resetsAt = resetAt,
+        durationSeconds = seconds?.toLong()
+    )
 }
 
 private fun parseClaudeWindow(id: String, label: String, element: JsonElement?): UsageWindow? {
@@ -731,7 +738,13 @@ private fun parseClaudeWindow(id: String, label: String, element: JsonElement?):
     val used = obj["utilization"]?.jsonPrimitive?.doubleOrNull ?: return null
     val resetAt = obj["resets_at"]?.jsonPrimitive?.contentOrNull
         ?.let { runCatching { Instant.parse(it) }.getOrNull() }
-    return UsageWindow(id, label, normalizeUtilization(used), resetAt)
+    return UsageWindow(
+        id = id,
+        label = label,
+        usedRatio = normalizeUtilization(used),
+        resetsAt = resetAt,
+        durationSeconds = inferWindowDurationSeconds(id, label)
+    )
 }
 
 private fun ProviderUsageSnapshot.asCachedSnapshot(authState: AuthState): ProviderUsageSnapshot {
@@ -745,6 +758,35 @@ private fun ProviderUsageSnapshot.asCachedSnapshot(authState: AuthState): Provid
 fun normalizeUtilization(value: Double): Double {
     return (if (value > 1.0) value / 100.0 else value).coerceIn(0.0, 1.0)
 }
+
+fun UsageWindow.projectedUsedRatio(at: Instant = Clock.System.now()): Double? {
+    val resetAtMillis = resetsAt?.toEpochMilliseconds() ?: return null
+    val durationMillis = (durationSeconds ?: inferWindowDurationSeconds(id, label))
+        ?.takeIf { it > 0 }
+        ?.let { it * 1_000L }
+        ?: return null
+    val remainingMillis = resetAtMillis - at.toEpochMilliseconds()
+    if (remainingMillis <= 0 || remainingMillis >= durationMillis) return null
+    val elapsedRatio = (durationMillis - remainingMillis).toDouble() / durationMillis.toDouble()
+    if (elapsedRatio <= 0.0) return null
+    return (usedRatio / elapsedRatio).coerceIn(usedRatio, 1.0)
+}
+
+private fun inferWindowDurationSeconds(id: String, label: String): Long? {
+    return when (id) {
+        "primary", "five_hour" -> FIVE_HOUR_SECONDS
+        "secondary", "seven_day", "seven_day_sonnet", "seven_day_opus" -> SEVEN_DAY_SECONDS
+        else -> when {
+            label.contains("5-hour", ignoreCase = true) -> FIVE_HOUR_SECONDS
+            label.contains("7-day", ignoreCase = true) -> SEVEN_DAY_SECONDS
+            label.contains("weekly", ignoreCase = true) -> SEVEN_DAY_SECONDS
+            else -> null
+        }
+    }
+}
+
+private const val FIVE_HOUR_SECONDS = 5L * 60L * 60L
+private const val SEVEN_DAY_SECONDS = 7L * 24L * 60L * 60L
 
 private object OAuthCallback {
     fun parse(raw: String): ParsedOAuthCallback {

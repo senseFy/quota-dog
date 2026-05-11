@@ -61,6 +61,7 @@ import saien.quotadog.QuotaDogStore
 import saien.quotadog.ThemeMode
 import saien.quotadog.UsageDisplayMode
 import saien.quotadog.UsageWindow
+import saien.quotadog.projectedUsedRatio
 import saien.quotadog.app.components.QdAlertIcon
 import saien.quotadog.app.components.QdBottomSheet
 import saien.quotadog.app.components.QdButton
@@ -109,6 +110,7 @@ private fun QuotaDogScreen(store: QuotaDogStore, preferences: AppPreferences) {
     val themeMode by preferences.themeMode.collectAsState()
     val autoRefreshMinutes by preferences.autoRefreshMinutes.collectAsState()
     val usageDisplayMode by preferences.usageDisplayMode.collectAsState()
+    val showProjectedUsage by preferences.showProjectedUsage.collectAsState()
     val emailPrivacyMode by preferences.emailPrivacyMode.collectAsState()
     val callbackInputs = remember { mutableStateMapOf<AccountKey, String>() }
     var showProviderPicker by remember { mutableStateOf(false) }
@@ -175,6 +177,7 @@ private fun QuotaDogScreen(store: QuotaDogStore, preferences: AppPreferences) {
                     AccountCard(
                         state = providerState,
                         usageDisplayMode = usageDisplayMode,
+                        showProjectedUsage = showProjectedUsage,
                         emailPrivacyMode = emailPrivacyMode,
                         callbackInput = callbackInputs[providerState.accountKey].orEmpty(),
                         onCallbackChange = { callbackInputs[providerState.accountKey] = it },
@@ -238,6 +241,14 @@ private fun QuotaDogScreen(store: QuotaDogStore, preferences: AppPreferences) {
                 preferences.setUsageDisplayMode(it)
                 snackbar.show(
                     text = "Quota display set to ${it.name.lowercase()}",
+                    tone = QdSnackbarTone.Success,
+                )
+            },
+            showProjectedUsage = showProjectedUsage,
+            onShowProjectedUsageChange = {
+                preferences.setShowProjectedUsage(it)
+                snackbar.show(
+                    text = if (it) "Usage estimate enabled" else "Usage estimate disabled",
                     tone = QdSnackbarTone.Success,
                 )
             },
@@ -336,6 +347,7 @@ private fun DashboardHeader(
 private fun AccountCard(
     state: AccountUiState,
     usageDisplayMode: UsageDisplayMode,
+    showProjectedUsage: Boolean,
     emailPrivacyMode: EmailPrivacyMode,
     callbackInput: String,
     onCallbackChange: (String) -> Unit,
@@ -399,7 +411,7 @@ private fun AccountCard(
             val windows = state.snapshot?.windows.orEmpty()
             if (windows.isNotEmpty()) {
                 Column(verticalArrangement = Arrangement.spacedBy(spacing.md)) {
-                    windows.forEach { UsageWindowRow(it, usageDisplayMode) }
+                    windows.forEach { UsageWindowRow(it, usageDisplayMode, showProjectedUsage) }
                 }
             } else {
                 InlineStatus(
@@ -519,13 +531,18 @@ private fun rememberRefreshRotation(active: Boolean): Float {
 }
 
 @Composable
-private fun UsageWindowRow(window: UsageWindow, displayMode: UsageDisplayMode) {
+private fun UsageWindowRow(window: UsageWindow, displayMode: UsageDisplayMode, showProjectedUsage: Boolean) {
     val colors = QdTheme.colors
     val typo = QdTheme.typography
     val spacing = QdTheme.spacing
     val progress = window.displayRatio(displayMode)
     val progressFill = window.progressFill(displayMode)
     val pct = (progress * 100).toInt()
+    val projectedPct = if (showProjectedUsage) {
+        window.projectedUsedRatio()?.let { (it * 100).toInt() }
+    } else {
+        null
+    }
     Column(verticalArrangement = Arrangement.spacedBy(spacing.xs)) {
         QdProgressBar(
             progress = progress.toFloat(),
@@ -558,6 +575,15 @@ private fun UsageWindowRow(window: UsageWindow, displayMode: UsageDisplayMode) {
                     color = progressFill,
                     maxLines = 1,
                 )
+                if (projectedPct != null) {
+                    Text(
+                        " est $projectedPct%",
+                        style = typo.caption,
+                        color = colors.textTertiary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
         }
     }
