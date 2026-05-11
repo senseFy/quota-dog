@@ -3,6 +3,7 @@ package saien.quotadog
 import com.russhwolf.settings.Settings
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.datetime.Clock
 
 enum class ThemeMode { System, Light, Dark }
 
@@ -39,28 +40,85 @@ class AppPreferences(
 
     fun setThemeMode(mode: ThemeMode) {
         settings.putString(KEY_THEME, mode.name)
+        settings.putLong(updatedAtKey(KEY_THEME), nowMillis())
         _themeMode.value = mode
     }
 
     fun setAutoRefreshMinutes(minutes: Int) {
         val sanitized = if (minutes < 0) 0 else minutes
         settings.putInt(KEY_AUTO_REFRESH, sanitized)
+        settings.putLong(updatedAtKey(KEY_AUTO_REFRESH), nowMillis())
         _autoRefreshMinutes.value = sanitized
     }
 
     fun setUsageDisplayMode(mode: UsageDisplayMode) {
         settings.putString(KEY_USAGE_DISPLAY_MODE, mode.name)
+        settings.putLong(updatedAtKey(KEY_USAGE_DISPLAY_MODE), nowMillis())
         _usageDisplayMode.value = mode
     }
 
     fun setShowProjectedUsage(show: Boolean) {
         settings.putBoolean(KEY_SHOW_PROJECTED_USAGE, show)
+        settings.putLong(updatedAtKey(KEY_SHOW_PROJECTED_USAGE), nowMillis())
         _showProjectedUsage.value = show
     }
 
     fun setEmailPrivacyMode(mode: EmailPrivacyMode) {
         settings.putString(KEY_EMAIL_PRIVACY_MODE, mode.name)
+        settings.putLong(updatedAtKey(KEY_EMAIL_PRIVACY_MODE), nowMillis())
         _emailPrivacyMode.value = mode
+    }
+
+    fun exportForSync(): CloudSyncPreferencesRecord {
+        return CloudSyncPreferencesRecord(
+            themeMode = CloudSyncStringPreference(
+                value = _themeMode.value.name,
+                updatedAtEpochMillis = preferenceUpdatedAt(KEY_THEME)
+            ),
+            autoRefreshMinutes = CloudSyncIntPreference(
+                value = _autoRefreshMinutes.value,
+                updatedAtEpochMillis = preferenceUpdatedAt(KEY_AUTO_REFRESH)
+            ),
+            usageDisplayMode = CloudSyncStringPreference(
+                value = _usageDisplayMode.value.name,
+                updatedAtEpochMillis = preferenceUpdatedAt(KEY_USAGE_DISPLAY_MODE)
+            ),
+            showProjectedUsage = CloudSyncBooleanPreference(
+                value = _showProjectedUsage.value,
+                updatedAtEpochMillis = preferenceUpdatedAt(KEY_SHOW_PROJECTED_USAGE)
+            ),
+            emailPrivacyMode = CloudSyncStringPreference(
+                value = _emailPrivacyMode.value.name,
+                updatedAtEpochMillis = preferenceUpdatedAt(KEY_EMAIL_PRIVACY_MODE)
+            )
+        )
+    }
+
+    fun importForSync(preferences: CloudSyncPreferencesRecord) {
+        preferences.themeMode?.let {
+            val value = runCatching { ThemeMode.valueOf(it.value) }.getOrNull() ?: return@let
+            importString(KEY_THEME, value.name, it.updatedAtEpochMillis)
+            _themeMode.value = value
+        }
+        preferences.autoRefreshMinutes?.let {
+            importInt(KEY_AUTO_REFRESH, it.value.coerceAtLeast(0), it.updatedAtEpochMillis)
+            _autoRefreshMinutes.value = it.value.coerceAtLeast(0)
+        }
+        preferences.usageDisplayMode?.let {
+            val value = runCatching { UsageDisplayMode.valueOf(it.value) }.getOrNull() ?: return@let
+            importString(KEY_USAGE_DISPLAY_MODE, value.name, it.updatedAtEpochMillis)
+            _usageDisplayMode.value = value
+        }
+        preferences.showProjectedUsage?.let {
+            settings.putBoolean(KEY_SHOW_PROJECTED_USAGE, it.value)
+            settings.putLong(updatedAtKey(KEY_SHOW_PROJECTED_USAGE), it.updatedAtEpochMillis)
+            _showProjectedUsage.value = it.value
+        }
+        preferences.emailPrivacyMode?.let {
+            val value = runCatching { EmailPrivacyMode.valueOf(it.value) }.getOrNull() ?: return@let
+            importString(KEY_EMAIL_PRIVACY_MODE, value.name, it.updatedAtEpochMillis)
+            _emailPrivacyMode.value = value
+        }
     }
 
     private fun loadThemeMode(): ThemeMode {
@@ -85,6 +143,24 @@ class AppPreferences(
         val raw = settings.getStringOrNull(KEY_EMAIL_PRIVACY_MODE) ?: return EmailPrivacyMode.Visible
         return runCatching { EmailPrivacyMode.valueOf(raw) }.getOrDefault(EmailPrivacyMode.Visible)
     }
+
+    private fun importString(key: String, value: String, updatedAtEpochMillis: Long) {
+        settings.putString(key, value)
+        settings.putLong(updatedAtKey(key), updatedAtEpochMillis)
+    }
+
+    private fun importInt(key: String, value: Int, updatedAtEpochMillis: Long) {
+        settings.putInt(key, value)
+        settings.putLong(updatedAtKey(key), updatedAtEpochMillis)
+    }
+
+    private fun preferenceUpdatedAt(key: String): Long {
+        return settings.getLongOrNull(updatedAtKey(key)) ?: 0L
+    }
+
+    private fun nowMillis(): Long = Clock.System.now().toEpochMilliseconds()
+
+    private fun updatedAtKey(key: String): String = "${key}_updated_at"
 
     private companion object {
         const val KEY_THEME = "pref_theme_mode"

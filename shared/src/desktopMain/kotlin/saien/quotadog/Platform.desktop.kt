@@ -58,6 +58,21 @@ actual class PlatformTokenStore actual constructor() : TokenStore {
         legacyTokenFile(accountKey.providerId).delete()
     }
 
+    override suspend fun exportTokensForSync(): List<CloudSyncAccountRecord> = delegate.exportTokensForSync()
+
+    override suspend fun importTokenForSync(
+        accountKey: AccountKey,
+        token: OAuthTokenBundle,
+        updatedAtEpochMillis: Long
+    ) {
+        delegate.importTokenForSync(accountKey, token, updatedAtEpochMillis)
+    }
+
+    override suspend fun deleteForSync(accountKey: AccountKey) {
+        delegate.deleteForSync(accountKey)
+        legacyTokenFile(accountKey.providerId).delete()
+    }
+
     private fun loadLegacy(providerId: ProviderId): OAuthTokenBundle? {
         val file = legacyTokenFile(providerId)
         if (!file.exists()) return null
@@ -87,6 +102,11 @@ actual class PlatformOAuthCallbackServer actual constructor() : OAuthCallbackSer
             ProviderId.CODEX -> CallbackConfig(port = 1455, path = "/auth/callback")
             ProviderId.CLAUDE_CODE -> CallbackConfig(port = 54545, path = "/callback")
         }
+        return waitForCallback(config.port, config.path, timeoutMillis)
+    }
+
+    override suspend fun waitForCallback(port: Int, path: String, timeoutMillis: Long): String? {
+        val config = CallbackConfig(port = port, path = path)
         return withContext(Dispatchers.IO) {
             val result = CompletableDeferred<String?>()
             val server = HttpServer.create(InetSocketAddress("127.0.0.1", config.port), 0)

@@ -9,6 +9,9 @@ interface TokenStore {
     suspend fun save(providerId: ProviderId, token: OAuthTokenBundle): AccountKey
     suspend fun save(accountKey: AccountKey, token: OAuthTokenBundle)
     suspend fun delete(accountKey: AccountKey)
+    suspend fun exportTokensForSync(): List<CloudSyncAccountRecord>
+    suspend fun importTokenForSync(accountKey: AccountKey, token: OAuthTokenBundle, updatedAtEpochMillis: Long)
+    suspend fun deleteForSync(accountKey: AccountKey)
 }
 
 interface BrowserLauncher {
@@ -17,6 +20,7 @@ interface BrowserLauncher {
 
 interface OAuthCallbackServer {
     suspend fun waitForCallback(providerId: ProviderId, timeoutMillis: Long = 300_000): String?
+    suspend fun waitForCallback(port: Int, path: String, timeoutMillis: Long = 300_000): String?
 }
 
 expect class PlatformTokenStore() : TokenStore

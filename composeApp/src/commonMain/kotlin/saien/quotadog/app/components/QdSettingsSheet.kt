@@ -24,14 +24,19 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.OutlinedTextField
 import androidx.compose.material.Text
+import androidx.compose.material.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import saien.quotadog.CloudSyncStatus
+import saien.quotadog.CloudSyncUiState
 import saien.quotadog.EmailPrivacyMode
 import saien.quotadog.ThemeMode
 import saien.quotadog.UsageDisplayMode
@@ -57,6 +62,15 @@ fun QdSettingsSheet(
     refreshAllBusy: Boolean,
     refreshAllEnabled: Boolean,
     onRefreshAll: () -> Unit,
+    cloudSyncState: CloudSyncUiState,
+    syncPassphrase: String,
+    onSyncPassphraseChange: (String) -> Unit,
+    onConnectDropbox: () -> Unit,
+    onUnlockCloudSync: () -> Unit,
+    onSyncNow: () -> Unit,
+    onCancelCloudSync: () -> Unit,
+    onResetCloudSync: () -> Unit,
+    onDisconnectCloudSync: () -> Unit,
     onDismiss: () -> Unit,
     versionLabel: String,
 ) {
@@ -244,6 +258,99 @@ fun QdSettingsSheet(
                         },
                     )
 
+                    // Cloud sync.
+                    QdSettingsRow(
+                        title = "Cloud sync",
+                        description = cloudSyncDescription(cloudSyncState),
+                        control = {
+                            Column(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalArrangement = Arrangement.spacedBy(spacing.sm),
+                            ) {
+                                OutlinedTextField(
+                                    value = syncPassphrase,
+                                    onValueChange = onSyncPassphraseChange,
+                                    enabled = !cloudSyncState.busy,
+                                    singleLine = true,
+                                    visualTransformation = PasswordVisualTransformation(),
+                                    label = { Text("Sync passphrase (8+ chars)") },
+                                    placeholder = { Text("Use the same phrase on every device") },
+                                    colors = TextFieldDefaults.outlinedTextFieldColors(
+                                        textColor = colors.textPrimary,
+                                        focusedBorderColor = colors.primary,
+                                        unfocusedBorderColor = colors.border,
+                                        focusedLabelColor = colors.primary,
+                                        unfocusedLabelColor = colors.textSecondary,
+                                        cursorColor = colors.primary,
+                                    ),
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                                Text(
+                                    text = "This encrypts your Dropbox sync file. It is not your Dropbox password, is never uploaded, and cannot be recovered if forgotten.",
+                                    style = typo.caption,
+                                    color = colors.textSecondary,
+                                )
+                                Row(
+                                    horizontalArrangement = Arrangement.spacedBy(spacing.sm),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    if (cloudSyncState.busy) {
+                                        QdButton(
+                                            text = "Cancel",
+                                            onClick = onCancelCloudSync,
+                                            variant = QdButtonVariant.Secondary,
+                                            size = QdButtonSize.Small,
+                                        )
+                                    } else {
+                                        when {
+                                            !cloudSyncState.connected -> {
+                                                QdButton(
+                                                    text = "Connect Dropbox",
+                                                    onClick = onConnectDropbox,
+                                                    variant = QdButtonVariant.Primary,
+                                                    size = QdButtonSize.Small,
+                                                )
+                                            }
+                                            cloudSyncState.status == CloudSyncStatus.Locked -> {
+                                                QdButton(
+                                                    text = "Unlock",
+                                                    onClick = onUnlockCloudSync,
+                                                    variant = QdButtonVariant.Primary,
+                                                    size = QdButtonSize.Small,
+                                                )
+                                            }
+                                            else -> {
+                                                QdButton(
+                                                    text = "Sync now",
+                                                    onClick = onSyncNow,
+                                                    variant = QdButtonVariant.Secondary,
+                                                    size = QdButtonSize.Small,
+                                                )
+                                            }
+                                        }
+                                    }
+                                    if (cloudSyncState.connected) {
+                                        QdButton(
+                                            text = "Disconnect",
+                                            onClick = onDisconnectCloudSync,
+                                            variant = QdButtonVariant.Ghost,
+                                            size = QdButtonSize.Small,
+                                            enabled = !cloudSyncState.busy,
+                                        )
+                                    }
+                                }
+                                if (cloudSyncState.connected && !cloudSyncState.busy) {
+                                    QdButton(
+                                        text = "Reset sync file",
+                                        onClick = onResetCloudSync,
+                                        variant = QdButtonVariant.Danger,
+                                        size = QdButtonSize.Small,
+                                    )
+                                }
+                            }
+                        },
+                    )
+
                     // About.
                     QdSettingsRow(
                         title = "About",
@@ -252,5 +359,17 @@ fun QdSettingsSheet(
                 }
             }
         }
+    }
+}
+
+private fun cloudSyncDescription(state: CloudSyncUiState): String {
+    state.message?.let { return it }
+    return when (state.status) {
+        CloudSyncStatus.Disconnected -> "Use your own Dropbox App Folder to sync encrypted tokens, usage cache, and settings across devices."
+        CloudSyncStatus.Locked -> "Dropbox is connected. Enter your sync passphrase to unlock this device."
+        CloudSyncStatus.Connecting -> "Connecting to Dropbox..."
+        CloudSyncStatus.Syncing -> "Syncing encrypted QuotaDog data with Dropbox..."
+        CloudSyncStatus.Connected -> "Dropbox sync is enabled."
+        CloudSyncStatus.Error -> "Dropbox sync needs attention."
     }
 }

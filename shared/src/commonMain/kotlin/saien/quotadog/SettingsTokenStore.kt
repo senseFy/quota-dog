@@ -1,6 +1,7 @@
 package saien.quotadog
 
 import com.russhwolf.settings.Settings
+import kotlinx.datetime.Clock
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
@@ -38,14 +39,45 @@ class SettingsTokenStore(
     }
 
     override suspend fun save(accountKey: AccountKey, token: OAuthTokenBundle) {
+        save(accountKey, token, Clock.System.now().toEpochMilliseconds())
+    }
+
+    private fun save(accountKey: AccountKey, token: OAuthTokenBundle, updatedAtEpochMillis: Long) {
         val encoded = json.encodeToString(OAuthTokenBundle.serializer(), token)
         settings.putString(key(accountKey), encoded)
+        settings.putLong(updatedAtKey(accountKey), updatedAtEpochMillis)
         upsertIndex(accountKey)
     }
 
     override suspend fun delete(accountKey: AccountKey) {
         settings.remove(key(accountKey))
+        settings.remove(updatedAtKey(accountKey))
         saveIndex(loadIndex().filterNot { it.providerId == accountKey.providerId && it.accountId == accountKey.accountId })
+    }
+
+    override suspend fun exportTokensForSync(): List<CloudSyncAccountRecord> {
+        return list().map { stored ->
+            CloudSyncAccountRecord(
+                providerId = stored.accountKey.providerId,
+                accountId = stored.accountKey.accountId,
+                token = CloudSyncTokenValue(
+                    value = stored.token,
+                    updatedAtEpochMillis = tokenUpdatedAt(stored.accountKey, stored.token)
+                )
+            )
+        }
+    }
+
+    override suspend fun importTokenForSync(
+        accountKey: AccountKey,
+        token: OAuthTokenBundle,
+        updatedAtEpochMillis: Long
+    ) {
+        save(accountKey, token, updatedAtEpochMillis)
+    }
+
+    override suspend fun deleteForSync(accountKey: AccountKey) {
+        delete(accountKey)
     }
 
     private fun migrateLegacyProviderKeys() {
@@ -59,6 +91,7 @@ class SettingsTokenStore(
             if (token != null) {
                 val accountKey = accountKeyForToken(providerId, token)
                 settings.putString(key(accountKey), encoded)
+                settings.putLong(updatedAtKey(accountKey), token.lastRefreshEpochMillis)
                 upsertIndex(accountKey)
             }
             settings.remove(legacyKey)
@@ -89,6 +122,15 @@ class SettingsTokenStore(
             sha256("${accountKey.providerId.name}:${accountKey.accountId}".encodeToByteArray())
         )
         return "oauth_token_v1_${accountKey.providerId.name.lowercase()}_$digest"
+    }
+
+    private fun updatedAtKey(accountKey: AccountKey): String {
+        return "${key(accountKey)}_updated_at"
+    }
+
+    private fun tokenUpdatedAt(accountKey: AccountKey, token: OAuthTokenBundle): Long {
+        return settings.getLongOrNull(updatedAtKey(accountKey))
+            ?: token.lastRefreshEpochMillis
     }
 
     private fun legacyKey(providerId: ProviderId): String {
