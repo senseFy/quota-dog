@@ -32,6 +32,19 @@ class SettingsTokenStoreTest {
         assertEquals("new", store.load(firstKey)?.accessToken)
     }
 
+    @Test
+    fun importsAndExportsTokensForSync() = runBlocking {
+        val store = SettingsTokenStore(MapSettings())
+        val accountKey = AccountKey(ProviderId.CODEX, "user@example.com")
+
+        store.importTokenForSync(accountKey, token(email = "user@example.com", accessToken = "synced"), 123)
+
+        val exported = store.exportTokensForSync().single()
+        assertEquals(accountKey, exported.accountKey)
+        assertEquals("synced", exported.token?.value?.accessToken)
+        assertEquals(123, exported.token?.updatedAtEpochMillis)
+    }
+
     private fun token(email: String, accessToken: String): OAuthTokenBundle {
         return OAuthTokenBundle(
             accessToken = accessToken,

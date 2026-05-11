@@ -422,7 +422,9 @@ class QuotaDogClient(
 
 class QuotaDogStore(
     private val client: QuotaDogClient = QuotaDogClient(),
-    private val usageSnapshotStore: SettingsUsageSnapshotStore = SettingsUsageSnapshotStore()
+    private val usageSnapshotStore: SettingsUsageSnapshotStore = SettingsUsageSnapshotStore(),
+    private val onLocalDataChanged: (() -> Unit)? = null,
+    private val onLocalAccountDeleted: ((AccountKey) -> Unit)? = null
 ) {
     private val storeScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val refreshMutex = Mutex()
@@ -435,6 +437,10 @@ class QuotaDogStore(
         if (detectStarted) return
         detectStarted = true
         launchSafely("detectAll") { detectAll() }
+    }
+
+    fun startReloadAccounts() {
+        launchSafely("reloadAccounts") { detectAll() }
     }
 
     fun startLogin(providerId: ProviderId) {
@@ -575,6 +581,7 @@ class QuotaDogStore(
                 accountKey = accountKey,
                 message = "Sign-in successful, refreshing usage..."
             )
+            onLocalDataChanged?.invoke()
             refresh(accountKey)
         } catch (error: ProviderException) {
             platformDebugLog("store beginLoginAndWait provider error provider=${providerId.name} state=${error.state} status=${error.statusCode}")
@@ -614,6 +621,7 @@ class QuotaDogStore(
             accountKey = savedKey,
             message = "Sign-in successful, refreshing usage..."
         )
+        onLocalDataChanged?.invoke()
         refresh(savedKey)
     }
 
@@ -623,6 +631,7 @@ class QuotaDogStore(
         try {
             val snapshot = client.refreshUsage(accountKey)
             usageSnapshotStore.save(accountKey, snapshot)
+            onLocalDataChanged?.invoke()
             update(accountKey) {
                 it.copy(
                     added = true,
@@ -660,6 +669,7 @@ class QuotaDogStore(
     suspend fun delete(accountKey: AccountKey) {
         client.logout(accountKey)
         usageSnapshotStore.delete(accountKey)
+        onLocalAccountDeleted?.invoke(accountKey) ?: onLocalDataChanged?.invoke()
         _state.update { current ->
             current.copy(accounts = current.accounts - accountKey)
         }

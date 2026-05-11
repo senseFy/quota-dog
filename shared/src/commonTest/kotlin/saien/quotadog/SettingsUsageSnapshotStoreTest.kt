@@ -32,4 +32,24 @@ class SettingsUsageSnapshotStoreTest {
         store.delete(accountKey)
         assertNull(store.load(accountKey))
     }
+
+    @Test
+    fun importsAndExportsSnapshotsForSync() {
+        val store = SettingsUsageSnapshotStore(MapSettings())
+        val accountKey = AccountKey(ProviderId.CODEX, "user@example.com")
+        val snapshot = ProviderUsageSnapshot(
+            providerId = ProviderId.CODEX,
+            authState = AuthState.LoggedIn,
+            windows = emptyList(),
+            collectedAt = Instant.fromEpochSeconds(1),
+            accountEmail = "user@example.com"
+        )
+
+        store.importSnapshotForSync(accountKey, snapshot, 456)
+
+        val exported = store.exportSnapshotsForSync().single()
+        assertEquals(accountKey, exported.accountKey)
+        assertEquals(snapshot, exported.snapshot?.value)
+        assertEquals(456, exported.snapshot?.updatedAtEpochMillis)
+    }
 }

@@ -13,6 +13,7 @@ The app currently focuses on a small workflow:
 - Sign in to Codex or Claude Code through browser-based OAuth.
 - View usage windows, quota progress, and reset timing.
 - Refresh accounts, remove local account data, and optionally mask account emails in the UI.
+- Optionally sync encrypted account tokens, cached usage, and preferences through a user-provided Dropbox app folder.
 
 ## Privacy, Security, And Limits
 
@@ -20,8 +21,12 @@ QuotaDog is a local client with no backend, analytics, telemetry, or crash repor
 
 - OAuth and usage requests go directly to the selected provider.
 - Tokens, account identifiers, cached usage snapshots, and preferences are stored locally using multiplatform settings (`SharedPreferences`, `NSUserDefaults`, `java.util.prefs`), not hardened credential storage.
+- Dropbox cloud sync is opt-in. When enabled, QuotaDog encrypts its sync document with your sync passphrase before uploading it to your Dropbox app folder.
+- The Dropbox integration uses QuotaDog's Dropbox app with App Folder access and the minimum file scopes needed to read and write the QuotaDog sync file.
+- The Dropbox refresh token used to access that app folder is stored locally with the same platform settings backend as other app data.
 - Debug logging and Android backup are disabled by default.
 - Removing an account deletes its local token and cached usage snapshot, but platform backups or system snapshots may keep older copies.
+- Removing an account while Dropbox sync is unlocked writes a tombstone so other synced devices remove the same account instead of restoring stale data.
 - Provider behavior can change without notice, and QuotaDog only displays usage available to the signed-in account.
 
 QuotaDog reads usage by calling the same OAuth flows and HTTP endpoints that the official Codex CLI and Claude Code CLI use to display quota information. These endpoints are not part of any documented public API. Provider terms of service, endpoint shape, authentication, and rate limits may change at any time, which can break QuotaDog without notice. Use of this app is at your own risk and you are responsible for complying with each provider's terms of service.
@@ -71,6 +76,18 @@ export RELEASE_VERSION_CODE=42     # Android versionCode (monotonically increasi
 Local builds without these vars use a default of `1.0.0`.
 (Compose Desktop's installer formats reject `MAJOR=0`, so `0.x.y` cannot be the
 fallback. Use a `RELEASE_VERSION` env var if you need a different number.)
+
+### Dropbox Sync Setup
+
+QuotaDog does not run a sync server. To use cloud sync, connect Dropbox from Settings with a sync passphrase:
+
+1. Open QuotaDog Settings → Cloud sync.
+2. Enter a sync passphrase with at least 8 characters.
+3. Click Connect Dropbox and approve the Dropbox authorization in your browser.
+
+Use the same Dropbox account and sync passphrase on each device you want to sync. Developers building their own fork should create a scoped Dropbox app with App Folder access, enable `files.metadata.read`, `files.content.read`, and `files.content.write`, add `http://localhost:17553/dropbox/callback` as an OAuth redirect URI, and replace the Dropbox app key constant in code.
+
+If you forget the sync passphrase, QuotaDog cannot decrypt the existing Dropbox sync file. You can reset the sync file with a new passphrase from a device that still has the local data you want to keep, but that overwrites the Dropbox copy and may lose data that only exists in Dropbox or on another unsynced device.
 
 ### Publishing a GitHub Release
 

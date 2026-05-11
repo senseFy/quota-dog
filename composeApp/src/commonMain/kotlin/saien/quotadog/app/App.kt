@@ -54,11 +54,17 @@ import saien.quotadog.AccountKey
 import saien.quotadog.AccountUiState
 import saien.quotadog.AppPreferences
 import saien.quotadog.AuthState
+import saien.quotadog.CloudSyncCoordinator
+import saien.quotadog.CloudSyncLocalRepository
 import saien.quotadog.DashboardState
 import saien.quotadog.EmailPrivacyMode
+import saien.quotadog.PlatformTokenStore
 import saien.quotadog.ProviderId
+import saien.quotadog.QuotaDogClient
 import saien.quotadog.QuotaDogStore
+import saien.quotadog.SettingsUsageSnapshotStore
 import saien.quotadog.ThemeMode
+import saien.quotadog.TokenStore
 import saien.quotadog.UsageDisplayMode
 import saien.quotadog.UsageWindow
 import saien.quotadog.projectedUsedRatio
@@ -88,8 +94,26 @@ import saien.quotadog.app.theme.QuotaDogTheme
 
 @Composable
 fun App(
-    store: QuotaDogStore = remember { QuotaDogStore() },
+    tokenStore: TokenStore = remember { PlatformTokenStore() },
+    usageSnapshotStore: SettingsUsageSnapshotStore = remember { SettingsUsageSnapshotStore() },
     preferences: AppPreferences = remember { AppPreferences() },
+    cloudSync: CloudSyncCoordinator = remember {
+        CloudSyncCoordinator(
+            CloudSyncLocalRepository(
+                tokenStore = tokenStore,
+                usageSnapshotStore = usageSnapshotStore,
+                preferences = preferences,
+            )
+        )
+    },
+    store: QuotaDogStore = remember {
+        QuotaDogStore(
+            client = QuotaDogClient(tokenStore = tokenStore),
+            usageSnapshotStore = usageSnapshotStore,
+            onLocalDataChanged = { cloudSync.startPushLocalChanges() },
+            onLocalAccountDeleted = { cloudSync.recordAccountDeleted(it) },
+        )
+    },
 ) {
     val themeMode by preferences.themeMode.collectAsState()
     val systemDark = androidx.compose.foundation.isSystemInDarkTheme()
@@ -100,28 +124,36 @@ fun App(
     }
     QuotaDogTheme(darkTheme = effectiveDark) {
         ApplyPlatformSystemBars(darkAppearance = effectiveDark)
-        QuotaDogScreen(store, preferences)
+        QuotaDogScreen(store, preferences, cloudSync)
     }
 }
 
 @Composable
-private fun QuotaDogScreen(store: QuotaDogStore, preferences: AppPreferences) {
+private fun QuotaDogScreen(
+    store: QuotaDogStore,
+    preferences: AppPreferences,
+    cloudSync: CloudSyncCoordinator,
+) {
     val state by store.state.collectAsState()
     val themeMode by preferences.themeMode.collectAsState()
     val autoRefreshMinutes by preferences.autoRefreshMinutes.collectAsState()
     val usageDisplayMode by preferences.usageDisplayMode.collectAsState()
     val showProjectedUsage by preferences.showProjectedUsage.collectAsState()
     val emailPrivacyMode by preferences.emailPrivacyMode.collectAsState()
+    val cloudSyncState by cloudSync.state.collectAsState()
     val callbackInputs = remember { mutableStateMapOf<AccountKey, String>() }
     var showProviderPicker by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
     var pendingDelete by remember { mutableStateOf<AccountKey?>(null) }
+    var showResetCloudSyncConfirm by remember { mutableStateOf(false) }
+    var syncPassphrase by remember { mutableStateOf("") }
     val snackbar = rememberQdSnackbarController()
 
     val colors = QdTheme.colors
     val spacing = QdTheme.spacing
 
     LaunchedEffect(Unit) {
+        cloudSync.startRestoreSession()
         store.startDetectAll()
     }
 
@@ -234,11 +266,13 @@ private fun QuotaDogScreen(store: QuotaDogStore, preferences: AppPreferences) {
             themeMode = themeMode,
             onThemeChange = {
                 preferences.setThemeMode(it)
+                cloudSync.startPushLocalChanges()
                 snackbar.show("Theme set to ${it.name.lowercase()}")
             },
             usageDisplayMode = usageDisplayMode,
             onUsageDisplayModeChange = {
                 preferences.setUsageDisplayMode(it)
+                cloudSync.startPushLocalChanges()
                 snackbar.show(
                     text = "Quota display set to ${it.name.lowercase()}",
                     tone = QdSnackbarTone.Success,
@@ -247,6 +281,7 @@ private fun QuotaDogScreen(store: QuotaDogStore, preferences: AppPreferences) {
             showProjectedUsage = showProjectedUsage,
             onShowProjectedUsageChange = {
                 preferences.setShowProjectedUsage(it)
+                cloudSync.startPushLocalChanges()
                 snackbar.show(
                     text = if (it) "Usage estimate enabled" else "Usage estimate disabled",
                     tone = QdSnackbarTone.Success,
@@ -255,6 +290,7 @@ private fun QuotaDogScreen(store: QuotaDogStore, preferences: AppPreferences) {
             emailPrivacyMode = emailPrivacyMode,
             onEmailPrivacyModeChange = {
                 preferences.setEmailPrivacyMode(it)
+                cloudSync.startPushLocalChanges()
                 snackbar.show(
                     text = if (it == EmailPrivacyMode.Masked) "Email privacy enabled" else "Email privacy disabled",
                     tone = QdSnackbarTone.Success,
@@ -263,6 +299,7 @@ private fun QuotaDogScreen(store: QuotaDogStore, preferences: AppPreferences) {
             autoRefreshMinutes = autoRefreshMinutes,
             onAutoRefreshChange = {
                 preferences.setAutoRefreshMinutes(it)
+                cloudSync.startPushLocalChanges()
                 snackbar.show(
                     text = if (it == 0) "Auto refresh disabled" else "Auto refresh every $it min",
                     tone = QdSnackbarTone.Success,
@@ -277,6 +314,38 @@ private fun QuotaDogScreen(store: QuotaDogStore, preferences: AppPreferences) {
                     tone = QdSnackbarTone.Info,
                 )
             },
+            cloudSyncState = cloudSyncState,
+            syncPassphrase = syncPassphrase,
+            onSyncPassphraseChange = { syncPassphrase = it },
+            onConnectDropbox = {
+                cloudSync.startConnectDropbox(syncPassphrase) {
+                    store.startReloadAccounts()
+                }
+                snackbar.show("Opening Dropbox authorization...", tone = QdSnackbarTone.Info)
+            },
+            onUnlockCloudSync = {
+                cloudSync.startUnlock(syncPassphrase) {
+                    store.startReloadAccounts()
+                }
+                snackbar.show("Syncing with Dropbox...", tone = QdSnackbarTone.Info)
+            },
+            onSyncNow = {
+                cloudSync.startSyncNow {
+                    store.startReloadAccounts()
+                }
+                snackbar.show("Syncing with Dropbox...", tone = QdSnackbarTone.Info)
+            },
+            onCancelCloudSync = {
+                cloudSync.cancelCurrentOperation()
+                snackbar.show("Dropbox sync cancelled", tone = QdSnackbarTone.Info)
+            },
+            onResetCloudSync = {
+                showResetCloudSyncConfirm = true
+            },
+            onDisconnectCloudSync = {
+                cloudSync.disconnect()
+                snackbar.show("Dropbox sync disconnected", tone = QdSnackbarTone.Success)
+            },
             onDismiss = { showSettings = false },
             versionLabel = "v1.0.0",
         )
@@ -284,7 +353,7 @@ private fun QuotaDogScreen(store: QuotaDogStore, preferences: AppPreferences) {
         QdConfirmDialog(
             visible = pendingDelete != null,
             title = "Remove account?",
-            message = "The locally stored token for ${pendingDelete?.deleteLabel(state, emailPrivacyMode).orEmpty()} will be deleted. You can sign in again at any time.",
+            message = "The locally stored token for ${pendingDelete?.deleteLabel(state, emailPrivacyMode).orEmpty()} will be deleted. If Dropbox sync is enabled, this removal will sync to your other devices.",
             confirmLabel = "Remove",
             destructive = true,
             onConfirm = {
@@ -295,6 +364,22 @@ private fun QuotaDogScreen(store: QuotaDogStore, preferences: AppPreferences) {
                 pendingDelete = null
             },
             onDismiss = { pendingDelete = null },
+        )
+
+        QdConfirmDialog(
+            visible = showResetCloudSyncConfirm,
+            title = "Reset Dropbox sync file?",
+            message = "This overwrites the encrypted Dropbox sync file with data currently on this device and the passphrase in the field above. Data that exists only in Dropbox, or only on another device that has not synced here, may be lost. Devices using the old passphrase will need the new passphrase.",
+            confirmLabel = "Reset sync file",
+            destructive = true,
+            onConfirm = {
+                cloudSync.startResetCloudSync(syncPassphrase) {
+                    store.startReloadAccounts()
+                }
+                snackbar.show("Resetting Dropbox sync file...", tone = QdSnackbarTone.Info)
+                showResetCloudSyncConfirm = false
+            },
+            onDismiss = { showResetCloudSyncConfirm = false },
         )
     }
 }

@@ -38,6 +38,20 @@ actual class PlatformTokenStore actual constructor() : TokenStore {
     override suspend fun delete(accountKey: AccountKey) {
         delegate.delete(accountKey)
     }
+
+    override suspend fun exportTokensForSync(): List<CloudSyncAccountRecord> = delegate.exportTokensForSync()
+
+    override suspend fun importTokenForSync(
+        accountKey: AccountKey,
+        token: OAuthTokenBundle,
+        updatedAtEpochMillis: Long
+    ) {
+        delegate.importTokenForSync(accountKey, token, updatedAtEpochMillis)
+    }
+
+    override suspend fun deleteForSync(accountKey: AccountKey) {
+        delegate.deleteForSync(accountKey)
+    }
 }
 
 actual class PlatformBrowserLauncher actual constructor() : BrowserLauncher {
@@ -136,6 +150,11 @@ actual class PlatformOAuthCallbackServer actual constructor() : OAuthCallbackSer
             ProviderId.CODEX -> CallbackConfig(1455, "/auth/callback")
             ProviderId.CLAUDE_CODE -> CallbackConfig(54545, "/callback")
         }
+        waitForCallback(config.port, config.path, timeoutMillis)
+    }
+
+    override suspend fun waitForCallback(port: Int, path: String, timeoutMillis: Long): String? = withContext(Dispatchers.Default) {
+        val config = CallbackConfig(port, path)
         val deferred = IosBrowserSession.prepare(config.port, config.path)
         var callbackUrl: String? = null
         try {
