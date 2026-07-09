@@ -354,7 +354,7 @@ fun QdSettingsSheet(
                     // About.
                     QdSettingsRow(
                         title = "About",
-                        description = "QuotaDog $versionLabel - track Codex and Claude Code quotas.",
+                        description = "QuotaDog $versionLabel - track provider quota usage.",
                     )
                 }
             }

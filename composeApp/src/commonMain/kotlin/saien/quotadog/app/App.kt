@@ -60,6 +60,7 @@ import saien.quotadog.DashboardState
 import saien.quotadog.EmailPrivacyMode
 import saien.quotadog.PlatformTokenStore
 import saien.quotadog.ProviderId
+import saien.quotadog.availableProviders
 import saien.quotadog.QuotaDogClient
 import saien.quotadog.QuotaDogStore
 import saien.quotadog.SettingsUsageSnapshotStore
@@ -200,9 +201,16 @@ private fun QuotaDogScreen(
             )
 
             if (accounts.isEmpty()) {
+                val names = availableProviders().map { it.displayName }
+                val providerNames = when {
+                    names.isEmpty() -> "provider"
+                    names.size == 1 -> names.first()
+                    names.size == 2 -> "${names[0]} or ${names[1]}"
+                    else -> names.dropLast(1).joinToString(", ") + ", or " + names.last()
+                }
                 QdEmptyState(
                     title = "No accounts yet",
-                    description = "Add a Codex or Claude Code account to start tracking quota windows in one place.",
+                    description = "Add a $providerNames account to start tracking quota windows in one place.",
                 )
             } else {
                 accounts.forEach { providerState ->
@@ -254,7 +262,10 @@ private fun QuotaDogScreen(
                     showProviderPicker = false
                     store.startLogin(provider)
                     snackbar.show(
-                        text = "Opening browser for ${provider.displayName}...",
+                        text = when (provider) {
+                            ProviderId.GROK -> "Importing Grok CLI credentials..."
+                            else -> "Opening browser for ${provider.displayName}..."
+                        },
                         tone = QdSnackbarTone.Info,
                     )
                 },
@@ -798,17 +809,23 @@ private fun ProviderPickerContent(onSelect: (ProviderId) -> Unit) {
     val colors = QdTheme.colors
     val typo = QdTheme.typography
     val spacing = QdTheme.spacing
+    val providers = availableProviders()
+    val description = if (ProviderId.GROK in providers) {
+        "Choose a provider. Codex and Claude use browser OAuth; Grok imports credentials from the Grok CLI."
+    } else {
+        "Choose a provider - we'll open the browser for OAuth and finish sign-in here."
+    }
     Column(verticalArrangement = Arrangement.spacedBy(spacing.lg)) {
         Column(verticalArrangement = Arrangement.spacedBy(spacing.xs)) {
             Text("Add account", style = typo.titleLarge, color = colors.textPrimary)
             Text(
-                "Choose a provider - we'll open the browser for OAuth and finish sign-in here.",
+                description,
                 style = typo.bodyMedium,
                 color = colors.textSecondary,
             )
         }
         Column(verticalArrangement = Arrangement.spacedBy(spacing.sm)) {
-            ProviderId.entries.forEach { provider ->
+            providers.forEach { provider ->
                 ProviderOptionRow(provider = provider, onClick = { onSelect(provider) })
             }
         }
@@ -895,6 +912,7 @@ private fun String.maskEmailPlain(): String {
 private fun ProviderId.subtitle(): String = when (this) {
     ProviderId.CODEX -> "OpenAI Codex / ChatGPT usage"
     ProviderId.CLAUDE_CODE -> "Anthropic Claude Code usage"
+    ProviderId.GROK -> "Grok Build / SuperGrok credits (desktop)"
 }
 
 private fun UsageWindow.displayRatio(mode: UsageDisplayMode): Double = when (mode) {
@@ -921,6 +939,7 @@ private fun UsageWindow.infoLabel(): String = when (id) {
     "secondary", "seven_day" -> "Weekly"
     "seven_day_sonnet" -> "Weekly Sonnet"
     "seven_day_opus" -> "Weekly Opus"
+    "credits" -> "Credits"
     else -> label
 }
 

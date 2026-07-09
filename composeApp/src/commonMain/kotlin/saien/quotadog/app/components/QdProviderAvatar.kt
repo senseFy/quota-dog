@@ -15,6 +15,7 @@ import saien.quotadog.app.theme.QdTheme
 import quotadog.composeapp.generated.resources.Res
 import quotadog.composeapp.generated.resources.provider_claudecode
 import quotadog.composeapp.generated.resources.provider_codex
+import quotadog.composeapp.generated.resources.provider_grok
 
 /**
  * Provider marks from @lobehub/icons-static-svg 1.88.0 (MIT).
@@ -29,14 +30,17 @@ fun QdProviderAvatar(
     val tint = when (provider) {
         ProviderId.CODEX -> colors.codexAccent
         ProviderId.CLAUDE_CODE -> colors.claudeAccent
+        ProviderId.GROK -> colors.grokAccent
     }
     val icon = when (provider) {
         ProviderId.CODEX -> Res.drawable.provider_codex
         ProviderId.CLAUDE_CODE -> Res.drawable.provider_claudecode
+        ProviderId.GROK -> Res.drawable.provider_grok
     }
     val iconScale = when (provider) {
         ProviderId.CODEX -> 0.7f
         ProviderId.CLAUDE_CODE -> 0.76f
+        ProviderId.GROK -> 0.76f
     }
     Box(
         modifier = modifier.size(size),

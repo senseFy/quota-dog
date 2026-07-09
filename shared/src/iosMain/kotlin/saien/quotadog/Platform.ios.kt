@@ -149,6 +149,7 @@ actual class PlatformOAuthCallbackServer actual constructor() : OAuthCallbackSer
         val config = when (providerId) {
             ProviderId.CODEX -> CallbackConfig(1455, "/auth/callback")
             ProviderId.CLAUDE_CODE -> CallbackConfig(54545, "/callback")
+            ProviderId.GROK -> throw IllegalArgumentException("Grok does not use browser OAuth callbacks.")
         }
         waitForCallback(config.port, config.path, timeoutMillis)
     }

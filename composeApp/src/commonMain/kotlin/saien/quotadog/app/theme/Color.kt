@@ -47,6 +47,7 @@ data class QdColors(
     // Provider accents (so all callers get them from theme, not hex).
     val codexAccent: Color,
     val claudeAccent: Color,
+    val grokAccent: Color,
 )
 
 internal val QdLightColors = QdColors(
@@ -80,6 +81,7 @@ internal val QdLightColors = QdColors(
 
     codexAccent = Color(0xFF1B2A24),
     claudeAccent = Color(0xFFB75C2C),
+    grokAccent = Color(0xFF111111),
 )
 
 internal val QdDarkColors = QdColors(
@@ -113,6 +115,7 @@ internal val QdDarkColors = QdColors(
 
     codexAccent = Color(0xFFD7DBD8),
     claudeAccent = Color(0xFFE89368),
+    grokAccent = Color(0xFFE6E6E6),
 )
 
 internal val LocalQdColors = staticCompositionLocalOf { QdLightColors }

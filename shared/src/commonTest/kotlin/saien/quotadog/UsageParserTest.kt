@@ -66,6 +66,19 @@ class UsageParserTest {
 
         assertNull(window.projectedUsedRatio(Instant.fromEpochSeconds(1_700_000_000)))
     }
+
+    @Test
+    fun projectsGrokWeeklyCreditsFromInferredWindow() {
+        val now = Instant.fromEpochSeconds(1_700_000_000)
+        val window = UsageWindow(
+            id = "credits",
+            label = "Weekly credits",
+            usedRatio = 0.20,
+            resetsAt = now.plusTestSeconds(5L * 24L * 60L * 60L + 6L * 60L * 60L),
+        )
+
+        assertEquals(0.80, window.projectedUsedRatio(now)!!, 0.000001)
+    }
 }
 
 private fun Instant.plusTestSeconds(seconds: Long): Instant {
