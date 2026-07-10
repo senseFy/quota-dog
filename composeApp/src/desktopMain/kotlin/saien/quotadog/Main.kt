@@ -565,6 +565,8 @@ private fun List<AccountUiState>.toDesktopStatusBarState(
             DesktopStatusBarAccount(
                 title = account.trayAccountTitle(emailPrivacyMode),
                 status = account.trayStatusLabel(),
+                provider = account.providerId.name,
+                busy = account.busy || account.loginStart != null,
                 windows = account.snapshot?.windows.orEmpty().map { window ->
                     DesktopStatusBarUsageWindow(
                         label = window.trayWindowLabel(),

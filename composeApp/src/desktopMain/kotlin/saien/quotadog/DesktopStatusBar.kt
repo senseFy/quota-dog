@@ -46,6 +46,8 @@ internal data class DesktopStatusBarState(
 internal data class DesktopStatusBarAccount(
     val title: String,
     val status: String,
+    val provider: String,
+    val busy: Boolean,
     val windows: List<DesktopStatusBarUsageWindow>,
 )
 
@@ -292,6 +294,10 @@ private fun DesktopStatusBarState.toJson(): String {
             appendJsonField("title", account.title)
             append(',')
             appendJsonField("status", account.status)
+            append(',')
+            appendJsonField("provider", account.provider)
+            append(',')
+            append("\"busy\":").append(account.busy)
             append(',')
             append("\"windows\":[")
             account.windows.forEachIndexed { windowIndex, window ->
