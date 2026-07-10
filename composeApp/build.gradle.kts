@@ -16,6 +16,34 @@ val releaseVersionName: String =
 val releaseVersionCode: Int =
     System.getenv("RELEASE_VERSION_CODE")?.toIntOrNull() ?: 1
 
+val macStatusBarResourcesDir = layout.buildDirectory.dir("generated/macosStatusBarResources")
+val compileMacStatusBar by tasks.registering(Exec::class) {
+    val source = layout.projectDirectory.file("src/desktopMain/native/macos/QuotaDogStatusBar.m")
+    val output = macStatusBarResourcesDir.map { it.file("macos/libQuotaDogStatusBar.dylib") }
+
+    onlyIf {
+        System.getProperty("os.name").contains("Mac", ignoreCase = true)
+    }
+    inputs.file(source)
+    outputs.file(output)
+
+    doFirst {
+        output.get().asFile.parentFile.mkdirs()
+    }
+    commandLine(
+        "clang",
+        "-dynamiclib",
+        "-fobjc-arc",
+        "-framework",
+        "AppKit",
+        "-framework",
+        "Foundation",
+        "-o",
+        output.get().asFile.absolutePath,
+        source.asFile.absolutePath,
+    )
+}
+
 kotlin {
     androidTarget {
         compilerOptions {
@@ -56,8 +84,10 @@ kotlin {
             implementation(libs.androidx.activity.compose)
         }
         val desktopMain by getting {
+            resources.srcDir(macStatusBarResourcesDir)
             dependencies {
                 implementation(compose.desktop.currentOs)
+                implementation(libs.jna)
             }
         }
     }
@@ -118,6 +148,10 @@ android {
             signingConfig = signingConfigs.getByName("release")
         }
     }
+}
+
+tasks.named("desktopProcessResources") {
+    dependsOn(compileMacStatusBar)
 }
 
 compose.desktop {

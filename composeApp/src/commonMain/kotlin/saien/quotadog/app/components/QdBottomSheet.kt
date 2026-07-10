@@ -10,6 +10,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
@@ -41,7 +42,8 @@ fun QdBottomSheet(
 ) {
     val spacing = QdTheme.spacing
     val colors = QdTheme.colors
-    Box(modifier = Modifier.fillMaxSize()) {
+    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+        val isDesktop = maxWidth >= 720.dp
         AnimatedVisibility(
             visible = visible,
             enter = fadeIn(animationSpec = tween(180)),
@@ -60,28 +62,43 @@ fun QdBottomSheet(
         }
         AnimatedVisibility(
             visible = visible,
-            enter = slideInVertically(animationSpec = tween(220)) { it } + fadeIn(animationSpec = tween(220)),
-            exit = slideOutVertically(animationSpec = tween(180)) { it } + fadeOut(animationSpec = tween(180)),
-            modifier = Modifier.align(Alignment.BottomCenter),
+            enter = if (isDesktop) {
+                fadeIn(animationSpec = tween(180))
+            } else {
+                slideInVertically(animationSpec = tween(220)) { it } + fadeIn(animationSpec = tween(220))
+            },
+            exit = if (isDesktop) {
+                fadeOut(animationSpec = tween(160))
+            } else {
+                slideOutVertically(animationSpec = tween(180)) { it } + fadeOut(animationSpec = tween(180))
+            },
+            modifier = Modifier.align(if (isDesktop) Alignment.Center else Alignment.BottomCenter),
         ) {
             val safeBottom = WindowInsets.safeDrawing.asPaddingValues().calculateBottomPadding()
             Box(
                 modifier = Modifier
+                    .padding(
+                        start = spacing.md,
+                        end = spacing.md,
+                        top = spacing.md,
+                        bottom = spacing.md + if (isDesktop) 0.dp else safeBottom,
+                    )
+                    .widthIn(max = if (isDesktop) 480.dp else 560.dp)
                     .fillMaxWidth()
-                    .widthIn(max = 560.dp)
-                    .padding(start = spacing.md, end = spacing.md, top = spacing.md, bottom = spacing.md + safeBottom)
                     .clip(QdTheme.shapes.xl)
                     .background(colors.backgroundElevated),
             ) {
                 Column(modifier = Modifier.padding(spacing.xxl)) {
-                    Box(
-                        modifier = Modifier
-                            .align(Alignment.CenterHorizontally)
-                            .padding(bottom = spacing.lg)
-                            .size(width = 36.dp, height = 4.dp)
-                            .clip(QdTheme.shapes.pill)
-                            .background(colors.borderStrong),
-                    )
+                    if (!isDesktop) {
+                        Box(
+                            modifier = Modifier
+                                .align(Alignment.CenterHorizontally)
+                                .padding(bottom = spacing.lg)
+                                .size(width = 36.dp, height = 4.dp)
+                                .clip(QdTheme.shapes.pill)
+                                .background(colors.borderStrong),
+                        )
+                    }
                     content()
                 }
             }

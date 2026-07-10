@@ -15,6 +15,7 @@ import com.composables.icons.lucide.Gauge
 import com.composables.icons.lucide.Lucide
 import com.composables.icons.lucide.Plus
 import com.composables.icons.lucide.RefreshCw
+import com.composables.icons.lucide.X
 
 /**
  * Thin wrappers around Lucide Compose Multiplatform icons, keeping the app's local naming
@@ -54,6 +55,11 @@ fun QdMoreIcon(modifier: Modifier = Modifier, size: Dp = 18.dp, tint: Color = Co
 @Composable
 fun QdChevronRightIcon(modifier: Modifier = Modifier, size: Dp = 16.dp, tint: Color = Color.Black) {
     QdLucideIcon(Lucide.ChevronRight, modifier, size, tint)
+}
+
+@Composable
+fun QdCloseIcon(modifier: Modifier = Modifier, size: Dp = 18.dp, tint: Color = Color.Black) {
+    QdLucideIcon(Lucide.X, modifier, size, tint)
 }
 
 @Composable

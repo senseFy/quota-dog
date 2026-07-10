@@ -11,16 +11,17 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -43,8 +44,8 @@ import saien.quotadog.UsageDisplayMode
 import saien.quotadog.app.theme.QdTheme
 
 /**
- * Full-height settings panel that slides up. Lives over the main content with its own scroll
- * area; on tall screens it caps at 640dp wide (desktop) and stays bottom-anchored on phones.
+ * Full-height settings panel with its own scroll area. It stays bottom-anchored on phones and
+ * switches to a centered modal on wider desktop windows.
  */
 @Composable
 fun QdSettingsSheet(
@@ -78,7 +79,8 @@ fun QdSettingsSheet(
     val typo = QdTheme.typography
     val spacing = QdTheme.spacing
 
-    Box(modifier = Modifier.fillMaxSize()) {
+    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+        val isDesktop = maxWidth >= 720.dp
         AnimatedVisibility(
             visible = visible,
             enter = fadeIn(tween(200)),
@@ -97,9 +99,17 @@ fun QdSettingsSheet(
         }
         AnimatedVisibility(
             visible = visible,
-            enter = slideInVertically(animationSpec = tween(260)) { it } + fadeIn(tween(220)),
-            exit = slideOutVertically(animationSpec = tween(220)) { it } + fadeOut(tween(180)),
-            modifier = Modifier.align(Alignment.BottomCenter),
+            enter = if (isDesktop) {
+                fadeIn(tween(200))
+            } else {
+                slideInVertically(animationSpec = tween(260)) { it } + fadeIn(tween(220))
+            },
+            exit = if (isDesktop) {
+                fadeOut(tween(180))
+            } else {
+                slideOutVertically(animationSpec = tween(220)) { it } + fadeOut(tween(180))
+            },
+            modifier = Modifier.align(if (isDesktop) Alignment.Center else Alignment.BottomCenter),
         ) {
             val safeBottom = WindowInsets.safeDrawing.asPaddingValues().calculateBottomPadding()
             Column(
@@ -107,7 +117,12 @@ fun QdSettingsSheet(
                     .fillMaxWidth()
                     .widthIn(max = 640.dp)
                     .heightIn(max = 720.dp)
-                    .padding(start = spacing.md, end = spacing.md, top = spacing.md, bottom = spacing.md + safeBottom)
+                    .padding(
+                        start = spacing.md,
+                        end = spacing.md,
+                        top = spacing.md,
+                        bottom = spacing.md + if (isDesktop) 0.dp else safeBottom,
+                    )
                     .clip(QdTheme.shapes.xl)
                     .background(colors.backgroundElevated),
             ) {
@@ -125,12 +140,16 @@ fun QdSettingsSheet(
                         modifier = Modifier.weight(1f),
                     )
                     QdGlassIconButton(onClick = onDismiss, diameter = 44.dp) {
-                        // Re-use the chevron rotated 90 degrees as a "close down" affordance.
-                        QdChevronRightIcon(
-                            modifier = Modifier.rotate(90f),
-                            tint = colors.textSecondary,
-                            size = 20.dp,
-                        )
+                        if (isDesktop) {
+                            QdCloseIcon(tint = colors.textSecondary, size = 20.dp)
+                        } else {
+                            // Re-use the chevron rotated 90 degrees as a "close down" affordance.
+                            QdChevronRightIcon(
+                                modifier = Modifier.rotate(90f),
+                                tint = colors.textSecondary,
+                                size = 20.dp,
+                            )
+                        }
                     }
                 }
 
@@ -138,7 +157,7 @@ fun QdSettingsSheet(
                     modifier = Modifier
                         .padding(horizontal = spacing.xxl)
                         .fillMaxWidth()
-                        .size(width = 0.dp, height = 1.dp)
+                        .height(1.dp)
                         .background(colors.border),
                 )
 
@@ -219,7 +238,7 @@ fun QdSettingsSheet(
                         description = if (autoRefreshMinutes == 0) {
                             "Quota windows are pulled only when you tap refresh."
                         } else {
-                            "Quota windows refresh every $autoRefreshMinutes minutes while the app is open."
+                            "Quota windows refresh every $autoRefreshMinutes minutes while QuotaDog is running."
                         },
                         control = {
                             QdSegmentedControl(

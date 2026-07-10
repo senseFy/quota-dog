@@ -10,6 +10,7 @@ kotlinxCoroutines = "1.7.3"
 kotlinxDatetime = "0.5.0"
 kotlinxSerializationJson = "1.6.2"
 ktor = "2.3.7"
+jna = "5.14.0"
 lucideIcons = "2.2.1"
 multiplatformSettings = "1.1.1"
 
@@ -25,6 +26,7 @@ ktor-client-core = { module = "io.ktor:ktor-client-core", version.ref = "ktor" }
 ktor-client-darwin = { module = "io.ktor:ktor-client-darwin", version.ref = "ktor" }
 ktor-client-java = { module = "io.ktor:ktor-client-java", version.ref = "ktor" }
 ktor-serialization-kotlinx-json = { module = "io.ktor:ktor-serialization-kotlinx-json", version.ref = "ktor" }
+jna = { module = "net.java.dev.jna:jna", version.ref = "jna" }
 lucide-icons-cmp = { module = "com.composables:icons-lucide-cmp", version.ref = "lucideIcons" }
 multiplatform-settings = { module = "com.russhwolf:multiplatform-settings", version.ref = "multiplatformSettings" }
 multiplatform-settings-test = { module = "com.russhwolf:multiplatform-settings-test", version.ref = "multiplatformSettings" }

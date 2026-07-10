@@ -13,7 +13,9 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
@@ -115,6 +117,9 @@ fun App(
             onLocalAccountDeleted = { cloudSync.recordAccountDeleted(it) },
         )
     },
+    // Desktop tray keeps the process alive after the main window is hidden; host those
+    // effects outside App so refresh/detect/sync session survive window teardown.
+    manageBackgroundEffects: Boolean = true,
 ) {
     val themeMode by preferences.themeMode.collectAsState()
     val systemDark = androidx.compose.foundation.isSystemInDarkTheme()
@@ -125,7 +130,36 @@ fun App(
     }
     QuotaDogTheme(darkTheme = effectiveDark) {
         ApplyPlatformSystemBars(darkAppearance = effectiveDark)
+        if (manageBackgroundEffects) {
+            QuotaDogBackgroundEffects(store = store, preferences = preferences, cloudSync = cloudSync)
+        }
         QuotaDogScreen(store, preferences, cloudSync)
+    }
+}
+
+@Composable
+fun QuotaDogBackgroundEffects(
+    store: QuotaDogStore,
+    preferences: AppPreferences,
+    cloudSync: CloudSyncCoordinator,
+) {
+    val autoRefreshMinutes by preferences.autoRefreshMinutes.collectAsState()
+
+    LaunchedEffect(Unit) {
+        cloudSync.startRestoreSession()
+        store.startDetectAll()
+    }
+
+    // Auto-refresh loop. Re-keys whenever the chosen interval changes so the previous loop
+    // is cancelled and a new one starts cleanly.
+    LaunchedEffect(autoRefreshMinutes) {
+        val minutes = autoRefreshMinutes
+        if (minutes <= 0) return@LaunchedEffect
+        val intervalMs = minutes * 60_000L
+        while (true) {
+            delay(intervalMs)
+            store.startRefreshAll()
+        }
     }
 }
 
@@ -153,23 +187,6 @@ private fun QuotaDogScreen(
     val colors = QdTheme.colors
     val spacing = QdTheme.spacing
 
-    LaunchedEffect(Unit) {
-        cloudSync.startRestoreSession()
-        store.startDetectAll()
-    }
-
-    // Auto-refresh loop. Re-keys whenever the chosen interval changes so the previous loop
-    // is cancelled and a new one starts cleanly.
-    LaunchedEffect(autoRefreshMinutes) {
-        val minutes = autoRefreshMinutes
-        if (minutes <= 0) return@LaunchedEffect
-        val intervalMs = minutes * 60_000L
-        while (true) {
-            delay(intervalMs)
-            store.startRefreshAll()
-        }
-    }
-
     val accounts = state.accounts.values
         .filter { it.shouldShowAccount() }
         .sortedWith(compareBy<AccountUiState> { it.providerId.ordinal }.thenBy { it.accountSortLabel() })
@@ -182,67 +199,84 @@ private fun QuotaDogScreen(
     val safeInsets = WindowInsets.safeDrawing.asPaddingValues()
     val safeTop = safeInsets.calculateTopPadding()
     val safeBottom = safeInsets.calculateBottomPadding()
+    val refreshAllAction = {
+        store.startRefreshAll()
+        snackbar.show(
+            text = if (refreshAllBusy) "Refreshing remaining accounts..." else "Refreshing all accounts...",
+            tone = QdSnackbarTone.Info,
+        )
+    }
 
-    Box(
+    BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
             .background(colors.background),
     ) {
+        val isDesktop = maxWidth >= 900.dp
+        val contentMaxWidth = if (isDesktop) 1120.dp else maxWidth
+        val horizontalPadding = if (isDesktop) spacing.xxxl else spacing.xl
+        val topPadding = safeTop + if (isDesktop) spacing.huge else spacing.xl
+        val bottomPadding = safeBottom + if (isDesktop) spacing.huge else 120.dp
+
         Column(
             modifier = Modifier
+                .align(Alignment.TopCenter)
+                .widthIn(max = contentMaxWidth)
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = spacing.xl)
-                .padding(top = safeTop + spacing.xl, bottom = safeBottom + 120.dp),
-            verticalArrangement = Arrangement.spacedBy(spacing.lg),
+                .padding(horizontal = horizontalPadding)
+                .padding(top = topPadding, bottom = bottomPadding),
+            verticalArrangement = Arrangement.spacedBy(if (isDesktop) spacing.xxl else spacing.lg),
         ) {
             DashboardHeader(
+                isDesktop = isDesktop,
+                refreshAllBusy = refreshAllBusy,
+                refreshAllEnabled = refreshAllEnabled,
+                onRefreshAll = refreshAllAction,
+                onAddAccount = { showProviderPicker = true },
                 onOpenSettings = { showSettings = true },
             )
 
             if (accounts.isEmpty()) {
-                val names = availableProviders().map { it.displayName }
-                val providerNames = when {
-                    names.isEmpty() -> "provider"
-                    names.size == 1 -> names.first()
-                    names.size == 2 -> "${names[0]} or ${names[1]}"
-                    else -> names.dropLast(1).joinToString(", ") + ", or " + names.last()
-                }
-                QdEmptyState(
-                    title = "No accounts yet",
-                    description = "Add a $providerNames account to start tracking quota windows in one place.",
-                )
+                AccountsEmptyState(isDesktop = isDesktop)
             } else {
-                accounts.forEach { providerState ->
-                    AccountCard(
-                        state = providerState,
-                        usageDisplayMode = usageDisplayMode,
-                        showProjectedUsage = showProjectedUsage,
-                        emailPrivacyMode = emailPrivacyMode,
-                        callbackInput = callbackInputs[providerState.accountKey].orEmpty(),
-                        onCallbackChange = { callbackInputs[providerState.accountKey] = it },
-                        onCompleteLogin = {
-                            val input = callbackInputs[providerState.accountKey].orEmpty()
-                            store.startCompleteLogin(providerState.accountKey, input)
-                        },
-                        onReopenLogin = { store.startReopenLogin(providerState.accountKey) },
-                        onSignInAgain = { store.startLogin(providerState.providerId) },
-                        onRefresh = {
-                            store.startRefresh(providerState.accountKey)
-                            snackbar.show("Refreshing ${providerState.accountTitle(emailPrivacyMode)}...")
-                        },
-                        onRequestDelete = { pendingDelete = providerState.accountKey },
+                if (isDesktop) {
+                    DesktopSummaryRow(
+                        accounts = accounts,
+                        refreshableAccounts = refreshableAccounts,
                     )
                 }
+                AccountCards(
+                    accounts = accounts,
+                    isDesktop = isDesktop,
+                    usageDisplayMode = usageDisplayMode,
+                    showProjectedUsage = showProjectedUsage,
+                    emailPrivacyMode = emailPrivacyMode,
+                    callbackInput = { callbackInputs[it].orEmpty() },
+                    onCallbackChange = { accountKey, value -> callbackInputs[accountKey] = value },
+                    onCompleteLogin = { accountKey ->
+                        val input = callbackInputs[accountKey].orEmpty()
+                        store.startCompleteLogin(accountKey, input)
+                    },
+                    onReopenLogin = { accountKey -> store.startReopenLogin(accountKey) },
+                    onSignInAgain = { providerId -> store.startLogin(providerId) },
+                    onRefresh = { providerState ->
+                        store.startRefresh(providerState.accountKey)
+                        snackbar.show("Refreshing ${providerState.accountTitle(emailPrivacyMode)}...")
+                    },
+                    onRequestDelete = { accountKey -> pendingDelete = accountKey },
+                )
             }
         }
 
-        AddAccountButton(
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .padding(bottom = safeBottom + spacing.xxl),
-            onClick = { showProviderPicker = true },
-        )
+        if (!isDesktop) {
+            AddAccountButton(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = safeBottom + spacing.xxl),
+                onClick = { showProviderPicker = true },
+            )
+        }
 
         // Snackbar floats above the FAB (FAB sits at safeBottom + xxl with ~44dp height +
         // baseline padding lg -> leave ~84dp clearance plus safe inset).
@@ -250,7 +284,7 @@ private fun QuotaDogScreen(
             controller = snackbar,
             modifier = Modifier
                 .align(Alignment.BottomCenter)
-                .padding(bottom = safeBottom + 84.dp),
+                .padding(bottom = safeBottom + if (isDesktop) spacing.xxl else 84.dp),
         )
 
         QdBottomSheet(
@@ -318,13 +352,7 @@ private fun QuotaDogScreen(
             },
             refreshAllBusy = refreshAllBusy,
             refreshAllEnabled = refreshAllEnabled,
-            onRefreshAll = {
-                store.startRefreshAll()
-                snackbar.show(
-                    text = if (refreshAllBusy) "Refreshing remaining accounts..." else "Refreshing all accounts...",
-                    tone = QdSnackbarTone.Info,
-                )
-            },
+            onRefreshAll = refreshAllAction,
             cloudSyncState = cloudSyncState,
             syncPassphrase = syncPassphrase,
             onSyncPassphraseChange = { syncPassphrase = it },
@@ -397,11 +425,85 @@ private fun QuotaDogScreen(
 
 @Composable
 private fun DashboardHeader(
+    isDesktop: Boolean,
+    refreshAllBusy: Boolean,
+    refreshAllEnabled: Boolean,
+    onRefreshAll: () -> Unit,
+    onAddAccount: () -> Unit,
     onOpenSettings: () -> Unit,
 ) {
     val colors = QdTheme.colors
     val typo = QdTheme.typography
     val spacing = QdTheme.spacing
+
+    if (isDesktop) {
+        QdCard(
+            modifier = Modifier.fillMaxWidth(),
+            padding = PaddingValues(spacing.xxl),
+            background = colors.backgroundElevated,
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(spacing.xxl),
+            ) {
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(spacing.xs),
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(0.dp),
+                    ) {
+                        Text(
+                            "Quota",
+                            style = typo.displayLarge.copy(fontWeight = FontWeight.Bold),
+                            color = colors.textPrimary,
+                        )
+                        Text(
+                            " / ",
+                            style = typo.displayLarge.copy(fontWeight = FontWeight.Black),
+                            color = colors.primary,
+                        )
+                        Text(
+                            "Dog",
+                            style = typo.displayLarge.copy(fontWeight = FontWeight.Bold),
+                            color = colors.textPrimary,
+                        )
+                    }
+                    Text(
+                        "A local dashboard for provider quota windows across your signed-in accounts.",
+                        style = typo.bodyMedium,
+                        color = colors.textSecondary,
+                    )
+                }
+
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(spacing.sm),
+                ) {
+                    QdButton(
+                        text = if (refreshAllBusy) "Refresh remaining" else "Refresh all",
+                        onClick = onRefreshAll,
+                        variant = QdButtonVariant.Secondary,
+                        size = QdButtonSize.Small,
+                        enabled = refreshAllEnabled,
+                    )
+                    QdButton(
+                        text = "Add account",
+                        onClick = onAddAccount,
+                        size = QdButtonSize.Small,
+                        leading = { QdPlusIcon(tint = colors.onPrimary, size = 16.dp) },
+                    )
+                    QdGlassIconButton(onClick = onOpenSettings, diameter = 44.dp) {
+                        QdSettingsGearIcon(tint = colors.textSecondary, size = 22.dp)
+                    }
+                }
+            }
+        }
+        return
+    }
+
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
@@ -440,6 +542,146 @@ private fun DashboardHeader(
 }
 
 @Composable
+private fun AccountsEmptyState(isDesktop: Boolean) {
+    val providerNames = providerNamesLabel()
+    if (isDesktop) {
+        Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+            QdEmptyState(
+                title = "No accounts yet",
+                description = "Add a $providerNames account to start tracking quota windows in one place.",
+                modifier = Modifier.widthIn(max = 640.dp),
+            )
+        }
+        return
+    }
+    QdEmptyState(
+        title = "No accounts yet",
+        description = "Add a $providerNames account to start tracking quota windows in one place.",
+    )
+}
+
+@Composable
+private fun DesktopSummaryRow(
+    accounts: List<AccountUiState>,
+    refreshableAccounts: List<AccountUiState>,
+) {
+    val spacing = QdTheme.spacing
+    val needsAction = accounts.count { account ->
+        account.loginStart != null ||
+            account.authState == AuthState.TokenExpired ||
+            account.authState == AuthState.Unauthorized ||
+            account.authState == AuthState.RequiresRelogin ||
+            account.authState == AuthState.Error
+    }
+    val syncing = accounts.count { it.busy }
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(spacing.lg),
+    ) {
+        DesktopSummaryMetric(
+            label = "Accounts",
+            value = accounts.size.toString(),
+            description = "Visible account cards",
+            modifier = Modifier.weight(1f),
+        )
+        DesktopSummaryMetric(
+            label = "Refreshable",
+            value = refreshableAccounts.size.toString(),
+            description = "Ready for usage updates",
+            modifier = Modifier.weight(1f),
+        )
+        DesktopSummaryMetric(
+            label = "Needs action",
+            value = needsAction.toString(),
+            description = if (syncing == 0) "Sign-in or sync issues" else "$syncing currently syncing",
+            modifier = Modifier.weight(1f),
+        )
+    }
+}
+
+@Composable
+private fun DesktopSummaryMetric(
+    label: String,
+    value: String,
+    description: String,
+    modifier: Modifier = Modifier,
+) {
+    val colors = QdTheme.colors
+    val typo = QdTheme.typography
+    val spacing = QdTheme.spacing
+    QdCard(
+        modifier = modifier,
+        padding = PaddingValues(horizontal = spacing.xl, vertical = spacing.lg),
+        elevated = false,
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(spacing.xs)) {
+            Text(label, style = typo.caption, color = colors.textTertiary)
+            Text(value, style = typo.displayLarge, color = colors.textPrimary)
+            Text(description, style = typo.caption, color = colors.textSecondary)
+        }
+    }
+}
+
+@Composable
+private fun AccountCards(
+    accounts: List<AccountUiState>,
+    isDesktop: Boolean,
+    usageDisplayMode: UsageDisplayMode,
+    showProjectedUsage: Boolean,
+    emailPrivacyMode: EmailPrivacyMode,
+    callbackInput: (AccountKey) -> String,
+    onCallbackChange: (AccountKey, String) -> Unit,
+    onCompleteLogin: (AccountKey) -> Unit,
+    onReopenLogin: (AccountKey) -> Unit,
+    onSignInAgain: (ProviderId) -> Unit,
+    onRefresh: (AccountUiState) -> Unit,
+    onRequestDelete: (AccountKey) -> Unit,
+) {
+    val spacing = QdTheme.spacing
+    val accountCard: @Composable (AccountUiState, Modifier) -> Unit = { providerState, modifier ->
+        AccountCard(
+            state = providerState,
+            usageDisplayMode = usageDisplayMode,
+            showProjectedUsage = showProjectedUsage,
+            emailPrivacyMode = emailPrivacyMode,
+            callbackInput = callbackInput(providerState.accountKey),
+            onCallbackChange = { onCallbackChange(providerState.accountKey, it) },
+            onCompleteLogin = { onCompleteLogin(providerState.accountKey) },
+            onReopenLogin = { onReopenLogin(providerState.accountKey) },
+            onSignInAgain = { onSignInAgain(providerState.providerId) },
+            onRefresh = { onRefresh(providerState) },
+            onRequestDelete = { onRequestDelete(providerState.accountKey) },
+            modifier = modifier,
+        )
+    }
+
+    if (!isDesktop) {
+        Column(verticalArrangement = Arrangement.spacedBy(spacing.lg)) {
+            accounts.forEach { providerState ->
+                accountCard(providerState, Modifier.fillMaxWidth())
+            }
+        }
+        return
+    }
+
+    Column(verticalArrangement = Arrangement.spacedBy(spacing.lg)) {
+        accounts.chunked(2).forEach { rowAccounts ->
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(spacing.lg),
+            ) {
+                rowAccounts.forEach { providerState ->
+                    accountCard(providerState, Modifier.weight(1f))
+                }
+                if (rowAccounts.size == 1) {
+                    Box(modifier = Modifier.weight(1f))
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun AccountCard(
     state: AccountUiState,
     usageDisplayMode: UsageDisplayMode,
@@ -452,13 +694,14 @@ private fun AccountCard(
     onSignInAgain: () -> Unit,
     onRefresh: () -> Unit,
     onRequestDelete: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val colors = QdTheme.colors
     val typo = QdTheme.typography
     val spacing = QdTheme.spacing
     var menuExpanded by remember { mutableStateOf(false) }
 
-    QdCard(modifier = Modifier.fillMaxWidth()) {
+    QdCard(modifier = modifier.fillMaxWidth()) {
         Column(verticalArrangement = Arrangement.spacedBy(spacing.lg)) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -890,6 +1133,16 @@ private fun AccountUiState.accountSubtitle(): String {
 
 private fun AccountUiState.accountSortLabel(): String {
     return accountSubtitle().lowercase()
+}
+
+private fun providerNamesLabel(): String {
+    val names = availableProviders().map { it.displayName }
+    return when {
+        names.isEmpty() -> "provider"
+        names.size == 1 -> names.first()
+        names.size == 2 -> "${names[0]} or ${names[1]}"
+        else -> names.dropLast(1).joinToString(", ") + ", or " + names.last()
+    }
 }
 
 private fun AccountKey.deleteLabel(state: DashboardState, emailPrivacyMode: EmailPrivacyMode): String {
