@@ -48,6 +48,7 @@ data class QdColors(
     val codexAccent: Color,
     val claudeAccent: Color,
     val grokAccent: Color,
+    val cursorAccent: Color,
 )
 
 internal val QdLightColors = QdColors(
@@ -82,6 +83,7 @@ internal val QdLightColors = QdColors(
     codexAccent = Color(0xFF1B2A24),
     claudeAccent = Color(0xFFB75C2C),
     grokAccent = Color(0xFF111111),
+    cursorAccent = Color(0xFF0F6B63),
 )
 
 internal val QdDarkColors = QdColors(
@@ -116,6 +118,7 @@ internal val QdDarkColors = QdColors(
     codexAccent = Color(0xFFD7DBD8),
     claudeAccent = Color(0xFFE89368),
     grokAccent = Color(0xFFE6E6E6),
+    cursorAccent = Color(0xFF5ED4C8),
 )
 
 internal val LocalQdColors = staticCompositionLocalOf { QdLightColors }

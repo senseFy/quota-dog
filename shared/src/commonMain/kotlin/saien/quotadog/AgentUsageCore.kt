@@ -44,6 +44,7 @@ enum class ProviderId(val displayName: String) {
     CODEX("Codex"),
     CLAUDE_CODE("Claude Code"),
     GROK("Grok"),
+    CURSOR("Cursor"),
 }
 
 enum class AuthState {
@@ -189,6 +190,10 @@ private object ProviderSpecs {
             AuthState.NotConfigured,
             "Grok uses the Grok CLI auth file instead of browser OAuth."
         )
+        ProviderId.CURSOR -> throw ProviderException(
+            AuthState.NotConfigured,
+            "Cursor imports credentials from the local Cursor app instead of browser OAuth."
+        )
     }
 }
 
@@ -234,7 +239,7 @@ class QuotaDogClient(
                     parameters.append("codex_cli_simplified_flow", "true")
                 }
                 ProviderId.CLAUDE_CODE -> Unit
-                ProviderId.GROK -> Unit
+                ProviderId.GROK, ProviderId.CURSOR -> Unit
             }
         }.buildString()
         if (openBrowser) browserLauncher.open(url)
@@ -272,25 +277,34 @@ class QuotaDogClient(
         return tokenStore.save(ProviderId.GROK, token)
     }
 
+    suspend fun importCursorAccount(): AccountKey {
+        val token = loadCursorCredentialsFromLocalApp()
+        return tokenStore.save(ProviderId.CURSOR, token)
+    }
+
     suspend fun refreshUsage(accountKey: AccountKey): ProviderUsageSnapshot {
         val token = ensureFreshToken(accountKey)
         return when (accountKey.providerId) {
             ProviderId.CODEX -> fetchCodexUsage(token)
             ProviderId.CLAUDE_CODE -> fetchClaudeUsage(token)
             ProviderId.GROK -> fetchGrokUsage(token)
+            ProviderId.CURSOR -> fetchCursorUsage(token)
         }
     }
 
     private suspend fun ensureFreshToken(accountKey: AccountKey): OAuthTokenBundle {
-        if (accountKey.providerId == ProviderId.GROK) {
-            return ensureFreshGrokToken(accountKey)
+        return when (accountKey.providerId) {
+            ProviderId.GROK -> ensureFreshGrokToken(accountKey)
+            ProviderId.CURSOR -> ensureFreshCursorToken(accountKey)
+            ProviderId.CODEX, ProviderId.CLAUDE_CODE -> {
+                val token = tokenStore.load(accountKey)
+                    ?: throw ProviderException(AuthState.NotConfigured, "Not signed in to ${accountKey.providerId.displayName}")
+                if (!token.isExpired()) return token
+                val refreshed = refreshToken(accountKey.providerId, token.refreshToken).withIdentityFrom(token)
+                tokenStore.save(accountKey, refreshed)
+                refreshed
+            }
         }
-        val token = tokenStore.load(accountKey)
-            ?: throw ProviderException(AuthState.NotConfigured, "Not signed in to ${accountKey.providerId.displayName}")
-        if (!token.isExpired()) return token
-        val refreshed = refreshToken(accountKey.providerId, token.refreshToken).withIdentityFrom(token)
-        tokenStore.save(accountKey, refreshed)
-        return refreshed
     }
 
     private suspend fun ensureFreshGrokToken(accountKey: AccountKey): OAuthTokenBundle {
@@ -316,6 +330,32 @@ class QuotaDogClient(
         throw ProviderException(
             AuthState.RequiresRelogin,
             "Grok credentials expired. Run `grok login` and refresh again."
+        )
+    }
+
+    private suspend fun ensureFreshCursorToken(accountKey: AccountKey): OAuthTokenBundle {
+        val stored = tokenStore.load(accountKey)
+            ?: throw ProviderException(AuthState.NotConfigured, "Not signed in to ${accountKey.providerId.displayName}")
+        val reloaded = runCatching { loadCursorCredentialsFromLocalApp() }.getOrNull()
+        if (reloaded != null && !reloaded.isExpired()) {
+            val reloadedKey = accountKeyForToken(ProviderId.CURSOR, reloaded)
+            if (reloadedKey != accountKey) {
+                if (!stored.isExpired()) return stored
+                throw ProviderException(
+                    AuthState.RequiresRelogin,
+                    "Cursor is signed in as a different account. Remove this account and import again.",
+                )
+            }
+            val merged = reloaded.withIdentityFrom(stored)
+            tokenStore.save(accountKey, merged)
+            return merged
+        }
+        if (!stored.isExpired()) {
+            return stored
+        }
+        throw ProviderException(
+            AuthState.RequiresRelogin,
+            "Cursor credentials expired. Sign in to Cursor again, then re-import."
         )
     }
 
@@ -365,6 +405,10 @@ class QuotaDogClient(
                 AuthState.NotConfigured,
                 "Grok does not use browser OAuth. Import credentials from the Grok CLI instead."
             )
+            ProviderId.CURSOR -> throw ProviderException(
+                AuthState.NotConfigured,
+                "Cursor does not use browser OAuth. Import credentials from the local Cursor app instead."
+            )
         }
     }
 
@@ -398,6 +442,10 @@ class QuotaDogClient(
             ProviderId.GROK -> throw ProviderException(
                 AuthState.RequiresRelogin,
                 "Grok credentials are refreshed by the Grok CLI. Run `grok login` and refresh again."
+            )
+            ProviderId.CURSOR -> throw ProviderException(
+                AuthState.RequiresRelogin,
+                "Cursor credentials are refreshed by the Cursor app. Sign in again, then re-import."
             )
         }
     }
@@ -446,6 +494,23 @@ class QuotaDogClient(
             collectedAt = Clock.System.now(),
             accountEmail = token.email,
             message = "Source: Grok CLI auth (${grokAuthFileHint()})",
+        )
+    }
+
+    private suspend fun fetchCursorUsage(token: OAuthTokenBundle): ProviderUsageSnapshot {
+        val usage = CursorUsageFetcher.fetch(httpClient, token.accessToken)
+        val planLabel = formatCursorPlanLabel(usage.membershipType ?: token.accountId)
+        return ProviderUsageSnapshot(
+            providerId = ProviderId.CURSOR,
+            authState = AuthState.LoggedIn,
+            windows = usage.windows,
+            collectedAt = Clock.System.now(),
+            accountEmail = token.email,
+            message = buildString {
+                if (planLabel != null) append("Plan: $planLabel")
+                if (isNotEmpty()) append(" · ")
+                append("Source: Cursor app (${cursorAuthFileHint()})")
+            },
         )
     }
 
@@ -588,9 +653,16 @@ class QuotaDogStore(
     }
 
     suspend fun beginLoginAndWait(providerId: ProviderId) {
-        if (providerId == ProviderId.GROK) {
-            importGrokAccountAndRefresh()
-            return
+        when (providerId) {
+            ProviderId.GROK -> {
+                importGrokAccountAndRefresh()
+                return
+            }
+            ProviderId.CURSOR -> {
+                importCursorAccountAndRefresh()
+                return
+            }
+            ProviderId.CODEX, ProviderId.CLAUDE_CODE -> Unit
         }
         var start: OAuthLoginStart? = null
         var pendingKey: AccountKey? = null
@@ -724,6 +796,48 @@ class QuotaDogStore(
                     authState = AuthState.Error,
                     busy = false,
                     message = safeUserMessage(error, "Could not import Grok credentials."),
+                )
+            }
+        }
+    }
+
+    private suspend fun importCursorAccountAndRefresh() {
+        val pendingKey = AccountKey.pending(ProviderId.CURSOR, "import")
+        update(pendingKey) {
+            it.copy(
+                added = true,
+                authState = AuthState.Unknown,
+                busy = true,
+                message = "Reading Cursor credentials from ${cursorAuthFileHint()}...",
+            )
+        }
+        try {
+            val accountKey = client.importCursorAccount()
+            replacePendingWithAccount(
+                pendingKey = pendingKey,
+                accountKey = accountKey,
+                message = "Imported Cursor credentials, refreshing usage...",
+            )
+            onLocalDataChanged?.invoke()
+            refresh(accountKey)
+        } catch (error: ProviderException) {
+            platformDebugLog("store importCursor provider error state=${error.state} status=${error.statusCode}")
+            update(pendingKey) {
+                it.copy(
+                    added = true,
+                    authState = error.state,
+                    busy = false,
+                    message = safeUserMessage(error, "Could not import Cursor credentials."),
+                )
+            }
+        } catch (error: Throwable) {
+            platformDebugLog("store importCursor unexpected error")
+            update(pendingKey) {
+                it.copy(
+                    added = true,
+                    authState = AuthState.Error,
+                    busy = false,
+                    message = safeUserMessage(error, "Could not import Cursor credentials."),
                 )
             }
         }
@@ -903,6 +1017,7 @@ private fun inferWindowDurationSeconds(id: String, label: String): Long? {
     return when (id) {
         "primary", "five_hour" -> FIVE_HOUR_SECONDS
         "secondary", "seven_day", "seven_day_sonnet", "seven_day_opus" -> SEVEN_DAY_SECONDS
+        "plan-usage", "on-demand" -> THIRTY_DAY_SECONDS
         "credits" -> when {
             label.contains("weekly", ignoreCase = true) -> SEVEN_DAY_SECONDS
             label.contains("monthly", ignoreCase = true) -> THIRTY_DAY_SECONDS
@@ -916,6 +1031,16 @@ private fun inferWindowDurationSeconds(id: String, label: String): Long? {
             else -> null
         }
     }
+}
+
+private fun formatCursorPlanLabel(raw: String?): String? {
+    val value = raw?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+    return value
+        .split('_', '-', ' ')
+        .filter { it.isNotBlank() }
+        .joinToString(" ") { part ->
+            part.lowercase().replaceFirstChar { it.titlecase() }
+        }
 }
 
 private const val FIVE_HOUR_SECONDS = 5L * 60L * 60L

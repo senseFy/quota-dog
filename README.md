@@ -1,6 +1,6 @@
 # QuotaDog
 
-QuotaDog is a local, cross-platform dashboard for viewing Codex, Claude Code, and Grok quota windows.
+QuotaDog is a local, cross-platform dashboard for viewing Codex, Claude Code, Grok, and Cursor quota windows.
 
 It reads provider usage data directly from your account and does not proxy model traffic or bypass provider limits.
 
@@ -10,7 +10,7 @@ QuotaDog is built with Kotlin Multiplatform and Compose Multiplatform, with app 
 
 The app currently focuses on a small workflow:
 
-- Sign in to Codex or Claude Code through browser-based OAuth, or import Grok credentials from the Grok CLI on desktop.
+- Sign in to Codex or Claude Code through browser-based OAuth, import Grok credentials from the Grok CLI on desktop, or import Cursor credentials from the local Cursor app on desktop.
 - View usage windows, quota progress, and reset timing.
 - Refresh accounts, remove local account data, and optionally mask account emails in the UI.
 - Optionally sync encrypted account tokens, cached usage, and preferences through a user-provided Dropbox app folder.
@@ -29,7 +29,7 @@ QuotaDog is a local client with no backend, analytics, telemetry, or crash repor
 - Removing an account while Dropbox sync is unlocked writes a tombstone so other synced devices remove the same account instead of restoring stale data.
 - Provider behavior can change without notice, and QuotaDog only displays usage available to the signed-in account.
 
-QuotaDog reads usage by calling the same auth flows and HTTP endpoints that the official Codex, Claude Code, and Grok CLIs use to display quota information. These endpoints are not part of any documented public API. Provider terms of service, endpoint shape, authentication, and rate limits may change at any time, which can break QuotaDog without notice. Use of this app is at your own risk and you are responsible for complying with each provider's terms of service.
+QuotaDog reads usage by calling the same auth flows and HTTP endpoints that the official Codex, Claude Code, and Grok CLIs use to display quota information, and by reading Cursor's local auth database plus Cursor's usage-summary API. These endpoints are not part of any documented public API. Provider terms of service, endpoint shape, authentication, and rate limits may change at any time, which can break QuotaDog without notice. Use of this app is at your own risk and you are responsible for complying with each provider's terms of service.
 
 See [SECURITY.md](SECURITY.md) for how to report security issues. Please remove tokens, callback URLs, and account data from any reproduction details before sharing.
 

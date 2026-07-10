@@ -298,6 +298,7 @@ private fun QuotaDogScreen(
                     snackbar.show(
                         text = when (provider) {
                             ProviderId.GROK -> "Importing Grok CLI credentials..."
+                            ProviderId.CURSOR -> "Importing Cursor app credentials..."
                             else -> "Opening browser for ${provider.displayName}..."
                         },
                         tone = QdSnackbarTone.Info,
@@ -1053,8 +1054,8 @@ private fun ProviderPickerContent(onSelect: (ProviderId) -> Unit) {
     val typo = QdTheme.typography
     val spacing = QdTheme.spacing
     val providers = availableProviders()
-    val description = if (ProviderId.GROK in providers) {
-        "Choose a provider. Codex and Claude use browser OAuth; Grok imports credentials from the Grok CLI."
+    val description = if (ProviderId.GROK in providers || ProviderId.CURSOR in providers) {
+        "Choose a provider. Codex and Claude use browser OAuth; Grok and Cursor import local credentials on desktop."
     } else {
         "Choose a provider - we'll open the browser for OAuth and finish sign-in here."
     }
@@ -1166,6 +1167,7 @@ private fun ProviderId.subtitle(): String = when (this) {
     ProviderId.CODEX -> "OpenAI Codex / ChatGPT usage"
     ProviderId.CLAUDE_CODE -> "Anthropic Claude Code usage"
     ProviderId.GROK -> "Grok Build / SuperGrok credits (desktop)"
+    ProviderId.CURSOR -> "Cursor plan / on-demand usage (desktop)"
 }
 
 private fun UsageWindow.displayRatio(mode: UsageDisplayMode): Double = when (mode) {
@@ -1193,6 +1195,8 @@ private fun UsageWindow.infoLabel(): String = when (id) {
     "seven_day_sonnet" -> "Weekly Sonnet"
     "seven_day_opus" -> "Weekly Opus"
     "credits" -> "Credits"
+    "plan-usage" -> "Plan"
+    "on-demand" -> "On-demand"
     else -> label
 }
 

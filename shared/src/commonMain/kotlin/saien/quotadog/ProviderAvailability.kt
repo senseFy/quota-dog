@@ -5,3 +5,7 @@ expect fun availableProviders(): List<ProviderId>
 expect fun loadGrokCredentialsFromCli(): OAuthTokenBundle
 
 expect fun grokAuthFileHint(): String
+
+expect fun loadCursorCredentialsFromLocalApp(): OAuthTokenBundle
+
+expect fun cursorAuthFileHint(): String
