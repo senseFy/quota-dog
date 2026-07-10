@@ -68,16 +68,27 @@ export QUOTADOG_KEY_ALIAS=...
 export QUOTADOG_KEY_PASSWORD=...
 ```
 
-App version is read from env vars at build time so CI can inject it from a tag:
+App version is resolved in this order:
+
+1. `RELEASE_VERSION` / `RELEASE_VERSION_CODE` env vars (CI / one-off overrides)
+2. [`version.properties`](version.properties) (local source of truth)
+3. Fallback `1.0.0` / `1`
 
 ```bash
 export RELEASE_VERSION=1.2.0       # versionName + Compose Desktop packageVersion (MAJOR must be >= 1)
 export RELEASE_VERSION_CODE=42     # Android versionCode (monotonically increasing int)
 ```
 
-Local builds without these vars use a default of `1.0.0`.
-(Compose Desktop's installer formats reject `MAJOR=0`, so `0.x.y` cannot be the
-fallback. Use a `RELEASE_VERSION` env var if you need a different number.)
+Manage the checked-in version file:
+
+```bash
+make version-current
+make version-bump ARGS='--set-version 1.2.0'   # also bumps VERSION_CODE unless --set-code is set
+make version-bump ARGS='--bump-code'
+make git-build-info
+```
+
+Compose Desktop's installer formats reject `MAJOR=0`, so `0.x.y` cannot be used.
 
 ### Dropbox Sync Setup
 
@@ -91,6 +102,46 @@ Use the same Dropbox account and sync passphrase on each device you want to sync
 
 If you forget the sync passphrase, QuotaDog cannot decrypt the existing Dropbox sync file. You can reset the sync file with a new passphrase from a device that still has the local data you want to keep, but that overwrites the Dropbox copy and may lose data that only exists in Dropbox or on another unsynced device.
 
+### macOS DMG release (signed + notarized)
+
+For Gatekeeper-clean macOS distribution, use the Saytive-aligned release scripts.
+They reuse the same **Developer ID Application** certificate and default to the
+shared `saytive-notary` keychain profile.
+
+#### Prerequisites
+
+- Keychain has **Developer ID Application** (same cert as Saytive)
+- Notarization credentials configured (one of):
+
+```bash
+# Preferred: reuse Saytive's stored profile
+# (already created if you ship Saytive from this machine)
+xcrun notarytool store-credentials "saytive-notary" \
+  --apple-id <Apple ID> \
+  --password <App-specific password> \
+  --team-id 45V6QJP3A2
+```
+
+#### Build
+
+```bash
+# Full release: sign app + DMG, notarize, staple
+make release-dmg
+# or: ./scripts/build_release_dmg.sh
+
+# Signed only (skip notarization)
+make release-dmg-local
+
+# Unsigned local smoke test
+make release-dmg-unsigned
+```
+
+Outputs land in `releases/` (gitignored), e.g.
+`releases/QuotaDog-1.0.0-<git>-clean.dmg`.
+
+Optional env vars: `RELEASE_VERSION`, `CODESIGN_IDENTITY`, `NOTARY_PROFILE`,
+`NOTARY_KEY_PATH` / `NOTARY_KEY_ID` / `NOTARY_ISSUER`.
+
 ### Publishing a GitHub Release
 
 Pushing a `vX.Y.Z` tag triggers
@@ -99,6 +150,10 @@ and attaches:
 
 - Android: signed `*.apk` and `*.aab`
 - Desktop: macOS `*.dmg`, Windows `*.msi`, Linux `*.deb`
+
+The CI macOS DMG is an **unsigned** Compose Desktop package for convenience.
+For a Gatekeeper-clean installer, build locally with `make release-dmg` and
+attach that artifact (or replace the CI upload later).
 
 iOS is intentionally not published this way — distribute via TestFlight / App
 Store instead.

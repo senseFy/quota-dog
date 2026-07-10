@@ -1,12 +1,13 @@
 .DEFAULT_GOAL := help
 
 GRADLE ?= ./gradlew
+ARGS ?=
 
-.PHONY: help tasks clean test test-shared test-desktop run desktop-run desktop-package android-debug android-install release-apk release-aab
+.PHONY: help tasks clean test test-shared test-desktop run desktop-run desktop-package android-debug android-install release-apk release-aab release-app release-dmg release-dmg-local release-dmg-unsigned version-current version-bump git-build-info
 
 help: ## Show this help.
 	@printf "QuotaDog commands:\n\n"
-	@awk 'BEGIN { FS = ":.*##" } /^[a-zA-Z0-9_.-]+:.*##/ { printf "  %-18s %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
+	@awk 'BEGIN { FS = ":.*##" } /^[a-zA-Z0-9_.-]+:.*##/ { printf "  %-22s %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
 
 tasks: ## List all Gradle tasks.
 	@$(GRADLE) tasks --all
@@ -41,3 +42,24 @@ release-apk: ## Build an Android release APK; requires signing env vars.
 
 release-aab: ## Build an Android release AAB; requires signing env vars.
 	@$(GRADLE) :composeApp:bundleRelease
+
+release-app: ## Build a Developer ID–signed macOS .app into releases/.
+	@./scripts/build_release.sh
+
+release-dmg: ## Build, sign, notarize, and staple a macOS DMG (Saytive cert + saytive-notary).
+	@./scripts/build_release_dmg.sh
+
+release-dmg-local: ## Build a signed macOS DMG; skip notarization.
+	@./scripts/build_release_dmg.sh --skip-notarize
+
+release-dmg-unsigned: ## Build an unsigned macOS DMG for local testing.
+	@./scripts/build_release_dmg.sh --skip-codesign --skip-notarize
+
+version-current: ## Print VERSION_NAME and VERSION_CODE from version.properties.
+	@./scripts/bump_version.sh --print-current
+
+version-bump: ## Bump version; pass ARGS='--set-version 1.2.0' (or --bump-code).
+	@./scripts/bump_version.sh $(ARGS)
+
+git-build-info: ## Print git build metadata used in release artifact names.
+	@./scripts/git_build_info.sh .

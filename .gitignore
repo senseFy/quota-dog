@@ -98,3 +98,6 @@ GoogleService-Info.plist
 
 # Local app data
 .quotadog/
+
+# Formal macOS release outputs (signed .app / notarized .dmg)
+releases/

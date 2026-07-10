@@ -1,5 +1,6 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
+import java.util.Properties
 
 plugins {
     alias(libs.plugins.kotlinMultiplatform)
@@ -8,13 +9,23 @@ plugins {
     alias(libs.plugins.composeCompiler)
 }
 
-// App version is read from env vars so CI release jobs can inject the tag-derived
-// version. Local builds fall back to `1.0.0` because Compose Desktop's installer
-// formats reject MAJOR=0; that constraint also rules out "*-dev" suffixes here.
+// App version prefers CI/env overrides, then falls back to version.properties so
+// local release scripts and `make version-bump` share one source of truth.
+// Compose Desktop installer formats reject MAJOR=0, so defaults stay >= 1.0.0.
+val versionProperties = Properties().apply {
+    val file = rootProject.file("version.properties")
+    if (file.exists()) {
+        file.inputStream().use { load(it) }
+    }
+}
 val releaseVersionName: String =
-    System.getenv("RELEASE_VERSION")?.takeIf { it.isNotBlank() } ?: "1.0.0"
+    System.getenv("RELEASE_VERSION")?.takeIf { it.isNotBlank() }
+        ?: versionProperties.getProperty("VERSION_NAME")?.takeIf { it.isNotBlank() }
+        ?: "1.0.0"
 val releaseVersionCode: Int =
-    System.getenv("RELEASE_VERSION_CODE")?.toIntOrNull() ?: 1
+    System.getenv("RELEASE_VERSION_CODE")?.toIntOrNull()
+        ?: versionProperties.getProperty("VERSION_CODE")?.toIntOrNull()
+        ?: 1
 
 val macStatusBarResourcesDir = layout.buildDirectory.dir("generated/macosStatusBarResources")
 val compileMacStatusBar by tasks.registering(Exec::class) {
@@ -170,6 +181,30 @@ compose.desktop {
             // such as "-dev" or "-rc.1" so local dev versions still package.
             packageVersion = releaseVersionName.substringBefore('-').let { stripped ->
                 if (stripped.matches(Regex("\\d+\\.\\d+\\.\\d+"))) stripped else "1.0.0"
+            }
+
+            macOS {
+                bundleID = "saien.quotadog"
+                // Formal release signing is driven by scripts/build_release*.sh, which export
+                // QUOTADOG_MAC_SIGN=1 and CODESIGN_IDENTITY (same Developer ID as Saytive).
+                // CI / local unsigned packages leave those unset and stay unsigned.
+                signing {
+                    val providers = project.providers
+                    val identityProvider = providers.environmentVariable("CODESIGN_IDENTITY")
+                        .orElse(providers.gradleProperty("compose.desktop.mac.signing.identity"))
+                        .orElse("")
+                    val signRequested = providers.environmentVariable("QUOTADOG_MAC_SIGN")
+                        .map { it == "1" || it.equals("true", ignoreCase = true) }
+                        .orElse(
+                            providers.gradleProperty("compose.desktop.mac.sign")
+                                .map { it == "true" }
+                                .orElse(false),
+                        )
+                    sign.set(signRequested.zip(identityProvider) { requested, identity ->
+                        requested && identity.isNotBlank()
+                    })
+                    identity.set(identityProvider)
+                }
             }
         }
     }
