@@ -2,15 +2,36 @@
 
 typedef void (*QDActionCallback)(void);
 
+// Set to 1 to paint layout containers in loud colors and log sizes.
+#define QD_DEBUG_LAYOUT 0
+
+#if QD_DEBUG_LAYOUT
+static NSString * const QDStatusBarBuildId = @"panel-v6";
+
+static void QDLog(NSString *format, ...) NS_FORMAT_FUNCTION(1, 2);
+static void QDLog(NSString *format, ...) {
+    va_list args;
+    va_start(args, format);
+    NSString *message = [[NSString alloc] initWithFormat:format arguments:args];
+    va_end(args);
+    NSLog(@"[QDStatusBar] %@", message);
+}
+#else
+#define QDLog(...) ((void)0)
+#endif
+
 static const CGFloat QDPanelWidth = 420.0;
-static const CGFloat QDPanelHeight = 580.0;
+static const CGFloat QDPanelMaxHeight = 800.0;
 static const CGFloat QDOuterPad = 20.0;
 static const CGFloat QDCardRadius = 18.0;
-static const CGFloat QDPillRadius = 999.0;
 static const CGFloat QDCardPad = 12.0;
 static const CGFloat QDAvatarSize = 28.0;
 static const CGFloat QDProgressHeight = 6.0;
-static const CGFloat QDButtonHeight = 36.0;
+static const CGFloat QDButtonHeight = 28.0;
+static const CGFloat QDAccountGap = 12.0;
+static const CGFloat QDSectionGap = 12.0;
+static const CGFloat QDFooterBottomPad = 10.0;
+static const CGFloat QDEmptyContentHeight = 96.0;
 static const NSUInteger QDMaxAccounts = 4;
 static const NSUInteger QDMaxWindows = 3;
 
@@ -99,8 +120,16 @@ static BOOL QDIsDarkAppearance(void) {
     return [name isEqualToString:NSAppearanceNameDarkAqua];
 }
 
-static QDPalette QDCurrentPalette(void) {
-    return QDIsDarkAppearance() ? QDDarkPalette() : QDLightPalette();
+static BOOL QDResolveDarkTheme(NSDictionary *state) {
+    id value = state[@"darkTheme"];
+    if ([value respondsToSelector:@selector(boolValue)]) {
+        return [value boolValue];
+    }
+    return QDIsDarkAppearance();
+}
+
+static QDPalette QDPaletteForDark(BOOL dark) {
+    return dark ? QDDarkPalette() : QDLightPalette();
 }
 
 static NSColor *QDUsageFill(NSInteger usedPct, QDPalette palette) {
@@ -222,6 +251,7 @@ static NSImage *QDProviderLogoImage(NSString *provider, NSColor *tint, CGFloat p
     if (self) {
         self.wantsLayer = YES;
         _cornerRadius = 0;
+        self.autoresizingMask = NSViewNotSizable;
     }
     return self;
 }
@@ -304,17 +334,44 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
     QDButtonStyleGhost,
 };
 
-@interface QDPillButton : NSButton
+// Plain NSControl — NSButton custom drawing is unreliable inside layer-backed panels.
+@interface QDPillButton : NSControl
 @property(nonatomic, assign) QDButtonStyle qdStyle;
+@property(nonatomic, copy) NSString *title;
+@property(nonatomic, strong) NSImage *image;
+@property(nonatomic, strong) NSFont *titleFont;
 @property(nonatomic, strong) NSColor *restBg;
 @property(nonatomic, strong) NSColor *hoverBg;
 @property(nonatomic, strong) NSColor *pressedBg;
 @property(nonatomic, strong) NSColor *fgColor;
 @property(nonatomic, strong) NSColor *borderColor;
 @property(nonatomic, assign) BOOL hovering;
+@property(nonatomic, assign) BOOL pressed;
++ (instancetype)buttonWithTitle:(NSString *)title
+                          style:(QDButtonStyle)style
+                        palette:(QDPalette)palette
+                         target:(id)target
+                         action:(SEL)action;
++ (instancetype)iconButtonWithSystemSymbol:(NSString *)symbolName
+                                   palette:(QDPalette)palette
+                                    target:(id)target
+                                    action:(SEL)action;
 @end
 
 @implementation QDPillButton
+- (instancetype)initWithFrame:(NSRect)frame {
+    self = [super initWithFrame:frame];
+    if (self) {
+        self.wantsLayer = YES;
+        self.layerContentsRedrawPolicy = NSViewLayerContentsRedrawOnSetNeedsDisplay;
+    }
+    return self;
+}
+
+- (BOOL)isFlipped { return YES; }
+- (BOOL)acceptsFirstMouse:(NSEvent *)event { return YES; }
+- (BOOL)isOpaque { return NO; }
+
 + (instancetype)buttonWithTitle:(NSString *)title
                           style:(QDButtonStyle)style
                         palette:(QDPalette)palette
@@ -324,12 +381,8 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
     button.title = title ?: @"";
     button.target = target;
     button.action = action;
-    button.bezelStyle = NSBezelStyleInline;
-    button.bordered = NO;
     button.qdStyle = style;
-    button.wantsLayer = YES;
-    button.layer.cornerRadius = QDPillRadius;
-    button.layer.masksToBounds = YES;
+    button.titleFont = [NSFont systemFontOfSize:12.0 weight:NSFontWeightMedium];
 
     switch (style) {
         case QDButtonStylePrimary:
@@ -340,30 +393,54 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
             button.borderColor = nil;
             break;
         case QDButtonStyleSecondary:
-            button.restBg = palette.surface;
+            button.restBg = [NSColor clearColor];
             button.hoverBg = palette.surfaceHover;
             button.pressedBg = palette.surfaceMuted;
-            button.fgColor = palette.textPrimary;
-            button.borderColor = palette.border;
+            button.fgColor = palette.textSecondary;
+            button.borderColor = nil;
             break;
         case QDButtonStyleGhost:
             button.restBg = [NSColor clearColor];
             button.hoverBg = palette.surfaceHover;
             button.pressedBg = palette.surfaceMuted;
-            button.fgColor = palette.textPrimary;
+            button.fgColor = palette.textTertiary;
             button.borderColor = nil;
             break;
     }
-
-    NSMutableAttributedString *attr = [[NSMutableAttributedString alloc] initWithString:title ?: @""];
-    NSDictionary *attrs = @{
-        NSFontAttributeName: [NSFont systemFontOfSize:13.0 weight:NSFontWeightSemibold],
-        NSForegroundColorAttributeName: button.fgColor,
-    };
-    [attr addAttributes:attrs range:NSMakeRange(0, attr.length)];
-    button.attributedTitle = attr;
-    [button applyVisualState];
     return button;
+}
+
++ (instancetype)iconButtonWithSystemSymbol:(NSString *)symbolName
+                                   palette:(QDPalette)palette
+                                    target:(id)target
+                                    action:(SEL)action {
+    QDPillButton *button = [[QDPillButton alloc] initWithFrame:NSZeroRect];
+    button.target = target;
+    button.action = action;
+    button.qdStyle = QDButtonStyleGhost;
+    button.restBg = [NSColor clearColor];
+    button.hoverBg = palette.surfaceHover;
+    button.pressedBg = palette.surfaceMuted;
+    button.fgColor = palette.textTertiary;
+    button.borderColor = nil;
+    button.title = @"";
+
+    if (@available(macOS 11.0, *)) {
+        NSImage *image = [NSImage imageWithSystemSymbolName:symbolName accessibilityDescription:nil];
+        if (image) {
+            NSImageSymbolConfiguration *config =
+                [NSImageSymbolConfiguration configurationWithPointSize:12.0 weight:NSFontWeightMedium];
+            image = [image imageWithSymbolConfiguration:config];
+            image.template = YES;
+            button.image = image;
+        }
+    }
+    return button;
+}
+
+- (void)setEnabled:(BOOL)enabled {
+    [super setEnabled:enabled];
+    [self setNeedsDisplay:YES];
 }
 
 - (void)updateTrackingAreas {
@@ -380,55 +457,123 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
 
 - (void)mouseEntered:(NSEvent *)event {
     self.hovering = YES;
-    [self applyVisualState];
+    [self setNeedsDisplay:YES];
 }
 
 - (void)mouseExited:(NSEvent *)event {
     self.hovering = NO;
-    [self applyVisualState];
+    self.pressed = NO;
+    [self setNeedsDisplay:YES];
 }
 
 - (void)mouseDown:(NSEvent *)event {
-    if (self.enabled) {
-        self.layer.backgroundColor = self.pressedBg.CGColor;
-    }
-    [super mouseDown:event];
-    [self applyVisualState];
+    if (!self.enabled) return;
+    self.pressed = YES;
+    [self setNeedsDisplay:YES];
 }
 
-- (void)setEnabled:(BOOL)enabled {
-    [super setEnabled:enabled];
-    [self applyVisualState];
+- (void)mouseDragged:(NSEvent *)event {
+    if (!self.enabled) return;
+    NSPoint loc = [self convertPoint:event.locationInWindow fromView:nil];
+    BOOL inside = NSPointInRect(loc, self.bounds);
+    if (self.pressed != inside) {
+        self.pressed = inside;
+        [self setNeedsDisplay:YES];
+    }
 }
 
-- (void)applyVisualState {
-    NSColor *bg = self.restBg;
-    if (self.enabled) {
-        if (self.hovering) bg = self.hoverBg;
-    } else {
-        bg = [self.restBg colorWithAlphaComponent:0.5];
+- (void)mouseUp:(NSEvent *)event {
+    if (!self.enabled) return;
+    BOOL wasPressed = self.pressed;
+    self.pressed = NO;
+    [self setNeedsDisplay:YES];
+    NSPoint loc = [self convertPoint:event.locationInWindow fromView:nil];
+    if (wasPressed && NSPointInRect(loc, self.bounds) && self.target && self.action) {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+        [self.target performSelector:self.action withObject:self];
+#pragma clang diagnostic pop
     }
-    self.layer.backgroundColor = bg.CGColor;
+}
+
+- (void)drawRect:(NSRect)dirtyRect {
+    NSColor *bg = self.restBg ?: [NSColor clearColor];
+    if (!self.enabled) {
+        bg = [bg colorWithAlphaComponent:0.5];
+    } else if (self.pressed) {
+        bg = self.pressedBg ?: bg;
+    } else if (self.hovering) {
+        bg = self.hoverBg ?: bg;
+    }
+
+    CGFloat radius = MIN(self.bounds.size.height, self.bounds.size.width) / 2.0;
+    NSBezierPath *path = [NSBezierPath bezierPathWithRoundedRect:NSInsetRect(self.bounds, 0.5, 0.5)
+                                                         xRadius:radius
+                                                         yRadius:radius];
+    [bg setFill];
+    [path fill];
     if (self.borderColor) {
-        self.layer.borderWidth = 1.0;
-        self.layer.borderColor = self.borderColor.CGColor;
-    } else {
-        self.layer.borderWidth = 0;
+        [self.borderColor setStroke];
+        path.lineWidth = 1.0;
+        [path stroke];
     }
-    self.alphaValue = self.enabled ? 1.0 : 0.55;
+
+    NSColor *fg = self.enabled ? self.fgColor : [self.fgColor colorWithAlphaComponent:0.55];
+    if (self.image) {
+        NSImage *source = self.image;
+        NSSize size = source.size;
+        NSRect imageRect = NSMakeRect(NSMidX(self.bounds) - size.width / 2.0,
+                                      NSMidY(self.bounds) - size.height / 2.0,
+                                      size.width,
+                                      size.height);
+        NSImage *tinted = [NSImage imageWithSize:size
+                                         flipped:YES
+                                  drawingHandler:^BOOL(NSRect dst) {
+            [source drawInRect:dst
+                      fromRect:NSZeroRect
+                     operation:NSCompositingOperationSourceOver
+                      fraction:1.0
+                respectFlipped:YES
+                         hints:nil];
+            [fg set];
+            NSRectFillUsingOperation(dst, NSCompositingOperationSourceIn);
+            return YES;
+        }];
+        [tinted drawInRect:imageRect
+                  fromRect:NSZeroRect
+                 operation:NSCompositingOperationSourceOver
+                  fraction:1.0
+            respectFlipped:YES
+                     hints:nil];
+    } else if (self.title.length > 0) {
+        NSFont *font = self.titleFont ?: [NSFont systemFontOfSize:12.0 weight:NSFontWeightMedium];
+        NSDictionary *attrs = @{
+            NSFontAttributeName: font,
+            NSForegroundColorAttributeName: fg,
+        };
+        NSAttributedString *attr = [[NSAttributedString alloc] initWithString:self.title attributes:attrs];
+        NSSize textSize = [attr size];
+        NSPoint textOrigin = NSMakePoint(NSMidX(self.bounds) - textSize.width / 2.0,
+                                         NSMidY(self.bounds) - textSize.height / 2.0);
+        [attr drawAtPoint:textOrigin];
+    }
 }
 @end
 
 #pragma mark - Controller
 
-@interface QDStatusBarController : NSObject <NSPopoverDelegate>
+@interface QDStatusBarController : NSObject
 @property(nonatomic, strong) NSStatusItem *statusItem;
-@property(nonatomic, strong) NSPopover *popover;
+@property(nonatomic, strong) NSPanel *panel;
 @property(nonatomic, copy) NSDictionary *state;
+@property(nonatomic, assign) NSSize panelSize;
 @property(nonatomic, strong) id localEventMonitor;
 @property(nonatomic, strong) id globalEventMonitor;
 @property(nonatomic, strong) id resignActiveObserver;
+@property(nonatomic, strong) id becomeActiveObserver;
+@property(nonatomic, strong) id windowBecomeKeyObserver;
 @property(nonatomic, assign) QDActionCallback onRefresh;
+@property(nonatomic, assign) QDActionCallback onShow;
 @property(nonatomic, assign) QDActionCallback onOpenHide;
 @property(nonatomic, assign) QDActionCallback onQuit;
 @end
@@ -436,37 +581,59 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
 @implementation QDStatusBarController
 
 - (instancetype)initWithRefresh:(QDActionCallback)refresh
+                           show:(QDActionCallback)show
                        openHide:(QDActionCallback)openHide
                            quit:(QDActionCallback)quit {
     self = [super init];
     if (!self) return nil;
 
     _onRefresh = refresh;
+    _onShow = show;
     _onOpenHide = openHide;
     _onQuit = quit;
     _state = @{};
+    _panelSize = NSMakeSize(QDPanelWidth, 200.0);
 
     _statusItem = [[NSStatusBar systemStatusBar] statusItemWithLength:NSVariableStatusItemLength];
     NSStatusBarButton *button = _statusItem.button;
     button.title = @"Q";
     button.font = [NSFont boldSystemFontOfSize:13.0];
     button.target = self;
-    button.action = @selector(togglePopover:);
+    button.action = @selector(togglePanel:);
     button.toolTip = @"QuotaDog";
 
-    _popover = [[NSPopover alloc] init];
-    _popover.behavior = NSPopoverBehaviorTransient;
-    _popover.animates = YES;
-    _popover.contentSize = NSMakeSize(QDPanelWidth, QDPanelHeight);
-    _popover.delegate = self;
+    // NSPanel instead of NSPopover: popover keeps re-stretching content to a stale max height,
+    // which produced the huge empty footer band. Panel contentSize is fully under our control.
+    _panel = [[NSPanel alloc] initWithContentRect:NSMakeRect(0, 0, QDPanelWidth, 200)
+                                        styleMask:(NSWindowStyleMaskBorderless | NSWindowStyleMaskNonactivatingPanel)
+                                          backing:NSBackingStoreBuffered
+                                            defer:NO];
+    _panel.opaque = NO;
+    _panel.backgroundColor = NSColor.clearColor;
+    _panel.hasShadow = YES;
+    _panel.level = NSPopUpMenuWindowLevel;
+    _panel.hidesOnDeactivate = NO;
+    _panel.movableByWindowBackground = NO;
+    _panel.collectionBehavior =
+        NSWindowCollectionBehaviorCanJoinAllSpaces |
+        NSWindowCollectionBehaviorFullScreenAuxiliary |
+        NSWindowCollectionBehaviorIgnoresCycle;
+#if QD_DEBUG_LAYOUT
+    QDLog(@"init build=%@ panel=%p", QDStatusBarBuildId, _panel);
+#endif
     return self;
 }
 
 - (void)dealloc {
     [self stopDismissMonitoring];
+    [_panel orderOut:nil];
     if (_statusItem) {
         [[NSStatusBar systemStatusBar] removeStatusItem:_statusItem];
     }
+}
+
+- (BOOL)isPanelVisible {
+    return self.panel.isVisible;
 }
 
 - (void)updateWithJSONString:(NSString *)jsonString {
@@ -481,23 +648,87 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
     self.state = decoded ?: @{};
     NSString *tooltip = [self stringForKey:@"tooltip" fallback:@"QuotaDog"];
     self.statusItem.button.toolTip = tooltip;
-    if (self.popover.isShown) {
-        [self rebuildPopoverContent];
+    if ([self isPanelVisible]) {
+        [self rebuildPanelContent];
+        [self demoteApplicationWindowsKeepingPanelFront];
     }
 }
 
-- (void)togglePopover:(id)sender {
-    if (self.popover.isShown) {
-        [self closePopover:sender];
+- (void)togglePanel:(id)sender {
+    if ([self isPanelVisible]) {
+        [self closePanel:sender];
         return;
     }
 
-    [self rebuildPopoverContent];
-    NSView *anchor = self.statusItem.button;
-    [NSApp activateIgnoringOtherApps:YES];
-    [self.popover showRelativeToRect:anchor.bounds ofView:anchor preferredEdge:NSRectEdgeMinY];
-    [self.popover.contentViewController.view.window makeKeyWindow];
+    [self rebuildPanelContent];
+    [self positionPanelUnderStatusItem];
+    [self.panel orderFrontRegardless];
+    [self demoteApplicationWindowsKeepingPanelFront];
     [self startDismissMonitoring];
+    if (self.onShow) self.onShow();
+}
+
+- (void)positionPanelUnderStatusItem {
+    NSStatusBarButton *button = self.statusItem.button;
+    NSRect buttonScreenRect = NSZeroRect;
+    if (button.window) {
+        buttonScreenRect = [button.window convertRectToScreen:[button convertRect:button.bounds toView:nil]];
+    }
+
+    NSPoint mouse = [NSEvent mouseLocation];
+    NSScreen *mouseScreen = [self screenContainingPoint:mouse];
+    NSScreen *buttonScreen = button.window.screen;
+    BOOL buttonLooksValid = buttonScreenRect.size.width > 0.5 && buttonScreenRect.size.height > 0.5;
+    BOOL sameScreen = !mouseScreen || !buttonScreen || mouseScreen == buttonScreen;
+
+    NSRect anchorScreenRect = buttonScreenRect;
+    if (!buttonLooksValid || !sameScreen) {
+        CGFloat width = MAX(buttonScreenRect.size.width, 22.0);
+        CGFloat height = MAX(buttonScreenRect.size.height, [NSStatusBar systemStatusBar].thickness);
+        NSScreen *screen = mouseScreen ?: buttonScreen ?: NSScreen.mainScreen;
+        CGFloat menuBarMinY = screen ? NSMaxY(screen.visibleFrame) : mouse.y;
+        anchorScreenRect = NSMakeRect(mouse.x - width / 2.0, menuBarMinY, width, height);
+    }
+
+    NSSize size = self.panelSize;
+    CGFloat x = NSMidX(anchorScreenRect) - size.width / 2.0;
+    CGFloat y = NSMinY(anchorScreenRect) - size.height - 6.0;
+    NSScreen *screen = [self screenContainingPoint:NSMakePoint(NSMidX(anchorScreenRect), NSMinY(anchorScreenRect))]
+        ?: NSScreen.mainScreen;
+    if (screen) {
+        NSRect visible = screen.visibleFrame;
+        x = MIN(MAX(x, NSMinX(visible) + 8.0), NSMaxX(visible) - size.width - 8.0);
+        if (y < NSMinY(visible) + 8.0) {
+            y = NSMaxY(anchorScreenRect) + 6.0; // flip below → above if needed
+        }
+    }
+    [self.panel setFrame:NSMakeRect(x, y, size.width, size.height) display:YES];
+}
+
+- (NSScreen *)screenContainingPoint:(NSPoint)point {
+    for (NSScreen *screen in NSScreen.screens) {
+        if (NSPointInRect(point, screen.frame)) {
+            return screen;
+        }
+    }
+    return nil;
+}
+
+- (void)configurePanelAppearance:(BOOL)darkTheme {
+    self.panel.appearance = darkTheme
+        ? [NSAppearance appearanceNamed:NSAppearanceNameDarkAqua]
+        : [NSAppearance appearanceNamed:NSAppearanceNameAqua];
+}
+
+- (void)demoteApplicationWindowsKeepingPanelFront {
+    for (NSWindow *window in NSApp.windows) {
+        if (window == self.panel) continue;
+        if (window == self.statusItem.button.window) continue;
+        if (!window.isVisible) continue;
+        if (window.level >= NSStatusWindowLevel) continue;
+        [window orderBack:nil];
+    }
+    [self.panel orderFrontRegardless];
 }
 
 - (void)refreshClicked:(id)sender {
@@ -505,25 +736,35 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
 }
 
 - (void)openHideClicked:(id)sender {
-    [self closePopover:sender];
+    [self closePanel:sender];
     if (self.onOpenHide) self.onOpenHide();
+    // Explicit Open app: activate and raise main windows (tray panel itself avoids this).
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(50 * NSEC_PER_MSEC)),
+                   dispatch_get_main_queue(), ^{
+        [NSApp activateIgnoringOtherApps:YES];
+        for (NSWindow *window in NSApp.windows) {
+            if (window == self.panel) continue;
+            if (window == self.statusItem.button.window) continue;
+            if (!window.isVisible) continue;
+            if (window.level >= NSStatusWindowLevel) continue;
+            [window makeKeyAndOrderFront:nil];
+        }
+    });
 }
 
 - (void)quitClicked:(id)sender {
-    [self closePopover:sender];
+    [self closePanel:sender];
     if (self.onQuit) self.onQuit();
 }
 
-- (void)closePopover:(id)sender {
-    [self.popover performClose:sender];
-}
-
-- (void)popoverDidClose:(NSNotification *)notification {
+- (void)closePanel:(id)sender {
+    [self.panel orderOut:sender];
     [self stopDismissMonitoring];
 }
 
 - (void)startDismissMonitoring {
-    if (self.localEventMonitor || self.globalEventMonitor || self.resignActiveObserver) {
+    if (self.localEventMonitor || self.globalEventMonitor || self.resignActiveObserver ||
+        self.becomeActiveObserver || self.windowBecomeKeyObserver) {
         return;
     }
 
@@ -532,22 +773,22 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
 
     self.localEventMonitor = [NSEvent addLocalMonitorForEventsMatchingMask:mouseMask handler:^NSEvent *(NSEvent *event) {
         QDStatusBarController *strongSelf = weakSelf;
-        if (!strongSelf || !strongSelf.popover.isShown) {
+        if (!strongSelf || ![strongSelf isPanelVisible]) {
             return event;
         }
-        if ([strongSelf eventIsInsideStatusButton:event] || [strongSelf eventIsInsidePopover:event]) {
+        if ([strongSelf eventIsInsideStatusButton:event] || [strongSelf eventIsInsidePanel:event]) {
             return event;
         }
-        [strongSelf closePopover:event];
+        [strongSelf closePanel:event];
         return event;
     }];
 
     self.globalEventMonitor = [NSEvent addGlobalMonitorForEventsMatchingMask:mouseMask handler:^(NSEvent *event) {
         QDStatusBarController *strongSelf = weakSelf;
-        if (!strongSelf || !strongSelf.popover.isShown) {
+        if (!strongSelf || ![strongSelf isPanelVisible]) {
             return;
         }
-        [strongSelf closePopover:event];
+        [strongSelf closePanel:event];
     }];
 
     self.resignActiveObserver = [[NSNotificationCenter defaultCenter]
@@ -556,9 +797,37 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
                      queue:[NSOperationQueue mainQueue]
                 usingBlock:^(__unused NSNotification *notification) {
                     QDStatusBarController *strongSelf = weakSelf;
-                    if (strongSelf.popover.isShown) {
-                        [strongSelf closePopover:nil];
+                    if ([strongSelf isPanelVisible]) {
+                        [strongSelf closePanel:nil];
                     }
+                }];
+
+    self.becomeActiveObserver = [[NSNotificationCenter defaultCenter]
+        addObserverForName:NSApplicationDidBecomeActiveNotification
+                    object:NSApp
+                     queue:[NSOperationQueue mainQueue]
+                usingBlock:^(__unused NSNotification *notification) {
+                    QDStatusBarController *strongSelf = weakSelf;
+                    if ([strongSelf isPanelVisible]) {
+                        [strongSelf demoteApplicationWindowsKeepingPanelFront];
+                    }
+                }];
+
+    self.windowBecomeKeyObserver = [[NSNotificationCenter defaultCenter]
+        addObserverForName:NSWindowDidBecomeKeyNotification
+                    object:nil
+                     queue:[NSOperationQueue mainQueue]
+                usingBlock:^(NSNotification *notification) {
+                    QDStatusBarController *strongSelf = weakSelf;
+                    if (!strongSelf || ![strongSelf isPanelVisible]) return;
+                    NSWindow *keyWindow = notification.object;
+                    if (!keyWindow || keyWindow == strongSelf.panel) {
+                        return;
+                    }
+                    if (keyWindow == strongSelf.statusItem.button.window) return;
+                    if (keyWindow.level >= NSStatusWindowLevel) return;
+                    [keyWindow orderBack:nil];
+                    [strongSelf.panel orderFrontRegardless];
                 }];
 }
 
@@ -575,6 +844,14 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
         [[NSNotificationCenter defaultCenter] removeObserver:self.resignActiveObserver];
         self.resignActiveObserver = nil;
     }
+    if (self.becomeActiveObserver) {
+        [[NSNotificationCenter defaultCenter] removeObserver:self.becomeActiveObserver];
+        self.becomeActiveObserver = nil;
+    }
+    if (self.windowBecomeKeyObserver) {
+        [[NSNotificationCenter defaultCenter] removeObserver:self.windowBecomeKeyObserver];
+        self.windowBecomeKeyObserver = nil;
+    }
 }
 
 - (BOOL)eventIsInsideStatusButton:(NSEvent *)event {
@@ -586,9 +863,8 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
     return NSPointInRect(pointInButton, button.bounds);
 }
 
-- (BOOL)eventIsInsidePopover:(NSEvent *)event {
-    NSWindow *popoverWindow = self.popover.contentViewController.view.window;
-    return popoverWindow && event.window == popoverWindow;
+- (BOOL)eventIsInsidePanel:(NSEvent *)event {
+    return event.window == self.panel;
 }
 
 #pragma mark - Layout helpers
@@ -755,38 +1031,104 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
     return card;
 }
 
-- (void)rebuildPopoverContent {
-    QDPalette palette = QDCurrentPalette();
+- (CGFloat)heightForAccountsContent:(NSArray *)accounts moreAccounts:(NSInteger)moreAccounts {
+    if (accounts.count == 0) {
+        return QDEmptyContentHeight;
+    }
+    NSUInteger count = MIN(accounts.count, QDMaxAccounts);
+    CGFloat totalHeight = 0;
+    for (NSUInteger i = 0; i < count; i++) {
+        NSDictionary *account = [accounts[i] isKindOfClass:[NSDictionary class]] ? accounts[i] : @{};
+        totalHeight += [self heightForAccount:account];
+        if (i + 1 < count) totalHeight += QDAccountGap;
+    }
+    if (moreAccounts > 0) {
+        totalHeight += QDAccountGap + 16.0;
+    }
+    return totalHeight;
+}
 
-    QDFillView *root = [[QDFillView alloc] initWithFrame:NSMakeRect(0, 0, QDPanelWidth, QDPanelHeight)];
+- (void)rebuildPanelContent {
+    BOOL darkTheme = QDResolveDarkTheme(self.state);
+    QDPalette palette = QDPaletteForDark(darkTheme);
+
+    CGFloat contentWidth = QDPanelWidth - QDOuterPad * 2.0;
+    NSArray *accounts = [self arrayForKey:@"accounts"];
+    NSInteger moreAccounts = [self integerForKey:@"moreAccounts" fallback:0];
+    CGFloat intrinsicContentHeight = [self heightForAccountsContent:accounts moreAccounts:moreAccounts];
+
+    // Header + single-row footer chrome; leftover budget is the scrollable content max.
+    CGFloat headerHeight = QDOuterPad + 44.0 + QDSectionGap; // title/summary/refresh row + gap
+    CGFloat footerHeight = QDSectionGap + QDButtonHeight + QDFooterBottomPad;
+    CGFloat maxContentHeight = MAX(80.0, QDPanelMaxHeight - headerHeight - footerHeight);
+    CGFloat contentHeight = MIN(intrinsicContentHeight, maxContentHeight);
+    CGFloat panelHeight = headerHeight + contentHeight + footerHeight;
+
+    QDFillView *root = [[QDFillView alloc] initWithFrame:NSMakeRect(0, 0, QDPanelWidth, panelHeight)];
+#if QD_DEBUG_LAYOUT
+    root.fillColor = QDHex(0xC026C0);
+#else
     root.fillColor = palette.backgroundElevated;
-    root.cornerRadius = 0; // NSPopover already clips; keep square content for edge fill
+#endif
+    root.cornerRadius = 14.0;
+    root.autoresizingMask = NSViewNotSizable;
+
+#if QD_DEBUG_LAYOUT
+    QDFillView *dbgStrip = [[QDFillView alloc] initWithFrame:NSMakeRect(0, headerHeight - 18, QDPanelWidth, 18)];
+    dbgStrip.fillColor = QDHex(0xEF4444);
+    [root addSubview:dbgStrip];
+    NSTextField *dbgLabel = [self label:[NSString stringWithFormat:@"DBG %@ — if missing, old dylib still loaded", QDStatusBarBuildId]
+                               fontSize:10.0
+                                 weight:NSFontWeightBold
+                                  color:QDHex(0xFFFFFF)];
+    dbgLabel.frame = NSMakeRect(8, headerHeight - 17, QDPanelWidth - 16, 16);
+    [root addSubview:dbgLabel];
+#endif
 
     // Header
-    NSTextField *title = [self label:@"QuotaDog"
+    CGFloat headerButtonSize = 28.0;
+    CGFloat titleWidth = contentWidth - headerButtonSize - 12.0;
+#if QD_DEBUG_LAYOUT
+    QDFillView *headerBg = [[QDFillView alloc] initWithFrame:NSMakeRect(0, 0, QDPanelWidth, headerHeight - 18)];
+    headerBg.fillColor = QDHex(0x2563EB);
+    [root addSubview:headerBg];
+#endif
+
+    NSString *titleText = @"QuotaDog";
+#if QD_DEBUG_LAYOUT
+    titleText = [NSString stringWithFormat:@"QuotaDog [%@]", QDStatusBarBuildId];
+#endif
+    NSTextField *title = [self label:titleText
                             fontSize:20.0
                               weight:NSFontWeightBold
                                color:palette.textPrimary];
-    title.frame = NSMakeRect(QDOuterPad, QDOuterPad, QDPanelWidth - QDOuterPad * 2, 26);
+    title.frame = NSMakeRect(QDOuterPad, QDOuterPad, titleWidth, 26);
     [root addSubview:title];
 
     NSTextField *summary = [self label:[self stringForKey:@"summary" fallback:@"No accounts yet"]
                               fontSize:12.0
                                 weight:NSFontWeightRegular
                                  color:palette.textSecondary];
-    summary.frame = NSMakeRect(QDOuterPad, QDOuterPad + 28, QDPanelWidth - QDOuterPad * 2, 16);
+    summary.frame = NSMakeRect(QDOuterPad, QDOuterPad + 28, titleWidth, 16);
     [root addSubview:summary];
 
-    // Footer buttons
-    CGFloat footerTop = QDPanelHeight - QDOuterPad - QDButtonHeight - 8.0 - QDButtonHeight;
-    CGFloat contentBottom = footerTop - 16.0;
-    CGFloat contentTop = QDOuterPad + 28 + 16 + 16; // below summary
-    CGFloat contentHeight = MAX(80.0, contentBottom - contentTop);
-    CGFloat contentWidth = QDPanelWidth - QDOuterPad * 2.0;
+    QDPillButton *refresh = [QDPillButton iconButtonWithSystemSymbol:@"arrow.clockwise"
+                                                             palette:palette
+                                                              target:self
+                                                              action:@selector(refreshClicked:)];
+    refresh.frame = NSMakeRect(QDPanelWidth - QDOuterPad - headerButtonSize, QDOuterPad + 4.0, headerButtonSize, headerButtonSize);
+    refresh.enabled = [self boolForKey:@"refreshEnabled"];
+    refresh.toolTip = @"Refresh";
+    [root addSubview:refresh];
 
-    NSArray *accounts = [self arrayForKey:@"accounts"];
+    CGFloat contentTop = headerHeight;
+
     if (accounts.count == 0) {
         QDFlippedView *empty = [[QDFlippedView alloc] initWithFrame:NSMakeRect(QDOuterPad, contentTop, contentWidth, contentHeight)];
+#if QD_DEBUG_LAYOUT
+        empty.wantsLayer = YES;
+        empty.layer.backgroundColor = QDHex(0xEAB308).CGColor;
+#endif
         NSTextField *emptyTitle = [self label:@"No usage data yet"
                                      fontSize:16.0
                                        weight:NSFontWeightSemibold
@@ -806,22 +1148,12 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
         [empty addSubview:emptyBody];
         [root addSubview:empty];
     } else {
-        CGFloat gap = 12.0;
         NSUInteger count = MIN(accounts.count, QDMaxAccounts);
-        CGFloat totalHeight = 0;
-        for (NSUInteger i = 0; i < count; i++) {
-            NSDictionary *account = [accounts[i] isKindOfClass:[NSDictionary class]] ? accounts[i] : @{};
-            totalHeight += [self heightForAccount:account];
-            if (i + 1 < count) totalHeight += gap;
-        }
-        NSInteger moreAccounts = [self integerForKey:@"moreAccounts" fallback:0];
-        if (moreAccounts > 0) {
-            totalHeight += 12.0 + 16.0;
-        }
-        totalHeight = MAX(totalHeight, contentHeight);
-
-        QDFlippedView *document = [[QDFlippedView alloc] initWithFrame:NSMakeRect(0, 0, contentWidth, totalHeight)];
+        QDFlippedView *document = [[QDFlippedView alloc] initWithFrame:NSMakeRect(0, 0, contentWidth, intrinsicContentHeight)];
         document.wantsLayer = YES;
+#if QD_DEBUG_LAYOUT
+        document.layer.backgroundColor = QDHex(0xCA8A04).CGColor;
+#endif
 
         CGFloat cursor = 0;
         for (NSUInteger i = 0; i < count; i++) {
@@ -830,9 +1162,10 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
             NSView *card = [self buildAccountCard:account width:contentWidth palette:palette];
             card.frame = NSMakeRect(0, cursor, contentWidth, h);
             [document addSubview:card];
-            cursor += h + gap;
+            cursor += h + (i + 1 < count ? QDAccountGap : 0.0);
         }
         if (moreAccounts > 0) {
+            cursor += QDAccountGap;
             NSString *moreText = moreAccounts == 1
                 ? @"+1 more account in QuotaDog"
                 : [NSString stringWithFormat:@"+%ld more accounts in QuotaDog", (long)moreAccounts];
@@ -842,60 +1175,109 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
                                       color:palette.textTertiary];
             more.frame = NSMakeRect(8, cursor, contentWidth - 16, 16);
             [document addSubview:more];
+            cursor += 16.0;
         }
 
-        NSScrollView *scroll = [[NSScrollView alloc] initWithFrame:NSMakeRect(QDOuterPad, contentTop, contentWidth, contentHeight)];
-        scroll.drawsBackground = NO;
-        scroll.hasVerticalScroller = YES;
-        scroll.hasHorizontalScroller = NO;
-        scroll.autohidesScrollers = YES;
-        scroll.borderType = NSNoBorder;
-        scroll.documentView = document;
-        [document scrollPoint:NSMakePoint(0, 0)];
-        [root addSubview:scroll];
+        CGFloat builtHeight = MAX(cursor, 1.0);
+        document.frame = NSMakeRect(0, 0, contentWidth, builtHeight);
+        contentHeight = MIN(builtHeight, maxContentHeight);
+        panelHeight = headerHeight + contentHeight + footerHeight;
+        root.frame = NSMakeRect(0, 0, QDPanelWidth, panelHeight);
+
+        if (builtHeight > contentHeight + 0.5) {
+            NSScrollView *scroll = [[NSScrollView alloc] initWithFrame:NSMakeRect(QDOuterPad, contentTop, contentWidth, contentHeight)];
+#if QD_DEBUG_LAYOUT
+            scroll.drawsBackground = YES;
+            scroll.backgroundColor = QDHex(0xEAB308);
+#else
+            scroll.drawsBackground = NO;
+#endif
+            scroll.hasVerticalScroller = YES;
+            scroll.hasHorizontalScroller = NO;
+            scroll.autohidesScrollers = YES;
+            scroll.borderType = NSNoBorder;
+            scroll.documentView = document;
+            [document scrollPoint:NSMakePoint(0, 0)];
+            [root addSubview:scroll];
+        } else {
+            document.frame = NSMakeRect(QDOuterPad, contentTop, contentWidth, builtHeight);
+#if QD_DEBUG_LAYOUT
+            QDFillView *contentBg = [[QDFillView alloc] initWithFrame:document.frame];
+            contentBg.fillColor = QDHex(0xEAB308);
+            [root addSubview:contentBg];
+#endif
+            [root addSubview:document];
+        }
     }
 
-    // Buttons: secondary Refresh | primary Open/Hide, then ghost Quit
-    CGFloat buttonGap = 8.0;
-    CGFloat halfWidth = (contentWidth - buttonGap) / 2.0;
-    CGFloat rowY = QDPanelHeight - QDOuterPad - QDButtonHeight - 8.0 - QDButtonHeight;
-
-    QDPillButton *refresh = [QDPillButton buttonWithTitle:@"Refresh"
-                                                    style:QDButtonStyleSecondary
-                                                  palette:palette
-                                                   target:self
-                                                   action:@selector(refreshClicked:)];
-    refresh.frame = NSMakeRect(QDOuterPad, rowY, halfWidth, QDButtonHeight);
-    refresh.enabled = [self boolForKey:@"refreshEnabled"];
-    [root addSubview:refresh];
-
-    NSString *openHideTitle = [self boolForKey:@"windowVisible"] ? @"Hide app" : @"Open app";
+    // Footer: quiet text actions — don't compete with account cards.
+    CGFloat footerTop = contentTop + contentHeight + QDSectionGap;
+    NSString *openHideTitle = @"Open app";
     QDPillButton *openHide = [QDPillButton buttonWithTitle:openHideTitle
-                                                     style:QDButtonStylePrimary
+                                                     style:QDButtonStyleSecondary
                                                    palette:palette
                                                     target:self
                                                     action:@selector(openHideClicked:)];
-    openHide.frame = NSMakeRect(QDOuterPad + halfWidth + buttonGap, rowY, halfWidth, QDButtonHeight);
+    openHide.fgColor = palette.primary;
+    openHide.frame = NSMakeRect(QDOuterPad, footerTop, 72.0, QDButtonHeight);
     [root addSubview:openHide];
 
-    QDPillButton *quit = [QDPillButton buttonWithTitle:@"Quit QuotaDog"
+    QDPillButton *quit = [QDPillButton buttonWithTitle:@"Quit"
                                                  style:QDButtonStyleGhost
                                                palette:palette
                                                 target:self
                                                 action:@selector(quitClicked:)];
-    quit.frame = NSMakeRect(QDOuterPad, QDPanelHeight - QDOuterPad - QDButtonHeight, contentWidth, QDButtonHeight);
+    quit.frame = NSMakeRect(QDPanelWidth - QDOuterPad - 56.0, footerTop, 56.0, QDButtonHeight);
     [root addSubview:quit];
 
-    // Prefer dark/light content appearance so system controls stay consistent
-    root.appearance = QDIsDarkAppearance()
+#if QD_DEBUG_LAYOUT
+    CGFloat footerBlockHeight = NSMaxY(quit.frame) - (footerTop - QDSectionGap) + QDFooterBottomPad;
+    QDFillView *footerBg = [[QDFillView alloc] initWithFrame:NSMakeRect(
+        0, footerTop - QDSectionGap, QDPanelWidth, footerBlockHeight)];
+    footerBg.fillColor = QDHex(0x06B6D4);
+    [root addSubview:footerBg];
+    [root addSubview:openHide];
+    [root addSubview:quit];
+    QDLog(@"footerTop=%.1f footerBlockH=%.1f open=%@ quit=%@ contentH=%.1f",
+          footerTop, footerBlockHeight,
+          NSStringFromRect(openHide.frame), NSStringFromRect(quit.frame),
+          contentHeight);
+#endif
+
+    panelHeight = NSMaxY(quit.frame) + QDFooterBottomPad;
+    NSSize size = NSMakeSize(QDPanelWidth, panelHeight);
+    root.frame = NSMakeRect(0, 0, size.width, size.height);
+#if QD_DEBUG_LAYOUT
+    root.fillColor = QDHex(0xC026C0);
+#endif
+    root.appearance = darkTheme
         ? [NSAppearance appearanceNamed:NSAppearanceNameDarkAqua]
         : [NSAppearance appearanceNamed:NSAppearanceNameAqua];
 
-    NSViewController *controller = [[NSViewController alloc] init];
-    controller.view = root;
-    self.popover.contentSize = NSMakeSize(QDPanelWidth, QDPanelHeight);
-    self.popover.contentViewController = controller;
-    self.popover.appearance = root.appearance;
+    self.panelSize = size;
+    self.panel.contentView = root;
+    [self configurePanelAppearance:darkTheme];
+
+    if ([self isPanelVisible]) {
+        NSRect frame = self.panel.frame;
+        CGFloat top = NSMaxY(frame);
+        frame.size = size;
+        frame.origin.y = top - size.height;
+        [self.panel setFrame:frame display:YES];
+    } else {
+        [self.panel setContentSize:size];
+    }
+
+#if QD_DEBUG_LAYOUT
+    QDLog(@"rebuild build=%@ accounts=%lu contentH=%.1f size=%.0fx%.0f panelFrame=%@ contentView=%@ dark=%d",
+          QDStatusBarBuildId,
+          (unsigned long)accounts.count,
+          contentHeight,
+          size.width, size.height,
+          NSStringFromRect(self.panel.frame),
+          NSStringFromRect(root.frame),
+          darkTheme);
+#endif
 }
 
 #pragma mark - JSON helpers
@@ -936,10 +1318,16 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
 
 #pragma mark - C API
 
-void *qd_statusbar_create(QDActionCallback onRefresh, QDActionCallback onOpenHide, QDActionCallback onQuit) {
+void *qd_statusbar_create(QDActionCallback onRefresh,
+                          QDActionCallback onShow,
+                          QDActionCallback onOpenHide,
+                          QDActionCallback onQuit) {
     __block QDStatusBarController *controller = nil;
     void (^create)(void) = ^{
-        controller = [[QDStatusBarController alloc] initWithRefresh:onRefresh openHide:onOpenHide quit:onQuit];
+        controller = [[QDStatusBarController alloc] initWithRefresh:onRefresh
+                                                               show:onShow
+                                                           openHide:onOpenHide
+                                                               quit:onQuit];
     };
     if ([NSThread isMainThread]) {
         create();
@@ -962,7 +1350,7 @@ void qd_statusbar_dispose(void *handle) {
     if (!handle) return;
     QDStatusBarController *controller = (__bridge_transfer QDStatusBarController *)handle;
     dispatch_async(dispatch_get_main_queue(), ^{
-        [controller.popover performClose:nil];
+        [controller closePanel:nil];
         [[NSStatusBar systemStatusBar] removeStatusItem:controller.statusItem];
         controller.statusItem = nil;
     });

@@ -40,7 +40,8 @@ internal data class DesktopStatusBarState(
     val accounts: List<DesktopStatusBarAccount>,
     val moreAccounts: Int,
     val refreshEnabled: Boolean,
-    val windowVisible: Boolean,
+    val refreshBusy: Boolean,
+    val darkTheme: Boolean,
 )
 
 internal data class DesktopStatusBarAccount(
@@ -62,28 +63,25 @@ internal data class DesktopStatusBarUsageWindow(
 internal fun DesktopStatusBarIcon(
     state: DesktopStatusBarState,
     onRefresh: () -> Unit,
+    onShow: () -> Unit,
     onOpenWindow: () -> Unit,
-    onHideWindow: () -> Unit,
     onQuit: () -> Unit,
     onFallbackClick: (x: Int, y: Int) -> Unit,
     onAvailabilityChanged: (Boolean) -> Unit,
 ) {
     val currentState = rememberUpdatedState(state)
     val currentOnRefresh = rememberUpdatedState(onRefresh)
+    val currentOnShow = rememberUpdatedState(onShow)
     val currentOnOpenWindow = rememberUpdatedState(onOpenWindow)
-    val currentOnHideWindow = rememberUpdatedState(onHideWindow)
     val currentOnQuit = rememberUpdatedState(onQuit)
     val currentOnFallbackClick = rememberUpdatedState(onFallbackClick)
     val currentOnAvailabilityChanged = rememberUpdatedState(onAvailabilityChanged)
     val callbacks = remember {
         StatusBarCallbacks(
             refresh = { currentOnRefresh.value() },
+            show = { currentOnShow.value() },
             openHide = {
-                if (currentState.value.windowVisible) {
-                    currentOnHideWindow.value()
-                } else {
-                    currentOnOpenWindow.value()
-                }
+                currentOnOpenWindow.value()
             },
             quit = { currentOnQuit.value() },
             fallbackClick = { x, y -> currentOnFallbackClick.value(x, y) },
@@ -134,6 +132,7 @@ internal fun statusBarPanelPosition(x: Int, y: Int): WindowPosition {
 
 private data class StatusBarCallbacks(
     val refresh: () -> Unit,
+    val show: () -> Unit,
     val openHide: () -> Unit,
     val quit: () -> Unit,
     val fallbackClick: (Int, Int) -> Unit,
@@ -198,6 +197,7 @@ private class MacStatusBarIcon private constructor(
     private val native: MacStatusBarNative,
     private val handle: Pointer,
     private val refreshCallback: NativeActionCallback,
+    private val showCallback: NativeActionCallback,
     private val openHideCallback: NativeActionCallback,
     private val quitCallback: NativeActionCallback,
 ) : StatusBarHandle {
@@ -224,6 +224,9 @@ private class MacStatusBarIcon private constructor(
                 val refreshCallback = NativeActionCallback {
                     EventQueue.invokeLater { callbacks.refresh() }
                 }
+                val showCallback = NativeActionCallback {
+                    EventQueue.invokeLater { callbacks.show() }
+                }
                 val openHideCallback = NativeActionCallback {
                     EventQueue.invokeLater { callbacks.openHide() }
                 }
@@ -232,10 +235,18 @@ private class MacStatusBarIcon private constructor(
                 }
                 val handle = native.qd_statusbar_create(
                     refreshCallback,
+                    showCallback,
                     openHideCallback,
                     quitCallback,
                 ) ?: error("Native status bar helper returned null")
-                MacStatusBarIcon(native, handle, refreshCallback, openHideCallback, quitCallback).also {
+                MacStatusBarIcon(
+                    native,
+                    handle,
+                    refreshCallback,
+                    showCallback,
+                    openHideCallback,
+                    quitCallback,
+                ).also {
                     it.update(state)
                 }
             }.onFailure {
@@ -262,6 +273,7 @@ private fun loadMacStatusBarNative(): MacStatusBarNative {
 private interface MacStatusBarNative : Library {
     fun qd_statusbar_create(
         onRefresh: NativeActionCallback,
+        onShow: NativeActionCallback,
         onOpenHide: NativeActionCallback,
         onQuit: NativeActionCallback,
     ): Pointer?
@@ -283,7 +295,9 @@ private fun DesktopStatusBarState.toJson(): String {
         append(',')
         append("\"refreshEnabled\":").append(refreshEnabled)
         append(',')
-        append("\"windowVisible\":").append(windowVisible)
+        append("\"refreshBusy\":").append(refreshBusy)
+        append(',')
+        append("\"darkTheme\":").append(darkTheme)
         append(',')
         append("\"moreAccounts\":").append(moreAccounts)
         append(',')
