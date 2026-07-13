@@ -392,7 +392,7 @@ private fun Int.clampTo(min: Int, max: Int): Int {
     return coerceIn(min, max)
 }
 
-private fun isMacOs(): Boolean {
+internal fun isMacOs(): Boolean {
     return System.getProperty("os.name", "").contains("Mac", ignoreCase = true)
 }
 

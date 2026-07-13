@@ -119,6 +119,19 @@ fun main() = application {
             title = "QuotaDog",
             state = windowState,
         ) {
+            if (isMacOs()) {
+                DisposableEffect(window) {
+                    window.rootPane.putClientProperty("apple.awt.fullWindowContent", true)
+                    window.rootPane.putClientProperty("apple.awt.transparentTitleBar", true)
+                    window.rootPane.putClientProperty("apple.awt.windowTitleVisible", false)
+
+                    onDispose {
+                        window.rootPane.putClientProperty("apple.awt.windowTitleVisible", null)
+                        window.rootPane.putClientProperty("apple.awt.transparentTitleBar", null)
+                        window.rootPane.putClientProperty("apple.awt.fullWindowContent", null)
+                    }
+                }
+            }
             BringMainWindowToFront(
                 window = window,
                 focusToken = mainWindowFocusToken,
