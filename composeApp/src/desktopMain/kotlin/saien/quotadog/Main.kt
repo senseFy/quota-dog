@@ -185,6 +185,7 @@ private fun QuotaDogTray(
         ThemeMode.Dark -> true
     }
     var panelVisible by remember { mutableStateOf(false) }
+    var selectedStatusBarProvider by remember { mutableStateOf<ProviderId?>(null) }
     val panelState = rememberWindowState(
         position = WindowPosition.Aligned(Alignment.TopEnd),
         width = TRAY_PANEL_WIDTH.dp,
@@ -193,12 +194,30 @@ private fun QuotaDogTray(
     val accounts = state.accounts.values
         .filter { it.shouldShowInTray() }
         .sortedWith(compareBy<AccountUiState> { it.providerId.ordinal }.thenBy { it.traySortLabel() })
+    val availableProviders = accounts.map { it.providerId }.distinct()
+    val activeStatusBarProvider =
+        selectedStatusBarProvider?.takeIf { it in availableProviders }
+    val statusBarAccounts = activeStatusBarProvider?.let { selected ->
+        accounts.filter { it.providerId == selected }
+    } ?: accounts
     val refreshableAccounts = accounts.filter { it.canRefreshFromTray() }
-    val statusBarState = accounts.toDesktopStatusBarState(
+    val statusBarState = statusBarAccounts.toDesktopStatusBarState(
+        allAccounts = accounts,
+        availableProviders = availableProviders,
+        selectedProvider = activeStatusBarProvider,
         refreshableAccounts = refreshableAccounts,
         emailPrivacyMode = emailPrivacyMode,
         darkTheme = darkTheme,
     )
+
+    LaunchedEffect(availableProviders) {
+        if (selectedStatusBarProvider != null &&
+            selectedStatusBarProvider !in availableProviders
+        ) {
+            selectedStatusBarProvider = null
+        }
+    }
+
     val maybeRefreshOnOpen = {
         if (shouldAutoRefreshOnTrayOpen(refreshableAccounts)) {
             store.startRefreshAll()
@@ -211,6 +230,11 @@ private fun QuotaDogTray(
         onShow = maybeRefreshOnOpen,
         onOpenWindow = onOpenWindow,
         onQuit = onQuit,
+        onSelectProvider = { providerName ->
+            selectedStatusBarProvider = ProviderId.entries.firstOrNull {
+                it.name == providerName && it in availableProviders
+            }
+        },
         onFallbackClick = { x, y ->
             panelState.position = statusBarPanelPosition(x, y)
             val opening = !panelVisible
@@ -631,6 +655,9 @@ private fun AccountUiState.trayAccountTitle(emailPrivacyMode: EmailPrivacyMode):
 }
 
 private fun List<AccountUiState>.toDesktopStatusBarState(
+    allAccounts: List<AccountUiState>,
+    availableProviders: List<ProviderId>,
+    selectedProvider: ProviderId?,
     refreshableAccounts: List<AccountUiState>,
     emailPrivacyMode: EmailPrivacyMode,
     darkTheme: Boolean,
@@ -638,8 +665,18 @@ private fun List<AccountUiState>.toDesktopStatusBarState(
     val visibleAccounts = take(STATUS_BAR_ACCOUNT_LIMIT)
     val refreshBusy = refreshableAccounts.any { it.busy }
     return DesktopStatusBarState(
-        tooltip = traySummaryLabel(),
+        tooltip = allAccounts.traySummaryLabel(),
         summary = trayPanelSummaryLabel(),
+        providerFilters =
+            listOf(DesktopStatusBarProviderFilter(id = "", label = "All (${allAccounts.size})")) +
+                availableProviders.map { provider ->
+                    val count = allAccounts.count { it.providerId == provider }
+                    DesktopStatusBarProviderFilter(
+                        id = provider.name,
+                        label = "${provider.displayName} ($count)",
+                    )
+                },
+        selectedProvider = selectedProvider?.name.orEmpty(),
         accounts = visibleAccounts.map { account ->
             DesktopStatusBarAccount(
                 title = account.trayAccountTitle(emailPrivacyMode),

@@ -37,11 +37,18 @@ private const val TRAY_PANEL_MARGIN = 8
 internal data class DesktopStatusBarState(
     val tooltip: String,
     val summary: String,
+    val providerFilters: List<DesktopStatusBarProviderFilter>,
+    val selectedProvider: String,
     val accounts: List<DesktopStatusBarAccount>,
     val moreAccounts: Int,
     val refreshEnabled: Boolean,
     val refreshBusy: Boolean,
     val darkTheme: Boolean,
+)
+
+internal data class DesktopStatusBarProviderFilter(
+    val id: String,
+    val label: String,
 )
 
 internal data class DesktopStatusBarAccount(
@@ -66,6 +73,7 @@ internal fun DesktopStatusBarIcon(
     onShow: () -> Unit,
     onOpenWindow: () -> Unit,
     onQuit: () -> Unit,
+    onSelectProvider: (String) -> Unit,
     onFallbackClick: (x: Int, y: Int) -> Unit,
     onAvailabilityChanged: (Boolean) -> Unit,
 ) {
@@ -74,6 +82,7 @@ internal fun DesktopStatusBarIcon(
     val currentOnShow = rememberUpdatedState(onShow)
     val currentOnOpenWindow = rememberUpdatedState(onOpenWindow)
     val currentOnQuit = rememberUpdatedState(onQuit)
+    val currentOnSelectProvider = rememberUpdatedState(onSelectProvider)
     val currentOnFallbackClick = rememberUpdatedState(onFallbackClick)
     val currentOnAvailabilityChanged = rememberUpdatedState(onAvailabilityChanged)
     val callbacks = remember {
@@ -84,6 +93,7 @@ internal fun DesktopStatusBarIcon(
                 currentOnOpenWindow.value()
             },
             quit = { currentOnQuit.value() },
+            selectProvider = { currentOnSelectProvider.value(it) },
             fallbackClick = { x, y -> currentOnFallbackClick.value(x, y) },
         )
     }
@@ -135,6 +145,7 @@ private data class StatusBarCallbacks(
     val show: () -> Unit,
     val openHide: () -> Unit,
     val quit: () -> Unit,
+    val selectProvider: (String) -> Unit,
     val fallbackClick: (Int, Int) -> Unit,
 )
 
@@ -200,6 +211,7 @@ private class MacStatusBarIcon private constructor(
     private val showCallback: NativeActionCallback,
     private val openHideCallback: NativeActionCallback,
     private val quitCallback: NativeActionCallback,
+    private val selectProviderCallback: NativeProviderCallback,
 ) : StatusBarHandle {
     override fun update(state: DesktopStatusBarState) {
         runCatching {
@@ -233,11 +245,15 @@ private class MacStatusBarIcon private constructor(
                 val quitCallback = NativeActionCallback {
                     EventQueue.invokeLater { callbacks.quit() }
                 }
+                val selectProviderCallback = NativeProviderCallback { provider ->
+                    EventQueue.invokeLater { callbacks.selectProvider(provider.orEmpty()) }
+                }
                 val handle = native.qd_statusbar_create(
                     refreshCallback,
                     showCallback,
                     openHideCallback,
                     quitCallback,
+                    selectProviderCallback,
                 ) ?: error("Native status bar helper returned null")
                 MacStatusBarIcon(
                     native,
@@ -246,6 +262,7 @@ private class MacStatusBarIcon private constructor(
                     showCallback,
                     openHideCallback,
                     quitCallback,
+                    selectProviderCallback,
                 ).also {
                     it.update(state)
                 }
@@ -276,6 +293,7 @@ private interface MacStatusBarNative : Library {
         onShow: NativeActionCallback,
         onOpenHide: NativeActionCallback,
         onQuit: NativeActionCallback,
+        onSelectProvider: NativeProviderCallback,
     ): Pointer?
 
     fun qd_statusbar_update(handle: Pointer, json: String)
@@ -286,12 +304,18 @@ private fun interface NativeActionCallback : Callback {
     fun invoke()
 }
 
+private fun interface NativeProviderCallback : Callback {
+    fun invoke(provider: String?)
+}
+
 private fun DesktopStatusBarState.toJson(): String {
     return buildString {
         append('{')
         appendJsonField("tooltip", tooltip)
         append(',')
         appendJsonField("summary", summary)
+        append(',')
+        appendJsonField("selectedProvider", selectedProvider)
         append(',')
         append("\"refreshEnabled\":").append(refreshEnabled)
         append(',')
@@ -300,6 +324,17 @@ private fun DesktopStatusBarState.toJson(): String {
         append("\"darkTheme\":").append(darkTheme)
         append(',')
         append("\"moreAccounts\":").append(moreAccounts)
+        append(',')
+        append("\"providerFilters\":[")
+        providerFilters.forEachIndexed { index, filter ->
+            if (index > 0) append(',')
+            append('{')
+            appendJsonField("id", filter.id)
+            append(',')
+            appendJsonField("label", filter.label)
+            append('}')
+        }
+        append(']')
         append(',')
         append("\"accounts\":[")
         accounts.forEachIndexed { index, account ->

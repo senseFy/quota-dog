@@ -89,6 +89,7 @@ import saien.quotadog.app.components.QdPlusIcon
 import saien.quotadog.app.components.QdProgressBar
 import saien.quotadog.app.components.QdProviderAvatar
 import saien.quotadog.app.components.QdRefreshIcon
+import saien.quotadog.app.components.QdSegmentedControl
 import saien.quotadog.app.components.QdSettingsGearIcon
 import saien.quotadog.app.components.QdSettingsSheet
 import saien.quotadog.app.components.QdSnackbarHost
@@ -182,6 +183,7 @@ private fun QuotaDogScreen(
     var showProviderPicker by remember { mutableStateOf(false) }
     var showGrokMethodPicker by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
+    var selectedProvider by remember { mutableStateOf<ProviderId?>(null) }
     var pendingDelete by remember { mutableStateOf<AccountKey?>(null) }
     var showResetCloudSyncConfirm by remember { mutableStateOf(false) }
     var syncPassphrase by remember { mutableStateOf("") }
@@ -193,9 +195,16 @@ private fun QuotaDogScreen(
     val accounts = state.accounts.values
         .filter { it.shouldShowAccount() }
         .sortedWith(compareBy<AccountUiState> { it.providerId.ordinal }.thenBy { it.accountSortLabel() })
+    val availableProviders = accounts.map { it.providerId }.distinct()
     val refreshableAccounts = accounts.filter { it.canRefreshUsage() }
     val refreshAllBusy = refreshableAccounts.any { it.busy }
     val refreshAllEnabled = refreshableAccounts.any { !it.busy }
+
+    LaunchedEffect(availableProviders) {
+        if (selectedProvider != null && selectedProvider !in availableProviders) {
+            selectedProvider = null
+        }
+    }
 
     // Edge-to-edge: outer Box paints the theme background under status bar and home indicator,
     // inner content respects safe drawing insets.
@@ -216,6 +225,7 @@ private fun QuotaDogScreen(
             .background(colors.background),
     ) {
         val isDesktop = maxWidth >= 900.dp
+        val activeProvider = selectedProvider?.takeIf { isDesktop && it in availableProviders }
         val contentMaxWidth = if (isDesktop) 1120.dp else maxWidth
         val horizontalPadding = if (isDesktop) spacing.xxxl else spacing.xl
         val topPadding = safeTop + if (isDesktop) spacing.huge else spacing.xl
@@ -244,13 +254,18 @@ private fun QuotaDogScreen(
                 AccountsEmptyState(isDesktop = isDesktop)
             } else {
                 if (isDesktop) {
-                    DesktopSummaryRow(
+                    DesktopProviderSwitcher(
                         accounts = accounts,
-                        refreshableAccounts = refreshableAccounts,
+                        providers = availableProviders,
+                        selected = activeProvider,
+                        onSelect = { selectedProvider = it },
                     )
                 }
+                val visibleAccounts = activeProvider?.let { selected ->
+                    accounts.filter { it.providerId == selected }
+                } ?: accounts
                 AccountCards(
-                    accounts = accounts,
+                    accounts = visibleAccounts,
                     isDesktop = isDesktop,
                     usageDisplayMode = usageDisplayMode,
                     showProjectedUsage = showProjectedUsage,
@@ -594,66 +609,24 @@ private fun AccountsEmptyState(isDesktop: Boolean) {
 }
 
 @Composable
-private fun DesktopSummaryRow(
+private fun DesktopProviderSwitcher(
     accounts: List<AccountUiState>,
-    refreshableAccounts: List<AccountUiState>,
+    providers: List<ProviderId>,
+    selected: ProviderId?,
+    onSelect: (ProviderId?) -> Unit,
 ) {
-    val spacing = QdTheme.spacing
-    val needsAction = accounts.count { account ->
-        account.loginStart != null ||
-            account.deviceLogin != null ||
-            account.authState == AuthState.TokenExpired ||
-            account.authState == AuthState.Unauthorized ||
-            account.authState == AuthState.RequiresRelogin ||
-            account.authState == AuthState.Error
-    }
-    val syncing = accounts.count { it.busy }
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(spacing.lg),
-    ) {
-        DesktopSummaryMetric(
-            label = "Accounts",
-            value = accounts.size.toString(),
-            description = "Visible account cards",
-            modifier = Modifier.weight(1f),
-        )
-        DesktopSummaryMetric(
-            label = "Refreshable",
-            value = refreshableAccounts.size.toString(),
-            description = "Ready for usage updates",
-            modifier = Modifier.weight(1f),
-        )
-        DesktopSummaryMetric(
-            label = "Needs action",
-            value = needsAction.toString(),
-            description = if (syncing == 0) "Sign-in or sync issues" else "$syncing currently syncing",
-            modifier = Modifier.weight(1f),
-        )
-    }
-}
-
-@Composable
-private fun DesktopSummaryMetric(
-    label: String,
-    value: String,
-    description: String,
-    modifier: Modifier = Modifier,
-) {
-    val colors = QdTheme.colors
-    val typo = QdTheme.typography
-    val spacing = QdTheme.spacing
-    QdCard(
-        modifier = modifier,
-        padding = PaddingValues(horizontal = spacing.xl, vertical = spacing.lg),
-        elevated = false,
-    ) {
-        Column(verticalArrangement = Arrangement.spacedBy(spacing.xs)) {
-            Text(label, style = typo.caption, color = colors.textTertiary)
-            Text(value, style = typo.displayLarge, color = colors.textPrimary)
-            Text(description, style = typo.caption, color = colors.textSecondary)
-        }
-    }
+    val options: List<Pair<String, ProviderId?>> =
+        listOf("All providers (${accounts.size})" to null) +
+            providers.map { provider ->
+                val accountCount = accounts.count { it.providerId == provider }
+                "${provider.displayName} ($accountCount)" to provider
+            }
+    QdSegmentedControl(
+        options = options,
+        selected = selected,
+        onSelect = onSelect,
+        fillWidth = false,
+    )
 }
 
 @Composable

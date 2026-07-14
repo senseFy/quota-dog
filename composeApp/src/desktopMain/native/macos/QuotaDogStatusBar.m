@@ -1,6 +1,7 @@
 #import <Cocoa/Cocoa.h>
 
 typedef void (*QDActionCallback)(void);
+typedef void (*QDProviderCallback)(const char *provider);
 
 // Set to 1 to paint layout containers in loud colors and log sizes.
 #define QD_DEBUG_LAYOUT 0
@@ -347,6 +348,7 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
 @property(nonatomic, strong) NSColor *borderColor;
 @property(nonatomic, assign) BOOL hovering;
 @property(nonatomic, assign) BOOL pressed;
+@property(nonatomic, copy) NSString *providerIdentifier;
 + (instancetype)buttonWithTitle:(NSString *)title
                           style:(QDButtonStyle)style
                         palette:(QDPalette)palette
@@ -576,6 +578,10 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
 @property(nonatomic, assign) QDActionCallback onShow;
 @property(nonatomic, assign) QDActionCallback onOpenHide;
 @property(nonatomic, assign) QDActionCallback onQuit;
+@property(nonatomic, assign) QDProviderCallback onSelectProvider;
+@property(nonatomic, strong) QDFillView *providerIndicator;
+@property(nonatomic, assign) NSUInteger providerSelectionGeneration;
+@property(nonatomic, copy) NSString *pendingProviderSelection;
 @end
 
 @implementation QDStatusBarController
@@ -583,7 +589,8 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
 - (instancetype)initWithRefresh:(QDActionCallback)refresh
                            show:(QDActionCallback)show
                        openHide:(QDActionCallback)openHide
-                           quit:(QDActionCallback)quit {
+                           quit:(QDActionCallback)quit
+                 selectProvider:(QDProviderCallback)selectProvider {
     self = [super init];
     if (!self) return nil;
 
@@ -591,6 +598,7 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
     _onShow = show;
     _onOpenHide = openHide;
     _onQuit = quit;
+    _onSelectProvider = selectProvider;
     _state = @{};
     _panelSize = NSMakeSize(QDPanelWidth, 200.0);
 
@@ -645,7 +653,31 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
             decoded = (NSDictionary *)value;
         }
     }
-    self.state = decoded ?: @{};
+    if (self.pendingProviderSelection && decoded) {
+        NSString *decodedSelection = [self stringIn:decoded key:@"selectedProvider" fallback:@""];
+        NSArray *decodedFilters = [decoded[@"providerFilters"] isKindOfClass:[NSArray class]]
+            ? decoded[@"providerFilters"]
+            : @[];
+        BOOL pendingStillAvailable = self.pendingProviderSelection.length == 0;
+        for (id value in decodedFilters) {
+            NSDictionary *filter = [value isKindOfClass:[NSDictionary class]] ? value : @{};
+            NSString *identifier = [self stringIn:filter key:@"id" fallback:@""];
+            if ([identifier isEqualToString:self.pendingProviderSelection]) {
+                pendingStillAvailable = YES;
+                break;
+            }
+        }
+        if (!pendingStillAvailable || [decodedSelection isEqualToString:self.pendingProviderSelection]) {
+            self.pendingProviderSelection = nil;
+            self.state = decoded;
+        } else {
+            NSMutableDictionary *updatedState = [decoded mutableCopy];
+            updatedState[@"selectedProvider"] = self.pendingProviderSelection;
+            self.state = updatedState;
+        }
+    } else {
+        self.state = decoded ?: @{};
+    }
     NSString *tooltip = [self stringForKey:@"tooltip" fallback:@"QuotaDog"];
     self.statusItem.button.toolTip = tooltip;
     if ([self isPanelVisible]) {
@@ -733,6 +765,36 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
 
 - (void)refreshClicked:(id)sender {
     if (self.onRefresh) self.onRefresh();
+}
+
+- (void)providerFilterClicked:(QDPillButton *)sender {
+    NSString *provider = sender.providerIdentifier ?: @"";
+    NSString *selected = [self stringForKey:@"selectedProvider" fallback:@""];
+    if ([provider isEqualToString:selected]) return;
+
+    NSMutableDictionary *updatedState = [self.state mutableCopy];
+    updatedState[@"selectedProvider"] = provider;
+    self.state = updatedState;
+    self.pendingProviderSelection = provider;
+
+    QDPalette palette = QDPaletteForDark(QDResolveDarkTheme(self.state));
+    for (NSView *view in sender.superview.subviews) {
+        if (![view isKindOfClass:[QDPillButton class]]) continue;
+        QDPillButton *button = (QDPillButton *)view;
+        BOOL active = [button.providerIdentifier isEqualToString:provider];
+        button.fgColor = active ? palette.textPrimary : palette.textSecondary;
+        [button setNeedsDisplay:YES];
+    }
+
+    self.providerSelectionGeneration += 1;
+    NSUInteger generation = self.providerSelectionGeneration;
+    [NSAnimationContext runAnimationGroup:^(NSAnimationContext *context) {
+        context.duration = 0.18;
+        self.providerIndicator.animator.frame = sender.frame;
+    } completionHandler:^{
+        if (generation != self.providerSelectionGeneration || !self.onSelectProvider) return;
+        self.onSelectProvider(provider.UTF8String);
+    }];
 }
 
 - (void)openHideClicked:(id)sender {
@@ -918,6 +980,78 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
     return slot;
 }
 
+- (NSView *)buildProviderSwitcher:(NSArray *)filters
+                         selected:(NSString *)selected
+                            width:(CGFloat)width
+                          palette:(QDPalette)palette {
+    CGFloat height = 36.0;
+    CGFloat inset = 4.0;
+    CGFloat segmentHeight = height - inset * 2.0;
+    QDFillView *track = [[QDFillView alloc] initWithFrame:NSMakeRect(0, 0, width, height)];
+    track.fillColor = palette.surfaceMuted;
+    track.cornerRadius = height / 2.0;
+
+    NSFont *font = [NSFont systemFontOfSize:11.0 weight:NSFontWeightMedium];
+    CGFloat availableWidth = width - inset * 2.0;
+    NSMutableArray<NSNumber *> *preferredWidths = [NSMutableArray arrayWithCapacity:filters.count];
+    CGFloat preferredTotal = 0;
+    for (id value in filters) {
+        NSDictionary *filter = [value isKindOfClass:[NSDictionary class]] ? value : @{};
+        NSString *label = [self stringIn:filter key:@"label" fallback:@"All"];
+        CGFloat textWidth = ceil([label sizeWithAttributes:@{NSFontAttributeName: font}].width);
+        CGFloat segmentWidth = textWidth + 20.0;
+        [preferredWidths addObject:@(segmentWidth)];
+        preferredTotal += segmentWidth;
+    }
+    CGFloat widthScale = preferredTotal > availableWidth ? availableWidth / preferredTotal : 1.0;
+
+    NSMutableArray<NSValue *> *frames = [NSMutableArray arrayWithCapacity:filters.count];
+    CGFloat x = inset;
+    NSUInteger selectedIndex = NSNotFound;
+    for (NSUInteger index = 0; index < filters.count; index++) {
+        NSDictionary *filter = [filters[index] isKindOfClass:[NSDictionary class]] ? filters[index] : @{};
+        NSString *identifier = [self stringIn:filter key:@"id" fallback:@""];
+        if ([identifier isEqualToString:selected]) selectedIndex = index;
+        CGFloat segmentWidth = index + 1 == filters.count
+            ? NSMaxX(track.bounds) - inset - x
+            : preferredWidths[index].doubleValue * widthScale;
+        NSRect frame = NSMakeRect(x, inset, segmentWidth, segmentHeight);
+        [frames addObject:[NSValue valueWithRect:frame]];
+        x += segmentWidth;
+    }
+    if (selectedIndex == NSNotFound) selectedIndex = 0;
+
+    NSRect selectedFrame = filters.count > 0 ? frames[selectedIndex].rectValue : NSZeroRect;
+    QDFillView *indicator = [[QDFillView alloc] initWithFrame:selectedFrame];
+    indicator.fillColor = palette.surface;
+    indicator.cornerRadius = segmentHeight / 2.0;
+    [track addSubview:indicator];
+    self.providerIndicator = indicator;
+
+    for (NSUInteger index = 0; index < filters.count; index++) {
+        NSDictionary *filter = [filters[index] isKindOfClass:[NSDictionary class]] ? filters[index] : @{};
+        NSString *identifier = [self stringIn:filter key:@"id" fallback:@""];
+        NSString *label = [self stringIn:filter key:@"label" fallback:@"All"];
+        BOOL active = index == selectedIndex;
+        QDPillButton *button = [QDPillButton buttonWithTitle:label
+                                                       style:QDButtonStyleSecondary
+                                                     palette:palette
+                                                      target:self
+                                                      action:@selector(providerFilterClicked:)];
+        button.providerIdentifier = identifier;
+        button.titleFont = font;
+        button.restBg = NSColor.clearColor;
+        button.hoverBg = palette.surfaceHover;
+        button.pressedBg = palette.surfaceMuted;
+        button.fgColor = active ? palette.textPrimary : palette.textSecondary;
+        button.frame = frames[index].rectValue;
+        button.toolTip = label;
+        [track addSubview:button];
+    }
+
+    return track;
+}
+
 - (NSView *)buildUsageWindowRow:(NSDictionary *)window
                           width:(CGFloat)width
                         palette:(QDPalette)palette {
@@ -1054,11 +1188,16 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
 
     CGFloat contentWidth = QDPanelWidth - QDOuterPad * 2.0;
     NSArray *accounts = [self arrayForKey:@"accounts"];
+    NSArray *providerFilters = [self arrayForKey:@"providerFilters"];
+    BOOL showsProviderSwitcher = providerFilters.count > 1;
     NSInteger moreAccounts = [self integerForKey:@"moreAccounts" fallback:0];
     CGFloat intrinsicContentHeight = [self heightForAccountsContent:accounts moreAccounts:moreAccounts];
 
     // Header + single-row footer chrome; leftover budget is the scrollable content max.
-    CGFloat headerHeight = QDOuterPad + 44.0 + QDSectionGap; // title/summary/refresh row + gap
+    CGFloat headerHeight = QDOuterPad + 44.0 + QDSectionGap;
+    if (showsProviderSwitcher) {
+        headerHeight += 36.0 + QDSectionGap;
+    }
     CGFloat footerHeight = QDSectionGap + QDButtonHeight + QDFooterBottomPad;
     CGFloat maxContentHeight = MAX(80.0, QDPanelMaxHeight - headerHeight - footerHeight);
     CGFloat contentHeight = MIN(intrinsicContentHeight, maxContentHeight);
@@ -1120,6 +1259,21 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
     refresh.enabled = [self boolForKey:@"refreshEnabled"];
     refresh.toolTip = @"Refresh";
     [root addSubview:refresh];
+
+    if (showsProviderSwitcher) {
+        NSView *switcher = [self buildProviderSwitcher:providerFilters
+                                              selected:[self stringForKey:@"selectedProvider" fallback:@""]
+                                                 width:contentWidth
+                                               palette:palette];
+        switcher.frame = NSMakeRect(
+            QDOuterPad,
+            QDOuterPad + 44.0 + QDSectionGap,
+            contentWidth,
+            36.0);
+        [root addSubview:switcher];
+    } else {
+        self.providerIndicator = nil;
+    }
 
     CGFloat contentTop = headerHeight;
 
@@ -1321,13 +1475,15 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
 void *qd_statusbar_create(QDActionCallback onRefresh,
                           QDActionCallback onShow,
                           QDActionCallback onOpenHide,
-                          QDActionCallback onQuit) {
+                          QDActionCallback onQuit,
+                          QDProviderCallback onSelectProvider) {
     __block QDStatusBarController *controller = nil;
     void (^create)(void) = ^{
         controller = [[QDStatusBarController alloc] initWithRefresh:onRefresh
                                                                show:onShow
                                                            openHide:onOpenHide
-                                                               quit:onQuit];
+                                                               quit:onQuit
+                                                     selectProvider:onSelectProvider];
     };
     if ([NSThread isMainThread]) {
         create();
@@ -1349,9 +1505,21 @@ void qd_statusbar_update(void *handle, const char *json) {
 void qd_statusbar_dispose(void *handle) {
     if (!handle) return;
     QDStatusBarController *controller = (__bridge_transfer QDStatusBarController *)handle;
-    dispatch_async(dispatch_get_main_queue(), ^{
+    void (^dispose)(void) = ^{
+        controller.providerSelectionGeneration += 1;
+        controller.onRefresh = NULL;
+        controller.onShow = NULL;
+        controller.onOpenHide = NULL;
+        controller.onQuit = NULL;
+        controller.onSelectProvider = NULL;
+        controller.pendingProviderSelection = nil;
         [controller closePanel:nil];
         [[NSStatusBar systemStatusBar] removeStatusItem:controller.statusItem];
         controller.statusItem = nil;
-    });
+    };
+    if ([NSThread isMainThread]) {
+        dispose();
+    } else {
+        dispatch_sync(dispatch_get_main_queue(), dispose);
+    }
 }
