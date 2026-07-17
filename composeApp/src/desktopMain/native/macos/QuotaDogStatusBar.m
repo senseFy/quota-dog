@@ -987,9 +987,6 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
     CGFloat height = 36.0;
     CGFloat inset = 4.0;
     CGFloat segmentHeight = height - inset * 2.0;
-    QDFillView *track = [[QDFillView alloc] initWithFrame:NSMakeRect(0, 0, width, height)];
-    track.fillColor = palette.surfaceMuted;
-    track.cornerRadius = height / 2.0;
 
     NSFont *font = [NSFont systemFontOfSize:11.0 weight:NSFontWeightMedium];
     CGFloat availableWidth = width - inset * 2.0;
@@ -1012,14 +1009,17 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
         NSDictionary *filter = [filters[index] isKindOfClass:[NSDictionary class]] ? filters[index] : @{};
         NSString *identifier = [self stringIn:filter key:@"id" fallback:@""];
         if ([identifier isEqualToString:selected]) selectedIndex = index;
-        CGFloat segmentWidth = index + 1 == filters.count
-            ? NSMaxX(track.bounds) - inset - x
-            : preferredWidths[index].doubleValue * widthScale;
+        CGFloat segmentWidth = preferredWidths[index].doubleValue * widthScale;
         NSRect frame = NSMakeRect(x, inset, segmentWidth, segmentHeight);
         [frames addObject:[NSValue valueWithRect:frame]];
         x += segmentWidth;
     }
     if (selectedIndex == NSNotFound) selectedIndex = 0;
+
+    // Hug content like QdSegmentedControl(fillWidth = false); `width` only caps overflow.
+    QDFillView *track = [[QDFillView alloc] initWithFrame:NSMakeRect(0, 0, x + inset, height)];
+    track.fillColor = palette.surfaceMuted;
+    track.cornerRadius = height / 2.0;
 
     NSRect selectedFrame = filters.count > 0 ? frames[selectedIndex].rectValue : NSZeroRect;
     QDFillView *indicator = [[QDFillView alloc] initWithFrame:selectedFrame];
@@ -1041,8 +1041,10 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
         button.providerIdentifier = identifier;
         button.titleFont = font;
         button.restBg = NSColor.clearColor;
-        button.hoverBg = palette.surfaceHover;
-        button.pressedBg = palette.surfaceMuted;
+        button.hoverBg = NSColor.clearColor;
+        // Must stay translucent: buttons draw on top of the selection indicator,
+        // so an opaque fill would hide the selected pill while pressed.
+        button.pressedBg = [palette.textPrimary colorWithAlphaComponent:0.09];
         button.fgColor = active ? palette.textPrimary : palette.textSecondary;
         button.frame = frames[index].rectValue;
         button.toolTip = label;
@@ -1265,11 +1267,7 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
                                               selected:[self stringForKey:@"selectedProvider" fallback:@""]
                                                  width:contentWidth
                                                palette:palette];
-        switcher.frame = NSMakeRect(
-            QDOuterPad,
-            QDOuterPad + 44.0 + QDSectionGap,
-            contentWidth,
-            36.0);
+        [switcher setFrameOrigin:NSMakePoint(QDOuterPad, QDOuterPad + 44.0 + QDSectionGap)];
         [root addSubview:switcher];
     } else {
         self.providerIndicator = nil;
