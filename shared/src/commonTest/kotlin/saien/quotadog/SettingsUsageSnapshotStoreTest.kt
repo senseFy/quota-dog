@@ -52,4 +52,29 @@ class SettingsUsageSnapshotStoreTest {
         assertEquals(snapshot, exported.snapshot?.value)
         assertEquals(456, exported.snapshot?.updatedAtEpochMillis)
     }
+
+    @Test
+    fun savesSnapshotForLongProviderNames() {
+        val store = SettingsUsageSnapshotStore(MapSettings())
+        val accountKey = AccountKey(ProviderId.ANTIGRAVITY, "user@example.com")
+        val snapshot = ProviderUsageSnapshot(
+            providerId = ProviderId.ANTIGRAVITY,
+            authState = AuthState.LoggedIn,
+            windows = listOf(
+                UsageWindow(
+                    id = "antigravity-gemini-session",
+                    label = "Gemini · 5-hour",
+                    usedRatio = 0.0,
+                    resetsAt = Instant.fromEpochSeconds(1_700_000_000),
+                ),
+            ),
+            collectedAt = Instant.fromEpochSeconds(1_699_999_900),
+            accountEmail = "user@example.com",
+        )
+
+        store.save(accountKey, snapshot)
+        assertEquals(snapshot, store.load(accountKey))
+        store.delete(accountKey)
+        assertNull(store.load(accountKey))
+    }
 }

@@ -168,6 +168,7 @@ actual class PlatformOAuthCallbackServer actual constructor() : OAuthCallbackSer
             ProviderId.CLAUDE_CODE -> CallbackConfig(54545, "/callback")
             ProviderId.GROK -> throw IllegalArgumentException("Grok does not use browser OAuth callbacks.")
             ProviderId.CURSOR -> throw IllegalArgumentException("Cursor does not use browser OAuth callbacks.")
+            ProviderId.ANTIGRAVITY -> throw IllegalArgumentException("Antigravity does not use browser OAuth callbacks.")
         }
         waitForCallback(config.port, config.path, timeoutMillis)
     }

@@ -47,6 +47,7 @@ enum class ProviderId(val displayName: String) {
     CLAUDE_CODE("Claude Code"),
     GROK("Grok"),
     CURSOR("Cursor"),
+    ANTIGRAVITY("Antigravity"),
 }
 
 enum class AuthState {
@@ -206,6 +207,10 @@ private object ProviderSpecs {
             AuthState.NotConfigured,
             "Cursor imports credentials from the local Cursor app instead of browser OAuth."
         )
+        ProviderId.ANTIGRAVITY -> throw ProviderException(
+            AuthState.NotConfigured,
+            "Antigravity imports credentials from the Antigravity CLI keyring instead of browser OAuth."
+        )
     }
 }
 
@@ -251,7 +256,7 @@ class QuotaDogClient(
                     parameters.append("codex_cli_simplified_flow", "true")
                 }
                 ProviderId.CLAUDE_CODE -> Unit
-                ProviderId.GROK, ProviderId.CURSOR -> Unit
+                ProviderId.GROK, ProviderId.CURSOR, ProviderId.ANTIGRAVITY -> Unit
             }
         }.buildString()
         if (openBrowser) browserLauncher.open(url)
@@ -307,6 +312,32 @@ class QuotaDogClient(
         return tokenStore.save(ProviderId.CURSOR, token)
     }
 
+    suspend fun importAntigravityAccount(): AccountKey {
+        var token = loadAntigravityCredentialsFromCli()
+        if (token.email.isNullOrBlank()) {
+            // Prefer a still-valid access token; otherwise refresh once for identity lookup.
+            val accessForIdentity = if (!token.isExpired()) {
+                token.accessToken
+            } else if (token.refreshToken.isNotBlank()) {
+                val refreshed = AntigravityUsageFetcher.refreshAccessToken(httpClient, token.refreshToken)
+                    .withIdentityFrom(token)
+                token = refreshed
+                refreshed.accessToken
+            } else {
+                null
+            }
+            if (accessForIdentity != null) {
+                val email = runCatching {
+                    AntigravityUsageFetcher.fetchUserEmail(httpClient, accessForIdentity)
+                }.getOrNull()
+                if (!email.isNullOrBlank()) {
+                    token = token.copy(email = email)
+                }
+            }
+        }
+        return tokenStore.save(ProviderId.ANTIGRAVITY, token)
+    }
+
     suspend fun refreshUsage(accountKey: AccountKey): ProviderUsageSnapshot {
         val token = ensureFreshToken(accountKey)
         return when (accountKey.providerId) {
@@ -314,6 +345,7 @@ class QuotaDogClient(
             ProviderId.CLAUDE_CODE -> fetchClaudeUsage(token)
             ProviderId.GROK -> fetchGrokUsage(token)
             ProviderId.CURSOR -> fetchCursorUsage(token)
+            ProviderId.ANTIGRAVITY -> fetchAntigravityUsage(token)
         }
     }
 
@@ -321,6 +353,7 @@ class QuotaDogClient(
         return when (accountKey.providerId) {
             ProviderId.GROK -> ensureFreshGrokToken(accountKey)
             ProviderId.CURSOR -> ensureFreshCursorToken(accountKey)
+            ProviderId.ANTIGRAVITY -> ensureFreshAntigravityToken(accountKey)
             ProviderId.CODEX, ProviderId.CLAUDE_CODE -> {
                 val token = tokenStore.load(accountKey)
                     ?: throw ProviderException(AuthState.NotConfigured, "Not signed in to ${accountKey.providerId.displayName}")
@@ -392,6 +425,46 @@ class QuotaDogClient(
         )
     }
 
+    private suspend fun ensureFreshAntigravityToken(accountKey: AccountKey): OAuthTokenBundle {
+        val stored = tokenStore.load(accountKey)
+            ?: throw ProviderException(AuthState.NotConfigured, "Not signed in to ${accountKey.providerId.displayName}")
+        val reloaded = runCatching { loadAntigravityCredentialsFromCli() }.getOrNull()
+        if (reloaded != null) {
+            val reloadedWithEmail = if (reloaded.email.isNullOrBlank() && !stored.email.isNullOrBlank()) {
+                reloaded.copy(email = stored.email)
+            } else {
+                reloaded
+            }
+            val reloadedKey = accountKeyForToken(ProviderId.ANTIGRAVITY, reloadedWithEmail)
+            if (reloadedKey == accountKey || stored.email.isNullOrBlank() || reloadedWithEmail.email.isNullOrBlank()) {
+                if (!reloadedWithEmail.isExpired()) {
+                    val merged = reloadedWithEmail.withIdentityFrom(stored)
+                    tokenStore.save(accountKey, merged)
+                    return merged
+                }
+            } else if (reloadedKey != accountKey) {
+                if (!stored.isExpired()) return stored
+                throw ProviderException(
+                    AuthState.RequiresRelogin,
+                    "Antigravity CLI is signed in as a different account. Remove this account and import again.",
+                )
+            }
+        }
+        if (!stored.isExpired()) {
+            return stored
+        }
+        if (stored.refreshToken.isBlank()) {
+            throw ProviderException(
+                AuthState.RequiresRelogin,
+                "Antigravity credentials expired. Run `agy`, sign in, then re-import.",
+            )
+        }
+        val refreshed = AntigravityUsageFetcher.refreshAccessToken(httpClient, stored.refreshToken)
+            .withIdentityFrom(stored)
+        tokenStore.save(accountKey, refreshed)
+        return refreshed
+    }
+
     private suspend fun exchangeCode(
         providerId: ProviderId,
         code: String,
@@ -442,6 +515,10 @@ class QuotaDogClient(
                 AuthState.NotConfigured,
                 "Cursor does not use browser OAuth. Import credentials from the local Cursor app instead."
             )
+            ProviderId.ANTIGRAVITY -> throw ProviderException(
+                AuthState.NotConfigured,
+                "Antigravity does not use browser OAuth. Import credentials from the Antigravity CLI instead."
+            )
         }
     }
 
@@ -478,6 +555,7 @@ class QuotaDogClient(
                 AuthState.RequiresRelogin,
                 "Cursor credentials are refreshed by the Cursor app. Sign in again, then re-import."
             )
+            ProviderId.ANTIGRAVITY -> AntigravityUsageFetcher.refreshAccessToken(httpClient, refreshToken)
         }
     }
 
@@ -564,6 +642,24 @@ class QuotaDogClient(
                 if (planLabel != null) append("Plan: $planLabel")
                 if (isNotEmpty()) append(" · ")
                 append("Source: Cursor app (${cursorAuthFileHint()})")
+            },
+        )
+    }
+
+    private suspend fun fetchAntigravityUsage(token: OAuthTokenBundle): ProviderUsageSnapshot {
+        val usage = AntigravityUsageFetcher.fetch(httpClient, token.accessToken)
+        val email = token.email
+            ?: runCatching { AntigravityUsageFetcher.fetchUserEmail(httpClient, token.accessToken) }.getOrNull()
+        return ProviderUsageSnapshot(
+            providerId = ProviderId.ANTIGRAVITY,
+            authState = AuthState.LoggedIn,
+            windows = usage.windows,
+            collectedAt = Clock.System.now(),
+            accountEmail = email,
+            message = buildString {
+                usage.planLabel?.let { append("Plan: $it") }
+                if (isNotEmpty()) append(" · ")
+                append("Source: Antigravity CLI (${antigravityAuthHint()})")
             },
         )
     }
@@ -751,6 +847,10 @@ class QuotaDogStore(
             }
             ProviderId.CURSOR -> {
                 importCursorAccountAndRefresh()
+                return
+            }
+            ProviderId.ANTIGRAVITY -> {
+                importAntigravityAccountAndRefresh()
                 return
             }
             ProviderId.CODEX, ProviderId.CLAUDE_CODE -> Unit
@@ -1009,6 +1109,48 @@ class QuotaDogStore(
         }
     }
 
+    private suspend fun importAntigravityAccountAndRefresh() {
+        val pendingKey = AccountKey.pending(ProviderId.ANTIGRAVITY, "import")
+        update(pendingKey) {
+            it.copy(
+                added = true,
+                authState = AuthState.Unknown,
+                busy = true,
+                message = "Reading Antigravity CLI credentials from ${antigravityAuthHint()}...",
+            )
+        }
+        try {
+            val accountKey = client.importAntigravityAccount()
+            replacePendingWithAccount(
+                pendingKey = pendingKey,
+                accountKey = accountKey,
+                message = "Imported Antigravity credentials, refreshing usage...",
+            )
+            onLocalDataChanged?.invoke()
+            refresh(accountKey)
+        } catch (error: ProviderException) {
+            platformDebugLog("store importAntigravity provider error state=${error.state} status=${error.statusCode}")
+            update(pendingKey) {
+                it.copy(
+                    added = true,
+                    authState = error.state,
+                    busy = false,
+                    message = safeUserMessage(error, "Could not import Antigravity credentials."),
+                )
+            }
+        } catch (error: Throwable) {
+            platformDebugLog("store importAntigravity unexpected error")
+            update(pendingKey) {
+                it.copy(
+                    added = true,
+                    authState = AuthState.Error,
+                    busy = false,
+                    message = safeUserMessage(error, "Could not import Antigravity credentials."),
+                )
+            }
+        }
+    }
+
     suspend fun completeLogin(accountKey: AccountKey, callbackUri: String) {
         val start = state.value.accounts[accountKey]?.loginStart
             ?: throw ProviderException(AuthState.Error, "No pending sign-in flow to complete")
@@ -1189,6 +1331,8 @@ private fun inferWindowDurationSeconds(id: String, label: String): Long? {
         "primary", "five_hour" -> FIVE_HOUR_SECONDS
         "secondary", "seven_day", "seven_day_sonnet", "seven_day_opus" -> SEVEN_DAY_SECONDS
         "plan-usage", "on-demand" -> THIRTY_DAY_SECONDS
+        "antigravity-gemini-session", "antigravity-claude-gpt-session" -> FIVE_HOUR_SECONDS
+        "antigravity-gemini-weekly", "antigravity-claude-gpt-weekly" -> SEVEN_DAY_SECONDS
         "credits" -> when {
             label.contains("weekly", ignoreCase = true) -> SEVEN_DAY_SECONDS
             label.contains("monthly", ignoreCase = true) -> THIRTY_DAY_SECONDS

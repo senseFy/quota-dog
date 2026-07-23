@@ -321,6 +321,7 @@ private fun QuotaDogScreen(
                             text = when (provider) {
                                 ProviderId.GROK -> "Opening xAI sign-in..."
                                 ProviderId.CURSOR -> "Importing Cursor app credentials..."
+                                ProviderId.ANTIGRAVITY -> "Importing Antigravity CLI credentials..."
                                 else -> "Opening browser for ${provider.displayName}..."
                             },
                             tone = QdSnackbarTone.Info,
@@ -1099,8 +1100,10 @@ private fun ProviderPickerContent(onSelect: (ProviderId) -> Unit) {
     val spacing = QdTheme.spacing
     val providers = availableProviders()
     val description = when {
-        ProviderId.CURSOR in providers && grokCliImportAvailable() ->
-            "Choose a provider. Codex, Claude, and Grok sign in through a browser. Grok can also import the local CLI; Cursor imports the local app."
+        (ProviderId.CURSOR in providers || ProviderId.ANTIGRAVITY in providers) && grokCliImportAvailable() ->
+            "Choose a provider. Codex, Claude, and Grok sign in through a browser. Grok can also import the local CLI; Cursor and Antigravity import local credentials."
+        ProviderId.ANTIGRAVITY in providers ->
+            "Choose a provider. Codex, Claude, and Grok sign in through a browser. Antigravity imports local CLI credentials on desktop."
         ProviderId.GROK in providers ->
             "Choose a provider. Codex, Claude, and Grok open a browser to sign in."
         else ->
@@ -1283,6 +1286,7 @@ private fun ProviderId.subtitle(): String = when (this) {
     ProviderId.CLAUDE_CODE -> "Anthropic Claude Code usage"
     ProviderId.GROK -> "Grok Build / SuperGrok credits"
     ProviderId.CURSOR -> "Cursor plan / on-demand usage (desktop)"
+    ProviderId.ANTIGRAVITY -> "Antigravity CLI quota windows (desktop)"
 }
 
 private fun UsageWindow.displayRatio(mode: UsageDisplayMode): Double = when (mode) {

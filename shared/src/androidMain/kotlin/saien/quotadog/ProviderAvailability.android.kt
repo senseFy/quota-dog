@@ -26,3 +26,12 @@ actual fun loadCursorCredentialsFromLocalApp(): OAuthTokenBundle {
 
 actual fun cursorAuthFileHint(): String =
     "~/Library/Application Support/Cursor/User/globalStorage/state.vscdb"
+
+actual fun loadAntigravityCredentialsFromCli(): OAuthTokenBundle {
+    throw ProviderException(
+        AuthState.NotConfigured,
+        "Antigravity CLI is only available on the desktop app."
+    )
+}
+
+actual fun antigravityAuthHint(): String = "macOS Keychain (service=gemini, account=antigravity)"

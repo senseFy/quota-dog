@@ -52,6 +52,8 @@ class SettingsTokenStore(
     override suspend fun delete(accountKey: AccountKey) {
         settings.remove(key(accountKey))
         settings.remove(updatedAtKey(accountKey))
+        // Legacy suffix used before key-length tightening.
+        settings.remove("${key(accountKey)}_updated_at")
         saveIndex(loadIndex().filterNot { it.providerId == accountKey.providerId && it.accountId == accountKey.accountId })
     }
 
@@ -125,11 +127,14 @@ class SettingsTokenStore(
     }
 
     private fun updatedAtKey(accountKey: AccountKey): String {
-        return "${key(accountKey)}_updated_at"
+        // Keep under java.util.prefs MAX_KEY_LENGTH (80). Long provider names like
+        // "antigravity" + full digest + "_updated_at" used to overflow.
+        return "${key(accountKey)}_ts"
     }
 
     private fun tokenUpdatedAt(accountKey: AccountKey, token: OAuthTokenBundle): Long {
         return settings.getLongOrNull(updatedAtKey(accountKey))
+            ?: settings.getLongOrNull("${key(accountKey)}_updated_at")
             ?: token.lastRefreshEpochMillis
     }
 

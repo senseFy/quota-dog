@@ -48,6 +48,22 @@ actual fun loadCursorCredentialsFromLocalApp(): OAuthTokenBundle {
 
 actual fun cursorAuthFileHint(): String = cursorStateDbFile().absolutePath
 
+actual fun loadAntigravityCredentialsFromCli(): OAuthTokenBundle {
+    val os = System.getProperty("os.name").orEmpty().lowercase()
+    if (!os.contains("mac") && !os.contains("darwin")) {
+        throw ProviderException(
+            AuthState.NotConfigured,
+            "Antigravity CLI import is currently supported on macOS only. Run `agy` on a Mac, then import.",
+        )
+    }
+    val service = System.getenv("ANTIGRAVITY_KEYRING_SERVICE")?.takeIf { it.isNotBlank() } ?: "gemini"
+    val account = System.getenv("ANTIGRAVITY_KEYRING_ACCOUNT")?.takeIf { it.isNotBlank() } ?: "antigravity"
+    val secret = readMacKeychainSecret(service = service, account = account)
+    return AntigravityAuthParser.parseKeyringSecret(secret)
+}
+
+actual fun antigravityAuthHint(): String = "macOS Keychain (service=gemini, account=antigravity)"
+
 private fun grokAuthFile(): File {
     val home = System.getenv("GROK_HOME")?.takeIf { it.isNotBlank() }
         ?: File(System.getProperty("user.home"), ".grok").absolutePath
@@ -113,4 +129,41 @@ private fun parseSqliteJsonRows(output: String): Map<String, String> {
         rows[key] = value
     }
     return rows
+}
+
+private fun readMacKeychainSecret(service: String, account: String): String {
+    val process = runCatching {
+        ProcessBuilder(
+            "security",
+            "find-generic-password",
+            "-s",
+            service,
+            "-a",
+            account,
+            "-w",
+        ).redirectErrorStream(true).start()
+    }.getOrElse {
+        throw ProviderException(
+            AuthState.Error,
+            "Could not run macOS `security` to read Antigravity CLI credentials.",
+        )
+    }
+    val output = process.inputStream.bufferedReader().use { it.readText() }
+    val exitCode = process.waitFor()
+    val secret = output.trim()
+    if (exitCode != 0 || secret.isEmpty()) {
+        val preview = secret.take(200).ifBlank { "exit $exitCode" }
+        val notFound = preview.contains("could not be found", ignoreCase = true) ||
+            preview.contains("The specified item could not be found", ignoreCase = true)
+        throw ProviderException(
+            if (notFound) AuthState.NotConfigured else AuthState.Error,
+            if (notFound) {
+                "Antigravity CLI credentials not found in Keychain ($service / $account). " +
+                    "Run `agy`, sign in with Google OAuth, then import again."
+            } else {
+                "Failed to read Antigravity CLI Keychain item: $preview"
+            },
+        )
+    }
+    return secret
 }
