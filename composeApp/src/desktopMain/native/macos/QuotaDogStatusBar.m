@@ -139,6 +139,16 @@ static NSColor *QDUsageFill(NSInteger usedPct, QDPalette palette) {
     return palette.success;
 }
 
+/** Matches Kotlin UsageDisplayMode — default Used when missing/unknown. */
+static BOOL QDIsRemainingDisplayMode(NSDictionary *state) {
+    NSString *mode = nil;
+    id value = state[@"usageDisplayMode"];
+    if ([value isKindOfClass:[NSString class]]) {
+        mode = (NSString *)value;
+    }
+    return [mode isEqualToString:@"Remaining"];
+}
+
 static NSColor *QDProviderAccent(NSString *provider, QDPalette palette) {
     if ([provider isEqualToString:@"CLAUDE_CODE"]) return palette.claudeAccent;
     if ([provider isEqualToString:@"GROK"]) return palette.grokAccent;
@@ -1056,11 +1066,21 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
 
 - (NSView *)buildUsageWindowRow:(NSDictionary *)window
                           width:(CGFloat)width
-                        palette:(QDPalette)palette {
+                        palette:(QDPalette)palette
+               remainingDisplay:(BOOL)remainingDisplay {
     NSInteger usedPct = [self integerIn:window key:@"usedPct" fallback:0];
     NSInteger remainingPct = [self integerIn:window key:@"remainingPct" fallback:0];
     NSString *resetLabel = [self stringIn:window key:@"resetLabel" fallback:@"—"];
+    // Color risk always tracks used quota, matching the main app.
     NSColor *fill = QDUsageFill(usedPct, palette);
+    NSInteger primaryPct = remainingDisplay ? remainingPct : usedPct;
+    NSInteger secondaryPct = remainingDisplay ? usedPct : remainingPct;
+    NSString *primaryText = remainingDisplay
+        ? [NSString stringWithFormat:@"%ld%% left", (long)primaryPct]
+        : [NSString stringWithFormat:@"%ld%% used", (long)primaryPct];
+    NSString *secondaryText = remainingDisplay
+        ? [NSString stringWithFormat:@"%ld%% used", (long)secondaryPct]
+        : [NSString stringWithFormat:@"%ld%% left", (long)secondaryPct];
 
     QDFlippedView *row = [[QDFlippedView alloc] initWithFrame:NSMakeRect(0, 0, width, 42)];
     row.wantsLayer = YES;
@@ -1072,26 +1092,26 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
     name.frame = NSMakeRect(0, 0, width - 80, 14);
     [row addSubview:name];
 
-    NSTextField *used = [self label:[NSString stringWithFormat:@"%ld%% used", (long)usedPct]
-                           fontSize:11.0
-                             weight:NSFontWeightRegular
-                              color:fill];
-    used.alignment = NSTextAlignmentRight;
-    used.frame = NSMakeRect(width - 80, 0, 80, 14);
-    [row addSubview:used];
+    NSTextField *primary = [self label:primaryText
+                              fontSize:11.0
+                                weight:NSFontWeightRegular
+                                 color:fill];
+    primary.alignment = NSTextAlignmentRight;
+    primary.frame = NSMakeRect(width - 80, 0, 80, 14);
+    [row addSubview:primary];
 
     QDProgressBar *bar = [[QDProgressBar alloc] initWithFrame:NSMakeRect(0, 18, width, QDProgressHeight)];
     bar.trackColor = palette.surfaceMuted;
     bar.fillColor = fill;
-    bar.progress = usedPct / 100.0;
+    bar.progress = primaryPct / 100.0;
     [row addSubview:bar];
 
-    NSTextField *left = [self label:[NSString stringWithFormat:@"%ld%% left", (long)remainingPct]
-                           fontSize:11.0
-                             weight:NSFontWeightRegular
-                              color:palette.textTertiary];
-    left.frame = NSMakeRect(0, 28, width * 0.45, 14);
-    [row addSubview:left];
+    NSTextField *secondary = [self label:secondaryText
+                                fontSize:11.0
+                                  weight:NSFontWeightRegular
+                                   color:palette.textTertiary];
+    secondary.frame = NSMakeRect(0, 28, width * 0.45, 14);
+    [row addSubview:secondary];
 
     NSTextField *reset = [self label:[NSString stringWithFormat:@"resets %@", resetLabel]
                             fontSize:11.0
@@ -1106,7 +1126,8 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
 
 - (NSView *)buildAccountCard:(NSDictionary *)account
                        width:(CGFloat)width
-                     palette:(QDPalette)palette {
+                     palette:(QDPalette)palette
+            remainingDisplay:(BOOL)remainingDisplay {
     CGFloat height = [self heightForAccount:account];
     QDFillView *card = [[QDFillView alloc] initWithFrame:NSMakeRect(0, 0, width, height)];
     card.fillColor = palette.surface;
@@ -1157,7 +1178,10 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
         NSUInteger count = MIN(windows.count, QDMaxWindows);
         for (NSUInteger i = 0; i < count; i++) {
             NSDictionary *window = [windows[i] isKindOfClass:[NSDictionary class]] ? windows[i] : @{};
-            NSView *row = [self buildUsageWindowRow:window width:contentWidth palette:palette];
+            NSView *row = [self buildUsageWindowRow:window
+                                              width:contentWidth
+                                            palette:palette
+                                   remainingDisplay:remainingDisplay];
             row.frame = NSMakeRect(QDCardPad, y, contentWidth, 42);
             [card addSubview:row];
             y += 42.0 + (i + 1 < count ? 8.0 : 0.0);
@@ -1307,11 +1331,15 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
         document.layer.backgroundColor = QDHex(0xCA8A04).CGColor;
 #endif
 
+        BOOL remainingDisplay = QDIsRemainingDisplayMode(self.state);
         CGFloat cursor = 0;
         for (NSUInteger i = 0; i < count; i++) {
             NSDictionary *account = [accounts[i] isKindOfClass:[NSDictionary class]] ? accounts[i] : @{};
             CGFloat h = [self heightForAccount:account];
-            NSView *card = [self buildAccountCard:account width:contentWidth palette:palette];
+            NSView *card = [self buildAccountCard:account
+                                            width:contentWidth
+                                          palette:palette
+                                 remainingDisplay:remainingDisplay];
             card.frame = NSMakeRect(0, cursor, contentWidth, h);
             [document addSubview:card];
             cursor += h + (i + 1 < count ? QDAccountGap : 0.0);

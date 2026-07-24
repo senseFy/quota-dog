@@ -44,6 +44,8 @@ internal data class DesktopStatusBarState(
     val refreshEnabled: Boolean,
     val refreshBusy: Boolean,
     val darkTheme: Boolean,
+    /** [UsageDisplayMode.name] — Used or Remaining. */
+    val usageDisplayMode: String = UsageDisplayMode.Used.name,
 )
 
 internal data class DesktopStatusBarProviderFilter(
@@ -316,6 +318,8 @@ private fun DesktopStatusBarState.toJson(): String {
         appendJsonField("summary", summary)
         append(',')
         appendJsonField("selectedProvider", selectedProvider)
+        append(',')
+        appendJsonField("usageDisplayMode", usageDisplayMode)
         append(',')
         append("\"refreshEnabled\":").append(refreshEnabled)
         append(',')

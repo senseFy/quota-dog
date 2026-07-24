@@ -177,6 +177,7 @@ private fun QuotaDogTray(
 ) {
     val state by store.state.collectAsState()
     val emailPrivacyMode by preferences.emailPrivacyMode.collectAsState()
+    val usageDisplayMode by preferences.usageDisplayMode.collectAsState()
     val themeMode by preferences.themeMode.collectAsState()
     val systemDark = isSystemInDarkTheme()
     val darkTheme = when (themeMode) {
@@ -207,6 +208,7 @@ private fun QuotaDogTray(
         selectedProvider = activeStatusBarProvider,
         refreshableAccounts = refreshableAccounts,
         emailPrivacyMode = emailPrivacyMode,
+        usageDisplayMode = usageDisplayMode,
         darkTheme = darkTheme,
     )
 
@@ -270,6 +272,7 @@ private fun QuotaDogTray(
                 accounts = accounts,
                 refreshableAccounts = refreshableAccounts,
                 emailPrivacyMode = emailPrivacyMode,
+                usageDisplayMode = usageDisplayMode,
                 onRefresh = { store.startRefreshAll() },
                 onOpenWindow = {
                     panelVisible = false
@@ -305,6 +308,7 @@ private fun QuotaDogTrayPanel(
     accounts: List<AccountUiState>,
     refreshableAccounts: List<AccountUiState>,
     emailPrivacyMode: EmailPrivacyMode,
+    usageDisplayMode: UsageDisplayMode,
     onRefresh: () -> Unit,
     onOpenWindow: () -> Unit,
     onClose: () -> Unit,
@@ -323,6 +327,7 @@ private fun QuotaDogTrayPanel(
             accounts = accounts,
             refreshableAccounts = refreshableAccounts,
             emailPrivacyMode = emailPrivacyMode,
+            usageDisplayMode = usageDisplayMode,
             onRefresh = onRefresh,
             onOpenWindow = onOpenWindow,
             onClose = onClose,
@@ -336,6 +341,7 @@ private fun QuotaDogTrayPanelContent(
     accounts: List<AccountUiState>,
     refreshableAccounts: List<AccountUiState>,
     emailPrivacyMode: EmailPrivacyMode,
+    usageDisplayMode: UsageDisplayMode,
     onRefresh: () -> Unit,
     onOpenWindow: () -> Unit,
     onClose: () -> Unit,
@@ -385,7 +391,7 @@ private fun QuotaDogTrayPanelContent(
                         color = colors.textPrimary,
                     )
                     Text(
-                        text = accounts.trayPanelSummaryLabel(),
+                        text = accounts.trayPanelSummaryLabel(usageDisplayMode),
                         style = typo.caption,
                         color = colors.textSecondary,
                         maxLines = 1,
@@ -422,7 +428,11 @@ private fun QuotaDogTrayPanelContent(
                     verticalArrangement = Arrangement.spacedBy(spacing.md),
                 ) {
                     visibleAccounts.forEach { account ->
-                        TrayAccountCard(account = account, emailPrivacyMode = emailPrivacyMode)
+                        TrayAccountCard(
+                            account = account,
+                            emailPrivacyMode = emailPrivacyMode,
+                            usageDisplayMode = usageDisplayMode,
+                        )
                     }
                     if (accounts.size > TRAY_ACCOUNT_LIMIT) {
                         val moreAccounts = accounts.size - TRAY_ACCOUNT_LIMIT
@@ -482,7 +492,11 @@ private fun TrayEmptyState(modifier: Modifier = Modifier, onOpenWindow: () -> Un
 }
 
 @Composable
-private fun TrayAccountCard(account: AccountUiState, emailPrivacyMode: EmailPrivacyMode) {
+private fun TrayAccountCard(
+    account: AccountUiState,
+    emailPrivacyMode: EmailPrivacyMode,
+    usageDisplayMode: UsageDisplayMode,
+) {
     val colors = QdTheme.colors
     val typo = QdTheme.typography
     val spacing = QdTheme.spacing
@@ -535,7 +549,7 @@ private fun TrayAccountCard(account: AccountUiState, emailPrivacyMode: EmailPriv
             } else {
                 Column(verticalArrangement = Arrangement.spacedBy(spacing.sm)) {
                     windows.forEach { window ->
-                        TrayUsageWindowRow(window)
+                        TrayUsageWindowRow(window, usageDisplayMode)
                     }
                 }
             }
@@ -544,12 +558,29 @@ private fun TrayAccountCard(account: AccountUiState, emailPrivacyMode: EmailPriv
 }
 
 @Composable
-private fun TrayUsageWindowRow(window: UsageWindow) {
+private fun TrayUsageWindowRow(window: UsageWindow, displayMode: UsageDisplayMode) {
     val colors = QdTheme.colors
     val typo = QdTheme.typography
     val spacing = QdTheme.spacing
     val usedPct = (window.usedRatio * 100).roundToInt().coerceIn(0, 100)
     val remainingPct = (window.remainingRatio * 100).roundToInt().coerceIn(0, 100)
+    val primaryPct = when (displayMode) {
+        UsageDisplayMode.Used -> usedPct
+        UsageDisplayMode.Remaining -> remainingPct
+    }
+    val secondaryPct = when (displayMode) {
+        UsageDisplayMode.Used -> remainingPct
+        UsageDisplayMode.Remaining -> usedPct
+    }
+    val primaryLabel = when (displayMode) {
+        UsageDisplayMode.Used -> "$primaryPct% used"
+        UsageDisplayMode.Remaining -> "$primaryPct% left"
+    }
+    val secondaryLabel = when (displayMode) {
+        UsageDisplayMode.Used -> "$secondaryPct% left"
+        UsageDisplayMode.Remaining -> "$secondaryPct% used"
+    }
+    val fill = window.trayUsageFill()
 
     Column(verticalArrangement = Arrangement.spacedBy(spacing.xs)) {
         Row(
@@ -565,23 +596,23 @@ private fun TrayUsageWindowRow(window: UsageWindow) {
                 overflow = TextOverflow.Ellipsis,
             )
             Text(
-                text = "$usedPct% used",
+                text = primaryLabel,
                 style = typo.caption,
-                color = window.trayUsageFill(),
+                color = fill,
                 maxLines = 1,
             )
         }
         QdProgressBar(
-            progress = usedPct / 100f,
+            progress = primaryPct / 100f,
             height = 6.dp,
-            fill = window.trayUsageFill(),
+            fill = fill,
         )
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                text = "$remainingPct% left",
+                text = secondaryLabel,
                 style = typo.caption,
                 color = colors.textTertiary,
                 modifier = Modifier.weight(1f),
@@ -660,13 +691,14 @@ private fun List<AccountUiState>.toDesktopStatusBarState(
     selectedProvider: ProviderId?,
     refreshableAccounts: List<AccountUiState>,
     emailPrivacyMode: EmailPrivacyMode,
+    usageDisplayMode: UsageDisplayMode,
     darkTheme: Boolean,
 ): DesktopStatusBarState {
     val visibleAccounts = take(STATUS_BAR_ACCOUNT_LIMIT)
     val refreshBusy = refreshableAccounts.any { it.busy }
     return DesktopStatusBarState(
-        tooltip = allAccounts.traySummaryLabel(),
-        summary = trayPanelSummaryLabel(),
+        tooltip = allAccounts.traySummaryLabel(usageDisplayMode),
+        summary = trayPanelSummaryLabel(usageDisplayMode),
         providerFilters =
             listOf(DesktopStatusBarProviderFilter(id = "", label = "All (${allAccounts.size})")) +
                 availableProviders.map { provider ->
@@ -697,26 +729,42 @@ private fun List<AccountUiState>.toDesktopStatusBarState(
         refreshEnabled = refreshableAccounts.isNotEmpty() && !refreshBusy,
         refreshBusy = refreshBusy,
         darkTheme = darkTheme,
+        usageDisplayMode = usageDisplayMode.name,
     )
 }
 
-private fun List<AccountUiState>.traySummaryLabel(): String {
+private fun List<AccountUiState>.traySummaryLabel(displayMode: UsageDisplayMode): String {
     if (isEmpty()) return "QuotaDog"
     val windows = flatMap { it.snapshot?.windows.orEmpty() }
-    val highestUsed = windows.maxOfOrNull { it.usedRatio }
-    return if (highestUsed == null) {
+    val extreme = windows.extremeDisplayRatio(displayMode)
+    return if (extreme == null) {
         "QuotaDog · ${size} account${if (size == 1) "" else "s"}"
     } else {
-        "QuotaDog · ${(highestUsed * 100).roundToInt()}% max used"
+        val pct = (extreme * 100).roundToInt()
+        when (displayMode) {
+            UsageDisplayMode.Used -> "QuotaDog · $pct% max used"
+            UsageDisplayMode.Remaining -> "QuotaDog · $pct% min left"
+        }
     }
 }
 
-private fun List<AccountUiState>.trayPanelSummaryLabel(): String {
+private fun List<AccountUiState>.trayPanelSummaryLabel(displayMode: UsageDisplayMode): String {
     if (isEmpty()) return "No accounts yet"
     val accountLabel = "${size} account${if (size == 1) "" else "s"}"
     val windows = flatMap { it.snapshot?.windows.orEmpty() }
-    val highestUsed = windows.maxOfOrNull { it.usedRatio } ?: return accountLabel
-    return "$accountLabel · ${(highestUsed * 100).roundToInt()}% max used"
+    val extreme = windows.extremeDisplayRatio(displayMode) ?: return accountLabel
+    val pct = (extreme * 100).roundToInt()
+    return when (displayMode) {
+        UsageDisplayMode.Used -> "$accountLabel · $pct% max used"
+        UsageDisplayMode.Remaining -> "$accountLabel · $pct% min left"
+    }
+}
+
+private fun List<UsageWindow>.extremeDisplayRatio(displayMode: UsageDisplayMode): Double? {
+    return when (displayMode) {
+        UsageDisplayMode.Used -> maxOfOrNull { it.usedRatio }
+        UsageDisplayMode.Remaining -> minOfOrNull { it.remainingRatio }
+    }
 }
 
 private fun AccountUiState.trayStatusLabel(): String {
