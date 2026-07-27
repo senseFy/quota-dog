@@ -9,7 +9,6 @@ import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -26,15 +25,16 @@ fun QdIconButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
-    diameter: Dp = 36.dp,
+    diameter: Dp = 30.dp,
     background: Color = Color.Transparent,
-    hoverColor: Color = QdTheme.colors.surfaceHover,
+    hoverColor: Color = QdTheme.colors.surfaceHover.copy(alpha = 0.4f),
     pressedColor: Color = QdTheme.colors.surfaceMuted,
     content: @Composable () -> Unit,
 ) {
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
     val hovered by interaction.collectIsHoveredAsState()
+    val shape = QdTheme.shapes.sm
 
     val target = when {
         !enabled -> background
@@ -42,12 +42,12 @@ fun QdIconButton(
         hovered -> hoverColor
         else -> background
     }
-    val bg by animateColorAsState(target, animationSpec = tween(120))
+    val bg by animateColorAsState(target, animationSpec = tween(100))
 
     Box(
         modifier = modifier
             .size(diameter)
-            .clip(CircleShape)
+            .clip(shape)
             .background(bg)
             .clickable(
                 enabled = enabled,

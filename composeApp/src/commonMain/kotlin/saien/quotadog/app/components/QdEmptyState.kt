@@ -22,7 +22,7 @@ fun QdEmptyState(
     description: String,
     modifier: Modifier = Modifier,
     icon: @Composable () -> Unit = {
-        QdGaugeIcon(size = 32.dp, tint = QdTheme.colors.primary)
+        QdGaugeIcon(size = 22.dp, tint = QdTheme.colors.textSecondary)
     },
 ) {
     val colors = QdTheme.colors
@@ -32,15 +32,15 @@ fun QdEmptyState(
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .padding(top = spacing.huge, bottom = spacing.xxl),
+            .padding(top = spacing.xxxl, bottom = spacing.xl),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(spacing.md),
+        verticalArrangement = Arrangement.spacedBy(spacing.sm),
     ) {
         Box(
             modifier = Modifier
-                .size(64.dp)
-                .clip(QdTheme.shapes.lg)
-                .background(colors.primaryMuted),
+                .size(48.dp)
+                .clip(QdTheme.shapes.md)
+                .background(colors.surfaceMuted),
             contentAlignment = Alignment.Center,
         ) {
             icon()
@@ -51,7 +51,7 @@ fun QdEmptyState(
             style = typo.bodyMedium,
             color = colors.textSecondary,
             textAlign = TextAlign.Center,
-            modifier = Modifier.padding(horizontal = spacing.xxl),
+            modifier = Modifier.padding(horizontal = spacing.xl),
         )
     }
 }

@@ -24,10 +24,12 @@ static void QDLog(NSString *format, ...) {
 static const CGFloat QDPanelWidth = 420.0;
 static const CGFloat QDPanelMaxHeight = 800.0;
 static const CGFloat QDOuterPad = 20.0;
-static const CGFloat QDCardRadius = 18.0;
+static const CGFloat QDCardRadius = 8.0;
 static const CGFloat QDCardPad = 12.0;
-static const CGFloat QDAvatarSize = 28.0;
-static const CGFloat QDProgressHeight = 6.0;
+static const CGFloat QDAvatarSize = 20.0;
+static const CGFloat QDProgressHeight = 4.0;
+static const CGFloat QDWindowRowHeight = 22.0;
+static const CGFloat QDSwitcherHeight = 28.0;
 static const CGFloat QDButtonHeight = 28.0;
 static const CGFloat QDAccountGap = 12.0;
 static const CGFloat QDSectionGap = 12.0;
@@ -54,6 +56,7 @@ typedef struct {
     NSColor *success;
     NSColor *warning;
     NSColor *danger;
+    NSColor *meter;
     NSColor *codexAccent;
     NSColor *claudeAccent;
     NSColor *grokAccent;
@@ -68,22 +71,23 @@ static NSColor *QDHex(unsigned int hex) {
 
 static QDPalette QDLightPalette(void) {
     return (QDPalette){
-        .backgroundElevated = QDHex(0xFAFCFA),
+        .backgroundElevated = QDHex(0xFBFBFB),
         .surface = QDHex(0xFFFFFF),
-        .surfaceMuted = QDHex(0xF1F5F2),
-        .surfaceHover = QDHex(0xEEF3EF),
-        .border = QDHex(0xE3EAE5),
-        .textPrimary = QDHex(0x0F1F17),
-        .textSecondary = QDHex(0x4D6359),
-        .textTertiary = QDHex(0x859089),
-        .primary = QDHex(0x2F7D5B),
-        .primaryHover = QDHex(0x286A4D),
-        .primaryPressed = QDHex(0x1F5840),
-        .onPrimary = QDHex(0xF6FBF8),
-        .success = QDHex(0x2F7D5B),
-        .warning = QDHex(0xB76E1B),
-        .danger = QDHex(0xB94545),
-        .codexAccent = QDHex(0x1B2A24),
+        .surfaceMuted = QDHex(0xF1F2F1),
+        .surfaceHover = QDHex(0xEAEBEA),
+        .border = QDHex(0xE4E6E4),
+        .textPrimary = QDHex(0x1A1F1C),
+        .textSecondary = QDHex(0x5C635E),
+        .textTertiary = QDHex(0x8B918C),
+        .primary = QDHex(0x5A7D6C),
+        .primaryHover = QDHex(0x4E6F60),
+        .primaryPressed = QDHex(0x425E51),
+        .onPrimary = QDHex(0xF7FAF8),
+        .success = QDHex(0x5A7D6C),
+        .warning = QDHex(0xB07A2E),
+        .danger = QDHex(0xB04A4A),
+        .meter = QDHex(0x8FA094),
+        .codexAccent = QDHex(0x2A322E),
         .claudeAccent = QDHex(0xB75C2C),
         .grokAccent = QDHex(0x111111),
     };
@@ -91,23 +95,24 @@ static QDPalette QDLightPalette(void) {
 
 static QDPalette QDDarkPalette(void) {
     return (QDPalette){
-        .backgroundElevated = QDHex(0x161E1A),
-        .surface = QDHex(0x1A2520),
-        .surfaceMuted = QDHex(0x202C26),
-        .surfaceHover = QDHex(0x26342D),
-        .border = QDHex(0x2C3833),
-        .textPrimary = QDHex(0xE6EFEA),
-        .textSecondary = QDHex(0xA6B3AC),
-        .textTertiary = QDHex(0x6F7E77),
-        .primary = QDHex(0x6FBE99),
-        .primaryHover = QDHex(0x7FCAA6),
-        .primaryPressed = QDHex(0x5BA984),
-        .onPrimary = QDHex(0x0F1F17),
-        .success = QDHex(0x6FBE99),
-        .warning = QDHex(0xD89757),
-        .danger = QDHex(0xE07878),
-        .codexAccent = QDHex(0xD7DBD8),
-        .claudeAccent = QDHex(0xE89368),
+        .backgroundElevated = QDHex(0x171B19),
+        .surface = QDHex(0x1C211E),
+        .surfaceMuted = QDHex(0x252A27),
+        .surfaceHover = QDHex(0x2E3430),
+        .border = QDHex(0x313833),
+        .textPrimary = QDHex(0xE6EAE7),
+        .textSecondary = QDHex(0xA8B0AB),
+        .textTertiary = QDHex(0x7A837E),
+        .primary = QDHex(0x8FB5A1),
+        .primaryHover = QDHex(0x9FC0AE),
+        .primaryPressed = QDHex(0x7AA38E),
+        .onPrimary = QDHex(0x121614),
+        .success = QDHex(0x8FB5A1),
+        .warning = QDHex(0xC9A06A),
+        .danger = QDHex(0xD08888),
+        .meter = QDHex(0x6B7F72),
+        .codexAccent = QDHex(0xD2D7D4),
+        .claudeAccent = QDHex(0xE0936C),
         .grokAccent = QDHex(0xE6E6E6),
     };
 }
@@ -136,7 +141,7 @@ static QDPalette QDPaletteForDark(BOOL dark) {
 static NSColor *QDUsageFill(NSInteger usedPct, QDPalette palette) {
     if (usedPct >= 90) return palette.danger;
     if (usedPct >= 70) return palette.warning;
-    return palette.success;
+    return palette.meter;
 }
 
 /** Matches Kotlin UsageDisplayMode — default Used when missing/unknown. */
@@ -963,8 +968,8 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
         height += 32.0; // empty muted box
     } else {
         NSUInteger count = MIN(windows.count, QDMaxWindows);
-        // each window: label(14) + gap4 + bar6 + gap4 + footer14 = 42, plus gap 8 between
-        height += count * 42.0 + MAX(0, (NSInteger)count - 1) * 8.0;
+        // each window: label(14) + gap4 + bar = QDWindowRowHeight, plus gap 6 between
+        height += count * QDWindowRowHeight + MAX(0, (NSInteger)count - 1) * 6.0;
     }
     height += QDCardPad;
     return height;
@@ -994,9 +999,11 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
                          selected:(NSString *)selected
                             width:(CGFloat)width
                           palette:(QDPalette)palette {
-    CGFloat height = 36.0;
-    CGFloat inset = 4.0;
+    CGFloat height = QDSwitcherHeight;
+    CGFloat inset = 2.0;
     CGFloat segmentHeight = height - inset * 2.0;
+    CGFloat trackRadius = 6.0;
+    CGFloat segmentRadius = 4.0;
 
     NSFont *font = [NSFont systemFontOfSize:11.0 weight:NSFontWeightMedium];
     CGFloat availableWidth = width - inset * 2.0;
@@ -1006,7 +1013,7 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
         NSDictionary *filter = [value isKindOfClass:[NSDictionary class]] ? value : @{};
         NSString *label = [self stringIn:filter key:@"label" fallback:@"All"];
         CGFloat textWidth = ceil([label sizeWithAttributes:@{NSFontAttributeName: font}].width);
-        CGFloat segmentWidth = textWidth + 20.0;
+        CGFloat segmentWidth = textWidth + 16.0;
         [preferredWidths addObject:@(segmentWidth)];
         preferredTotal += segmentWidth;
     }
@@ -1026,15 +1033,17 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
     }
     if (selectedIndex == NSNotFound) selectedIndex = 0;
 
-    // Hug content like QdSegmentedControl(fillWidth = false); `width` only caps overflow.
+    // Rectangular Zed-style tabs; `width` only caps overflow.
     QDFillView *track = [[QDFillView alloc] initWithFrame:NSMakeRect(0, 0, x + inset, height)];
-    track.fillColor = palette.surfaceMuted;
-    track.cornerRadius = height / 2.0;
+    track.fillColor = [palette.surfaceMuted colorWithAlphaComponent:0.55];
+    track.borderColor = palette.border;
+    track.cornerRadius = trackRadius;
 
     NSRect selectedFrame = filters.count > 0 ? frames[selectedIndex].rectValue : NSZeroRect;
     QDFillView *indicator = [[QDFillView alloc] initWithFrame:selectedFrame];
     indicator.fillColor = palette.surface;
-    indicator.cornerRadius = segmentHeight / 2.0;
+    indicator.borderColor = palette.border;
+    indicator.cornerRadius = segmentRadius;
     [track addSubview:indicator];
     self.providerIndicator = indicator;
 
@@ -1053,7 +1062,7 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
         button.restBg = NSColor.clearColor;
         button.hoverBg = NSColor.clearColor;
         // Must stay translucent: buttons draw on top of the selection indicator,
-        // so an opaque fill would hide the selected pill while pressed.
+        // so an opaque fill would hide the selected segment while pressed.
         button.pressedBg = [palette.textPrimary colorWithAlphaComponent:0.09];
         button.fgColor = active ? palette.textPrimary : palette.textSecondary;
         button.frame = frames[index].rectValue;
@@ -1074,52 +1083,40 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
     // Color risk always tracks used quota, matching the main app.
     NSColor *fill = QDUsageFill(usedPct, palette);
     NSInteger primaryPct = remainingDisplay ? remainingPct : usedPct;
-    NSInteger secondaryPct = remainingDisplay ? usedPct : remainingPct;
     NSString *primaryText = remainingDisplay
         ? [NSString stringWithFormat:@"%ld%% left", (long)primaryPct]
         : [NSString stringWithFormat:@"%ld%% used", (long)primaryPct];
-    NSString *secondaryText = remainingDisplay
-        ? [NSString stringWithFormat:@"%ld%% used", (long)secondaryPct]
-        : [NSString stringWithFormat:@"%ld%% left", (long)secondaryPct];
+    NSString *metaText = [NSString stringWithFormat:@"%@ · %@", primaryText, resetLabel];
 
-    QDFlippedView *row = [[QDFlippedView alloc] initWithFrame:NSMakeRect(0, 0, width, 42)];
+    QDFlippedView *row = [[QDFlippedView alloc] initWithFrame:NSMakeRect(0, 0, width, QDWindowRowHeight)];
     row.wantsLayer = YES;
+
+    NSFont *metaFont = [NSFont monospacedDigitSystemFontOfSize:11.0 weight:NSFontWeightMedium];
+    CGFloat metaWidth = ceil([metaText sizeWithAttributes:@{NSFontAttributeName: metaFont}].width);
+    metaWidth = MIN(width * 0.62, MAX(88.0, metaWidth));
+    CGFloat nameWidth = MAX(48.0, width - metaWidth - 8.0);
 
     NSTextField *name = [self label:[self stringIn:window key:@"label" fallback:@"Usage"]
                            fontSize:11.0
-                             weight:NSFontWeightSemibold
-                              color:palette.textPrimary];
-    name.frame = NSMakeRect(0, 0, width - 80, 14);
+                             weight:NSFontWeightMedium
+                              color:palette.textSecondary];
+    name.frame = NSMakeRect(0, 0, nameWidth, 14);
     [row addSubview:name];
 
-    NSTextField *primary = [self label:primaryText
-                              fontSize:11.0
-                                weight:NSFontWeightRegular
-                                 color:fill];
-    primary.alignment = NSTextAlignmentRight;
-    primary.frame = NSMakeRect(width - 80, 0, 80, 14);
-    [row addSubview:primary];
+    NSTextField *meta = [self label:metaText
+                           fontSize:11.0
+                             weight:NSFontWeightMedium
+                              color:fill];
+    meta.font = metaFont;
+    meta.alignment = NSTextAlignmentRight;
+    meta.frame = NSMakeRect(width - metaWidth, 0, metaWidth, 14);
+    [row addSubview:meta];
 
     QDProgressBar *bar = [[QDProgressBar alloc] initWithFrame:NSMakeRect(0, 18, width, QDProgressHeight)];
     bar.trackColor = palette.surfaceMuted;
     bar.fillColor = fill;
     bar.progress = primaryPct / 100.0;
     [row addSubview:bar];
-
-    NSTextField *secondary = [self label:secondaryText
-                                fontSize:11.0
-                                  weight:NSFontWeightRegular
-                                   color:palette.textTertiary];
-    secondary.frame = NSMakeRect(0, 28, width * 0.45, 14);
-    [row addSubview:secondary];
-
-    NSTextField *reset = [self label:[NSString stringWithFormat:@"resets %@", resetLabel]
-                            fontSize:11.0
-                              weight:NSFontWeightRegular
-                               color:palette.textTertiary];
-    reset.alignment = NSTextAlignmentRight;
-    reset.frame = NSMakeRect(width * 0.45, 28, width * 0.55, 14);
-    [row addSubview:reset];
 
     return row;
 }
@@ -1156,7 +1153,7 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
     NSTextField *status = [self label:[self stringIn:account key:@"status" fallback:@"No usage data yet"]
                              fontSize:11.0
                                weight:NSFontWeightRegular
-                                color:busy ? palette.primary : palette.textTertiary];
+                                color:busy ? palette.textSecondary : palette.textTertiary];
     status.frame = NSMakeRect(titleX, y + 16, titleW, 14);
     [card addSubview:status];
 
@@ -1182,9 +1179,9 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
                                               width:contentWidth
                                             palette:palette
                                    remainingDisplay:remainingDisplay];
-            row.frame = NSMakeRect(QDCardPad, y, contentWidth, 42);
+            row.frame = NSMakeRect(QDCardPad, y, contentWidth, QDWindowRowHeight);
             [card addSubview:row];
-            y += 42.0 + (i + 1 < count ? 8.0 : 0.0);
+            y += QDWindowRowHeight + (i + 1 < count ? 6.0 : 0.0);
         }
     }
 
@@ -1222,7 +1219,7 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
     // Header + single-row footer chrome; leftover budget is the scrollable content max.
     CGFloat headerHeight = QDOuterPad + 44.0 + QDSectionGap;
     if (showsProviderSwitcher) {
-        headerHeight += 36.0 + QDSectionGap;
+        headerHeight += QDSwitcherHeight + QDSectionGap;
     }
     CGFloat footerHeight = QDSectionGap + QDButtonHeight + QDFooterBottomPad;
     CGFloat maxContentHeight = MAX(80.0, QDPanelMaxHeight - headerHeight - footerHeight);
@@ -1235,7 +1232,7 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
 #else
     root.fillColor = palette.backgroundElevated;
 #endif
-    root.cornerRadius = 14.0;
+    root.cornerRadius = 10.0;
     root.autoresizingMask = NSViewNotSizable;
 
 #if QD_DEBUG_LAYOUT

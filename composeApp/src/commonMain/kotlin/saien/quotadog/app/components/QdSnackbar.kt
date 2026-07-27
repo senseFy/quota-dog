@@ -7,6 +7,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
@@ -23,8 +24,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 import saien.quotadog.app.theme.QdTheme
@@ -73,39 +72,39 @@ fun QdSnackbarHost(controller: QdSnackbarController, modifier: Modifier = Modifi
     val colors = QdTheme.colors
     val tone = msg?.tone ?: QdSnackbarTone.Info
     val (bg, fg, accent) = when (tone) {
-        QdSnackbarTone.Info -> Triple(colors.textPrimary, colors.surface, colors.primary)
-        QdSnackbarTone.Success -> Triple(colors.success, colors.onPrimary, colors.onPrimary)
-        QdSnackbarTone.Warning -> Triple(colors.warning, Color.White, Color.White)
-        QdSnackbarTone.Danger -> Triple(colors.danger, Color.White, Color.White)
+        QdSnackbarTone.Info -> Triple(colors.surface, colors.textPrimary, colors.primary)
+        QdSnackbarTone.Success -> Triple(colors.successSoft, colors.success, colors.success)
+        QdSnackbarTone.Warning -> Triple(colors.warningSoft, colors.warning, colors.warning)
+        QdSnackbarTone.Danger -> Triple(colors.dangerSoft, colors.danger, colors.danger)
     }
     AnimatedVisibility(
         visible = visible,
-        enter = slideInVertically(animationSpec = tween(180)) { it } + fadeIn(tween(180)),
-        exit = slideOutVertically(animationSpec = tween(160)) { it / 2 } + fadeOut(tween(160)),
+        enter = slideInVertically(animationSpec = tween(160)) { it } + fadeIn(tween(160)),
+        exit = slideOutVertically(animationSpec = tween(140)) { it / 2 } + fadeOut(tween(140)),
         modifier = modifier,
     ) {
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(QdTheme.spacing.lg),
+                .padding(QdTheme.spacing.md),
             contentAlignment = Alignment.BottomCenter,
         ) {
             Row(
                 modifier = Modifier
                     .widthIn(max = 460.dp)
                     .fillMaxWidth()
-                    .shadow(QdTheme.elevation.medium, QdTheme.shapes.md, clip = false)
-                    .clip(QdTheme.shapes.md)
+                    .clip(QdTheme.shapes.sm)
                     .background(bg)
-                    .padding(horizontal = QdTheme.spacing.lg, vertical = QdTheme.spacing.md),
+                    .border(1.dp, colors.border, QdTheme.shapes.sm)
+                    .padding(horizontal = QdTheme.spacing.md, vertical = QdTheme.spacing.sm),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(QdTheme.spacing.md),
+                horizontalArrangement = Arrangement.spacedBy(QdTheme.spacing.sm),
             ) {
                 Box(
                     modifier = Modifier
-                        .clip(QdTheme.shapes.pill)
-                        .background(accent.copy(alpha = 0.6f))
-                        .padding(2.dp),
+                        .clip(QdTheme.shapes.xs)
+                        .background(accent)
+                        .padding(horizontal = 2.dp, vertical = 6.dp),
                 )
                 Text(
                     text = msg?.text.orEmpty(),

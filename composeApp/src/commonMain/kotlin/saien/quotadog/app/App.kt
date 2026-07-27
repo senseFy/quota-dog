@@ -227,10 +227,10 @@ private fun QuotaDogScreen(
     ) {
         val isDesktop = maxWidth >= 900.dp
         val activeProvider = selectedProvider?.takeIf { isDesktop && it in availableProviders }
-        val contentMaxWidth = if (isDesktop) 1120.dp else maxWidth
-        val horizontalPadding = if (isDesktop) spacing.xxxl else spacing.xl
-        val topPadding = safeTop + if (isDesktop) spacing.huge else spacing.xl
-        val bottomPadding = safeBottom + if (isDesktop) spacing.huge else 120.dp
+        val contentMaxWidth = if (isDesktop) 1080.dp else maxWidth
+        val horizontalPadding = if (isDesktop) spacing.xxl else spacing.lg
+        val topPadding = safeTop + if (isDesktop) spacing.xl else spacing.lg
+        val bottomPadding = safeBottom + if (isDesktop) spacing.xxxl else 88.dp
 
         Column(
             modifier = Modifier
@@ -240,7 +240,7 @@ private fun QuotaDogScreen(
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = horizontalPadding)
                 .padding(top = topPadding, bottom = bottomPadding),
-            verticalArrangement = Arrangement.spacedBy(if (isDesktop) spacing.xxl else spacing.lg),
+            verticalArrangement = Arrangement.spacedBy(if (isDesktop) spacing.lg else spacing.md),
         ) {
             DashboardHeader(
                 isDesktop = isDesktop,
@@ -486,74 +486,6 @@ private fun DashboardHeader(
     val typo = QdTheme.typography
     val spacing = QdTheme.spacing
 
-    if (isDesktop) {
-        QdCard(
-            modifier = Modifier.fillMaxWidth(),
-            padding = PaddingValues(spacing.xxl),
-            background = colors.backgroundElevated,
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(spacing.xxl),
-            ) {
-                Column(
-                    modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(spacing.xs),
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(0.dp),
-                    ) {
-                        Text(
-                            "Quota",
-                            style = typo.displayLarge.copy(fontWeight = FontWeight.Bold),
-                            color = colors.textPrimary,
-                        )
-                        Text(
-                            " / ",
-                            style = typo.displayLarge.copy(fontWeight = FontWeight.Black),
-                            color = colors.primary,
-                        )
-                        Text(
-                            "Dog",
-                            style = typo.displayLarge.copy(fontWeight = FontWeight.Bold),
-                            color = colors.textPrimary,
-                        )
-                    }
-                    Text(
-                        "A local dashboard for provider quota windows across your signed-in accounts.",
-                        style = typo.bodyMedium,
-                        color = colors.textSecondary,
-                    )
-                }
-
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(spacing.sm),
-                ) {
-                    QdButton(
-                        text = if (refreshAllBusy) "Refresh remaining" else "Refresh all",
-                        onClick = onRefreshAll,
-                        variant = QdButtonVariant.Secondary,
-                        size = QdButtonSize.Small,
-                        enabled = refreshAllEnabled,
-                    )
-                    QdButton(
-                        text = "Add account",
-                        onClick = onAddAccount,
-                        size = QdButtonSize.Small,
-                        leading = { QdPlusIcon(tint = colors.onPrimary, size = 16.dp) },
-                    )
-                    QdGlassIconButton(onClick = onOpenSettings, diameter = 44.dp) {
-                        QdSettingsGearIcon(tint = colors.textSecondary, size = 22.dp)
-                    }
-                }
-            }
-        }
-        return
-    }
-
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
@@ -562,31 +494,43 @@ private fun DashboardHeader(
         Row(
             modifier = Modifier.weight(1f),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(spacing.sm),
+            horizontalArrangement = Arrangement.spacedBy(0.dp),
         ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(0.dp),
-            ) {
-                Text(
-                    "Quota",
-                    style = typo.titleLarge.copy(fontWeight = FontWeight.Bold),
-                    color = colors.textPrimary,
-                )
-                Text(
-                    " / ",
-                    style = typo.titleLarge.copy(fontWeight = FontWeight.Black),
-                    color = colors.primary,
-                )
-                Text(
-                    "Dog",
-                    style = typo.titleLarge.copy(fontWeight = FontWeight.Bold),
-                    color = colors.textPrimary,
-                )
-            }
+            Text(
+                "Quota",
+                style = if (isDesktop) typo.displayLarge else typo.titleLarge,
+                color = colors.textPrimary,
+            )
+            Text(
+                " / ",
+                style = if (isDesktop) typo.displayLarge else typo.titleLarge,
+                color = colors.textTertiary,
+            )
+            Text(
+                "Dog",
+                style = if (isDesktop) typo.displayLarge else typo.titleLarge,
+                color = colors.textPrimary,
+            )
         }
-        QdGlassIconButton(onClick = onOpenSettings, diameter = 48.dp) {
-            QdSettingsGearIcon(tint = colors.textSecondary, size = 24.dp)
+
+        if (isDesktop) {
+            QdButton(
+                text = if (refreshAllBusy) "Refresh remaining" else "Refresh all",
+                onClick = onRefreshAll,
+                variant = QdButtonVariant.Secondary,
+                size = QdButtonSize.Small,
+                enabled = refreshAllEnabled,
+            )
+            QdButton(
+                text = "Add account",
+                onClick = onAddAccount,
+                variant = QdButtonVariant.Secondary,
+                size = QdButtonSize.Small,
+                leading = { QdPlusIcon(tint = colors.textPrimary, size = 14.dp) },
+            )
+        }
+        QdGlassIconButton(onClick = onOpenSettings, diameter = 32.dp) {
+            QdSettingsGearIcon(tint = colors.textSecondary, size = 18.dp)
         }
     }
 }
@@ -665,7 +609,7 @@ private fun AccountCards(
     }
 
     if (!isDesktop) {
-        Column(verticalArrangement = Arrangement.spacedBy(spacing.lg)) {
+        Column(verticalArrangement = Arrangement.spacedBy(spacing.md)) {
             accounts.forEach { providerState ->
                 accountCard(providerState, Modifier.fillMaxWidth())
             }
@@ -673,11 +617,11 @@ private fun AccountCards(
         return
     }
 
-    Column(verticalArrangement = Arrangement.spacedBy(spacing.lg)) {
+    Column(verticalArrangement = Arrangement.spacedBy(spacing.md)) {
         accounts.chunked(2).forEach { rowAccounts ->
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(spacing.lg),
+                horizontalArrangement = Arrangement.spacedBy(spacing.md),
             ) {
                 rowAccounts.forEach { providerState ->
                     accountCard(providerState, Modifier.weight(1f))
@@ -710,29 +654,43 @@ private fun AccountCard(
     val spacing = QdTheme.spacing
     var menuExpanded by remember { mutableStateOf(false) }
 
-    QdCard(modifier = modifier.fillMaxWidth()) {
-        Column(verticalArrangement = Arrangement.spacedBy(spacing.lg)) {
+    QdCard(
+        modifier = modifier.fillMaxWidth(),
+        padding = PaddingValues(spacing.md),
+        background = colors.backgroundElevated,
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(spacing.sm)) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(spacing.sm),
             ) {
-                QdProviderAvatar(state.providerId, size = 28.dp)
+                QdProviderAvatar(state.providerId, size = 20.dp)
 
-                Column(modifier = Modifier.weight(1f)) {
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(1.dp),
+                ) {
+                    Text(
+                        state.providerId.displayName,
+                        style = typo.caption,
+                        color = colors.textTertiary,
+                        maxLines = 1,
+                    )
                     AccountEmailTitle(state.accountSubtitle(), emailPrivacyMode)
                 }
 
-                QdIconButton(onClick = onRefresh, enabled = !state.busy) {
+                QdIconButton(onClick = onRefresh, enabled = !state.busy, diameter = 28.dp) {
                     val rotation = rememberRefreshRotation(active = state.busy)
                     QdRefreshIcon(
                         modifier = Modifier.rotate(rotation),
                         tint = colors.textSecondary,
+                        size = 16.dp,
                     )
                 }
 
                 Box {
-                    QdIconButton(onClick = { menuExpanded = true }) {
-                        QdMoreIcon(tint = colors.textSecondary)
+                    QdIconButton(onClick = { menuExpanded = true }, diameter = 28.dp) {
+                        QdMoreIcon(tint = colors.textSecondary, size = 16.dp)
                     }
                     DropdownMenu(
                         expanded = menuExpanded,
@@ -758,7 +716,7 @@ private fun AccountCard(
 
             val windows = state.snapshot?.windows.orEmpty()
             if (windows.isNotEmpty()) {
-                Column(verticalArrangement = Arrangement.spacedBy(spacing.md)) {
+                Column(verticalArrangement = Arrangement.spacedBy(spacing.sm)) {
                     windows.forEach { UsageWindowRow(it, usageDisplayMode, showProjectedUsage) }
                 }
             } else {
@@ -911,7 +869,6 @@ private fun rememberRefreshRotation(active: Boolean): Float {
 private fun UsageWindowRow(window: UsageWindow, displayMode: UsageDisplayMode, showProjectedUsage: Boolean) {
     val colors = QdTheme.colors
     val typo = QdTheme.typography
-    val spacing = QdTheme.spacing
     val progress = window.displayRatio(displayMode)
     val progressFill = window.progressFill(displayMode)
     val pct = (progress * 100).toInt()
@@ -920,11 +877,7 @@ private fun UsageWindowRow(window: UsageWindow, displayMode: UsageDisplayMode, s
     } else {
         null
     }
-    Column(verticalArrangement = Arrangement.spacedBy(spacing.xs)) {
-        QdProgressBar(
-            progress = progress.toFloat(),
-            fill = progressFill,
-        )
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -933,7 +886,7 @@ private fun UsageWindowRow(window: UsageWindow, displayMode: UsageDisplayMode, s
             Text(
                 window.infoLabel(),
                 style = typo.caption,
-                color = colors.textTertiary,
+                color = colors.textSecondary,
                 modifier = Modifier.weight(1f),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -941,21 +894,21 @@ private fun UsageWindowRow(window: UsageWindow, displayMode: UsageDisplayMode, s
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     "${window.remainingTime()} · ",
-                    style = typo.caption,
+                    style = typo.numeric,
                     color = colors.textTertiary,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
                 Text(
                     "$pct%",
-                    style = typo.caption.copy(fontWeight = FontWeight.Bold),
+                    style = typo.numeric.copy(fontWeight = FontWeight.SemiBold),
                     color = progressFill,
                     maxLines = 1,
                 )
                 if (projectedPct != null) {
                     Text(
                         " est $projectedPct%",
-                        style = typo.caption,
+                        style = typo.numeric,
                         color = colors.textTertiary,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
@@ -963,6 +916,10 @@ private fun UsageWindowRow(window: UsageWindow, displayMode: UsageDisplayMode, s
                 }
             }
         }
+        QdProgressBar(
+            progress = progress.toFloat(),
+            fill = progressFill,
+        )
     }
 }
 
@@ -972,9 +929,9 @@ private fun InlineStatus(text: String) {
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(QdTheme.shapes.md)
-            .background(colors.surfaceMuted)
-            .padding(horizontal = QdTheme.spacing.md, vertical = QdTheme.spacing.sm),
+            .clip(QdTheme.shapes.sm)
+            .background(colors.surfaceMuted.copy(alpha = 0.55f))
+            .padding(horizontal = QdTheme.spacing.sm, vertical = QdTheme.spacing.xs),
     ) {
         Text(text, style = QdTheme.typography.bodyMedium, color = colors.textSecondary)
     }
@@ -1002,8 +959,8 @@ private fun AccountStatusRow(
         state.busy -> AccountStatusUi(
             title = "Syncing",
             message = state.message ?: "Refreshing account data...",
-            bg = colors.primaryMuted,
-            fg = colors.primary,
+            bg = colors.surfaceMuted,
+            fg = colors.textSecondary,
         )
         state.loginStart != null -> AccountStatusUi(
             title = "Waiting for sign-in",
@@ -1040,13 +997,13 @@ private fun AccountStatusRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(QdTheme.shapes.md)
+            .clip(QdTheme.shapes.sm)
             .background(status.bg)
-            .padding(horizontal = spacing.md, vertical = spacing.sm),
+            .padding(horizontal = spacing.sm, vertical = spacing.xs),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(spacing.sm),
     ) {
-        QdAlertIcon(tint = status.fg)
+        QdAlertIcon(tint = status.fg, size = 14.dp)
         Text(
             text = "${status.title}: ${status.message}",
             style = typo.bodyMedium,
@@ -1089,8 +1046,8 @@ private fun AddAccountButton(modifier: Modifier = Modifier, onClick: () -> Unit)
         text = "Add account",
         onClick = onClick,
         modifier = modifier,
-        variant = QdButtonVariant.Primary,
-        leading = { QdPlusIcon(tint = QdTheme.colors.onPrimary, size = 16.dp) },
+        variant = QdButtonVariant.Secondary,
+        leading = { QdPlusIcon(tint = QdTheme.colors.textPrimary, size = 16.dp) },
     )
 }
 
@@ -1110,8 +1067,8 @@ private fun ProviderPickerContent(onSelect: (ProviderId) -> Unit) {
         else ->
             "Choose a provider - we'll open the browser for OAuth and finish sign-in here."
     }
-    Column(verticalArrangement = Arrangement.spacedBy(spacing.lg)) {
-        Column(verticalArrangement = Arrangement.spacedBy(spacing.xs)) {
+    Column(verticalArrangement = Arrangement.spacedBy(spacing.md)) {
+        Column(verticalArrangement = Arrangement.spacedBy(spacing.xxs)) {
             Text("Add account", style = typo.titleLarge, color = colors.textPrimary)
             Text(
                 description,
@@ -1119,7 +1076,7 @@ private fun ProviderPickerContent(onSelect: (ProviderId) -> Unit) {
                 color = colors.textSecondary,
             )
         }
-        Column(verticalArrangement = Arrangement.spacedBy(spacing.sm)) {
+        Column(verticalArrangement = Arrangement.spacedBy(spacing.xs)) {
             providers.forEach { provider ->
                 ProviderOptionRow(provider = provider, onClick = { onSelect(provider) })
             }
@@ -1213,16 +1170,16 @@ private fun ProviderOptionRow(provider: ProviderId, onClick: () -> Unit) {
                 indication = null,
                 onClick = onClick,
             )
-            .padding(spacing.md),
+            .padding(horizontal = spacing.md, vertical = spacing.sm),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(spacing.md),
+        horizontalArrangement = Arrangement.spacedBy(spacing.sm),
     ) {
-        QdProviderAvatar(provider, size = 40.dp)
-        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        QdProviderAvatar(provider, size = 28.dp)
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
             Text(provider.displayName, style = typo.titleMedium, color = colors.textPrimary)
             Text(provider.subtitle(), style = typo.caption, color = colors.textTertiary)
         }
-        QdChevronRightIcon(tint = colors.textTertiary)
+        QdChevronRightIcon(tint = colors.textTertiary, size = 14.dp)
     }
 }
 
@@ -1305,7 +1262,7 @@ private fun UsageWindow.progressFill(mode: UsageDisplayMode): Color {
     return when {
         riskRatio >= 0.9 -> colors.danger
         riskRatio >= 0.7 -> colors.warning
-        else -> colors.success
+        else -> colors.meter
     }
 }
 

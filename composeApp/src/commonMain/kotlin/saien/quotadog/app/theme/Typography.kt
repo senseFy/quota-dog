@@ -3,12 +3,13 @@ package saien.quotadog.app.theme
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 
 /**
- * QuotaDog text styles. All sizes follow a 4-step modular scale and ship with explicit
- * line height + letter spacing so vertical rhythm survives translation and density changes.
+ * QuotaDog text styles. Sans for UI, serif for brand/display, mono for numeric quota values.
+ * Sizes stay compact for tool density while keeping explicit line height + letter spacing.
  */
 @Immutable
 data class QdTypography(
@@ -22,55 +23,73 @@ data class QdTypography(
     val numeric: TextStyle,
 )
 
-internal val QdDefaultTypography = QdTypography(
+internal fun qdTypography(
+    sans: FontFamily,
+    serif: FontFamily,
+    mono: FontFamily,
+): QdTypography = QdTypography(
     displayLarge = TextStyle(
-        fontSize = 28.sp,
-        lineHeight = 34.sp,
+        fontFamily = serif,
+        fontSize = 26.sp,
+        lineHeight = 30.sp,
         fontWeight = FontWeight.Bold,
-        letterSpacing = (-0.4).sp,
+        letterSpacing = (-0.3).sp,
     ),
     titleLarge = TextStyle(
-        fontSize = 20.sp,
-        lineHeight = 26.sp,
+        fontFamily = sans,
+        fontSize = 17.sp,
+        lineHeight = 22.sp,
         fontWeight = FontWeight.SemiBold,
-        letterSpacing = (-0.2).sp,
+        letterSpacing = (-0.15).sp,
     ),
     titleMedium = TextStyle(
-        fontSize = 16.sp,
-        lineHeight = 22.sp,
+        fontFamily = sans,
+        fontSize = 14.sp,
+        lineHeight = 18.sp,
         fontWeight = FontWeight.SemiBold,
         letterSpacing = 0.sp,
     ),
     bodyLarge = TextStyle(
-        fontSize = 15.sp,
-        lineHeight = 22.sp,
-        fontWeight = FontWeight.Normal,
-        letterSpacing = 0.1.sp,
-    ),
-    bodyMedium = TextStyle(
+        fontFamily = sans,
         fontSize = 14.sp,
         lineHeight = 20.sp,
         fontWeight = FontWeight.Normal,
-        letterSpacing = 0.1.sp,
+        letterSpacing = 0.sp,
+    ),
+    bodyMedium = TextStyle(
+        fontFamily = sans,
+        fontSize = 13.sp,
+        lineHeight = 18.sp,
+        fontWeight = FontWeight.Normal,
+        letterSpacing = 0.sp,
     ),
     labelLarge = TextStyle(
-        fontSize = 14.sp,
-        lineHeight = 18.sp,
+        fontFamily = sans,
+        fontSize = 13.sp,
+        lineHeight = 16.sp,
         fontWeight = FontWeight.SemiBold,
-        letterSpacing = 0.1.sp,
+        letterSpacing = 0.sp,
     ),
     caption = TextStyle(
+        fontFamily = sans,
+        fontSize = 11.sp,
+        lineHeight = 14.sp,
+        fontWeight = FontWeight.Medium,
+        letterSpacing = 0.1.sp,
+    ),
+    numeric = TextStyle(
+        fontFamily = mono,
         fontSize = 12.sp,
         lineHeight = 16.sp,
         fontWeight = FontWeight.Medium,
-        letterSpacing = 0.2.sp,
-    ),
-    numeric = TextStyle(
-        fontSize = 13.sp,
-        lineHeight = 18.sp,
-        fontWeight = FontWeight.Medium,
         letterSpacing = 0.sp,
     ),
+)
+
+internal val QdDefaultTypography = qdTypography(
+    sans = FontFamily.Default,
+    serif = FontFamily.Serif,
+    mono = FontFamily.Monospace,
 )
 
 internal val LocalQdTypography = staticCompositionLocalOf { QdDefaultTypography }

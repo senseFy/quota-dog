@@ -29,9 +29,8 @@ enum class QdButtonVariant { Primary, Secondary, Ghost, Danger }
 enum class QdButtonSize { Small, Medium }
 
 /**
- * Single button primitive used everywhere. Variant + size pick the surface, foreground and
- * paddings; pressed/hover are animated subtly (color + 1% scale) so interaction feels
- * physical without being noisy.
+ * Single button primitive used everywhere. Rectangular with small radius for tool density;
+ * pressed/hover are animated subtly (color + 1% scale).
  */
 @Composable
 fun QdButton(
@@ -53,9 +52,9 @@ fun QdButton(
 
     val (bgRest, bgHover, bgPressed, fg, borderColor) = when (variant) {
         QdButtonVariant.Primary -> Quintet(colors.primary, colors.primaryHover, colors.primaryPressed, colors.onPrimary, Color.Transparent)
-        QdButtonVariant.Secondary -> Quintet(colors.surface, colors.surfaceHover, colors.surfaceMuted, colors.textPrimary, colors.border)
-        QdButtonVariant.Ghost -> Quintet(Color.Transparent, colors.surfaceHover, colors.surfaceMuted, colors.textPrimary, Color.Transparent)
-        QdButtonVariant.Danger -> Quintet(colors.danger, Color(0xFFA83C3C), Color(0xFF8E2F2F), Color.White, Color.Transparent)
+        QdButtonVariant.Secondary -> Quintet(colors.surface, colors.surfaceHover.copy(alpha = 0.35f), colors.surfaceMuted.copy(alpha = 0.55f), colors.textPrimary, colors.border)
+        QdButtonVariant.Ghost -> Quintet(Color.Transparent, colors.surfaceHover.copy(alpha = 0.35f), colors.surfaceMuted.copy(alpha = 0.55f), colors.textPrimary, Color.Transparent)
+        QdButtonVariant.Danger -> Quintet(colors.danger, Color(0xFFB91C1C), Color(0xFF991B1B), Color.White, Color.Transparent)
     }
 
     val target = when {
@@ -64,15 +63,15 @@ fun QdButton(
         hovered -> bgHover
         else -> bgRest
     }
-    val animatedBg by animateColorAsState(target, animationSpec = tween(140))
-    val scale by animateFloatAsState(if (pressed && enabled) 0.98f else 1f, animationSpec = tween(120))
+    val animatedBg by animateColorAsState(target, animationSpec = tween(120))
+    val scale by animateFloatAsState(if (pressed && enabled) 0.98f else 1f, animationSpec = tween(100))
 
     val pad = when (size) {
-        QdButtonSize.Small -> PaddingValues(horizontal = spacing.lg, vertical = spacing.sm)
-        QdButtonSize.Medium -> PaddingValues(horizontal = spacing.xl, vertical = spacing.md)
+        QdButtonSize.Small -> PaddingValues(horizontal = spacing.md, vertical = spacing.xs)
+        QdButtonSize.Medium -> PaddingValues(horizontal = spacing.lg, vertical = spacing.sm)
     }
-    val minHeight = if (size == QdButtonSize.Small) 36.dp else 44.dp
-    val shape = QdTheme.shapes.pill
+    val minHeight = if (size == QdButtonSize.Small) 30.dp else 34.dp
+    val shape = QdTheme.shapes.sm
 
     Row(
         modifier = modifier

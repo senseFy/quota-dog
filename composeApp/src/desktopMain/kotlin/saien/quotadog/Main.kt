@@ -387,17 +387,17 @@ private fun QuotaDogTrayPanelContent(
             modifier = Modifier
                 .fillMaxSize()
                 .shadow(
-                    elevation = 24.dp,
-                    shape = QdTheme.shapes.xl,
+                    elevation = 12.dp,
+                    shape = QdTheme.shapes.lg,
                     clip = false,
-                    ambientColor = Color(0x33000000),
-                    spotColor = Color(0x33000000),
+                    ambientColor = Color(0x22000000),
+                    spotColor = Color(0x22000000),
                 )
-                .clip(QdTheme.shapes.xl)
+                .clip(QdTheme.shapes.lg)
                 .background(colors.backgroundElevated)
-                .border(1.dp, colors.border, QdTheme.shapes.xl)
-                .padding(spacing.xl),
-            verticalArrangement = Arrangement.spacedBy(spacing.lg),
+                .border(1.dp, colors.border, QdTheme.shapes.lg)
+                .padding(spacing.md),
+            verticalArrangement = Arrangement.spacedBy(spacing.md),
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -406,11 +406,11 @@ private fun QuotaDogTrayPanelContent(
             ) {
                 Column(
                     modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(spacing.xs),
+                    verticalArrangement = Arrangement.spacedBy(1.dp),
                 ) {
                     Text(
                         text = "QuotaDog",
-                        style = typo.titleLarge.copy(fontWeight = FontWeight.Bold),
+                        style = typo.titleLarge,
                         color = colors.textPrimary,
                     )
                     Text(
@@ -424,17 +424,17 @@ private fun QuotaDogTrayPanelContent(
                 QdGlassIconButton(
                     onClick = onRefresh,
                     enabled = refreshEnabled,
-                    diameter = 40.dp,
+                    diameter = 30.dp,
                 ) {
                     val rotation = rememberTrayRefreshRotation(active = refreshBusy)
                     QdRefreshIcon(
                         tint = colors.textSecondary,
-                        size = 18.dp,
+                        size = 15.dp,
                         modifier = Modifier.rotate(rotation),
                     )
                 }
-                QdGlassIconButton(onClick = onClose, diameter = 40.dp) {
-                    QdCloseIcon(tint = colors.textSecondary, size = 18.dp)
+                QdGlassIconButton(onClick = onClose, diameter = 30.dp) {
+                    QdCloseIcon(tint = colors.textSecondary, size = 15.dp)
                 }
             }
 
@@ -448,7 +448,7 @@ private fun QuotaDogTrayPanelContent(
                     modifier = Modifier
                         .weight(1f)
                         .verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(spacing.md),
+                    verticalArrangement = Arrangement.spacedBy(spacing.sm),
                 ) {
                     visibleAccounts.forEach { account ->
                         TrayAccountCard(
@@ -526,17 +526,17 @@ private fun TrayAccountCard(
     val windows = account.snapshot?.windows.orEmpty()
 
     QdCard(
-        padding = PaddingValues(spacing.md),
+        padding = PaddingValues(spacing.sm),
         background = colors.surface,
         elevated = false,
     ) {
-        Column(verticalArrangement = Arrangement.spacedBy(spacing.md)) {
+        Column(verticalArrangement = Arrangement.spacedBy(spacing.sm)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(spacing.sm),
             ) {
-                QdProviderAvatar(account.providerId, size = 28.dp)
+                QdProviderAvatar(account.providerId, size = 18.dp)
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = account.trayAccountTitle(emailPrivacyMode),
@@ -548,7 +548,7 @@ private fun TrayAccountCard(
                     Text(
                         text = account.trayStatusLabel(),
                         style = typo.caption,
-                        color = if (account.busy) colors.primary else colors.textTertiary,
+                        color = if (account.busy) colors.textSecondary else colors.textTertiary,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
@@ -559,9 +559,9 @@ private fun TrayAccountCard(
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clip(QdTheme.shapes.md)
-                        .background(colors.surfaceMuted)
-                        .padding(horizontal = spacing.md, vertical = spacing.sm),
+                        .clip(QdTheme.shapes.sm)
+                        .background(colors.surfaceMuted.copy(alpha = 0.55f))
+                        .padding(horizontal = spacing.sm, vertical = spacing.xs),
                 ) {
                     Text(
                         text = account.message ?: "No usage data yet",
@@ -570,7 +570,7 @@ private fun TrayAccountCard(
                     )
                 }
             } else {
-                Column(verticalArrangement = Arrangement.spacedBy(spacing.sm)) {
+                Column(verticalArrangement = Arrangement.spacedBy(spacing.xs)) {
                     windows.forEach { window ->
                         TrayUsageWindowRow(window, usageDisplayMode)
                     }
@@ -584,69 +584,43 @@ private fun TrayAccountCard(
 private fun TrayUsageWindowRow(window: UsageWindow, displayMode: UsageDisplayMode) {
     val colors = QdTheme.colors
     val typo = QdTheme.typography
-    val spacing = QdTheme.spacing
     val usedPct = (window.usedRatio * 100).roundToInt().coerceIn(0, 100)
     val remainingPct = (window.remainingRatio * 100).roundToInt().coerceIn(0, 100)
     val primaryPct = when (displayMode) {
         UsageDisplayMode.Used -> usedPct
         UsageDisplayMode.Remaining -> remainingPct
     }
-    val secondaryPct = when (displayMode) {
-        UsageDisplayMode.Used -> remainingPct
-        UsageDisplayMode.Remaining -> usedPct
-    }
     val primaryLabel = when (displayMode) {
         UsageDisplayMode.Used -> "$primaryPct% used"
         UsageDisplayMode.Remaining -> "$primaryPct% left"
     }
-    val secondaryLabel = when (displayMode) {
-        UsageDisplayMode.Used -> "$secondaryPct% left"
-        UsageDisplayMode.Remaining -> "$secondaryPct% used"
-    }
     val fill = window.trayUsageFill()
 
-    Column(verticalArrangement = Arrangement.spacedBy(spacing.xs)) {
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
                 text = window.trayWindowLabel(),
-                style = typo.caption.copy(fontWeight = FontWeight.Bold),
-                color = colors.textPrimary,
+                style = typo.caption,
+                color = colors.textSecondary,
                 modifier = Modifier.weight(1f),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
             Text(
-                text = primaryLabel,
-                style = typo.caption,
+                text = "$primaryLabel · ${window.trayResetLabel()}",
+                style = typo.numeric.copy(fontWeight = FontWeight.SemiBold),
                 color = fill,
                 maxLines = 1,
             )
         }
         QdProgressBar(
             progress = primaryPct / 100f,
-            height = 6.dp,
+            height = 3.dp,
             fill = fill,
         )
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                text = secondaryLabel,
-                style = typo.caption,
-                color = colors.textTertiary,
-                modifier = Modifier.weight(1f),
-            )
-            Text(
-                text = "resets ${window.trayResetLabel()}",
-                style = typo.caption,
-                color = colors.textTertiary,
-                maxLines = 1,
-            )
-        }
     }
 }
 
@@ -811,7 +785,7 @@ private fun UsageWindow.trayUsageFill(): Color {
     return when {
         usedRatio >= 0.9 -> colors.danger
         usedRatio >= 0.7 -> colors.warning
-        else -> colors.success
+        else -> colors.meter
     }
 }
 

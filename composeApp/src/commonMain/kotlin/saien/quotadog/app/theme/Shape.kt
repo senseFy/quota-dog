@@ -17,13 +17,13 @@ data class QdShapes(
 )
 
 internal val QdDefaultShapes = QdShapes(
-    xs = RoundedCornerShape(6.dp),
-    sm = RoundedCornerShape(10.dp),
-    md = RoundedCornerShape(14.dp),
-    lg = RoundedCornerShape(18.dp),
-    xl = RoundedCornerShape(24.dp),
+    xs = RoundedCornerShape(4.dp),
+    sm = RoundedCornerShape(6.dp),
+    md = RoundedCornerShape(8.dp),
+    lg = RoundedCornerShape(10.dp),
+    xl = RoundedCornerShape(12.dp),
     pill = RoundedCornerShape(percent = 50),
-    sheet = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
+    sheet = RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp),
 )
 
 internal val LocalQdShapes = staticCompositionLocalOf { QdDefaultShapes }

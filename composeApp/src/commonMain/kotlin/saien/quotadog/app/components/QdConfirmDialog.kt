@@ -7,6 +7,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -64,14 +65,15 @@ fun QdConfirmDialog(
         ) {
             Box(
                 modifier = Modifier
-                    .padding(spacing.xxl)
+                    .padding(spacing.xl)
                     .widthIn(max = 380.dp)
                     .fillMaxWidth()
-                    .clip(QdTheme.shapes.lg)
+                    .clip(QdTheme.shapes.md)
                     .background(colors.surface)
-                    .padding(spacing.xxl),
+                    .border(1.dp, colors.border, QdTheme.shapes.md)
+                    .padding(spacing.xl),
             ) {
-                Column(verticalArrangement = Arrangement.spacedBy(spacing.md)) {
+                Column(verticalArrangement = Arrangement.spacedBy(spacing.sm)) {
                     Text(title, style = QdTheme.typography.titleLarge, color = colors.textPrimary)
                     Text(message, style = QdTheme.typography.bodyMedium, color = colors.textSecondary)
                     Row(

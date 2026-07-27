@@ -8,6 +8,7 @@ import androidx.compose.material.Typography
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.ReadOnlyComposable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.Color
 
 /** Single entry point - `QdTheme.colors`, `QdTheme.spacing`, etc. */
@@ -44,7 +45,10 @@ fun QuotaDogTheme(
     content: @Composable () -> Unit,
 ) {
     val qd = if (darkTheme) QdDarkColors else QdLightColors
-    val typo = QdDefaultTypography
+    val sans = rememberQdSansFamily()
+    val serif = rememberQdSerifFamily()
+    val mono = rememberQdMonoFamily()
+    val typo = remember(sans, serif, mono) { qdTypography(sans, serif, mono) }
     val shapes = QdDefaultShapes
 
     val materialColors = Colors(
@@ -64,7 +68,7 @@ fun QuotaDogTheme(
     )
 
     val materialTypography = Typography(
-        defaultFontFamily = androidx.compose.ui.text.font.FontFamily.Default,
+        defaultFontFamily = sans,
         h4 = typo.displayLarge,
         h5 = typo.titleLarge,
         h6 = typo.titleMedium,

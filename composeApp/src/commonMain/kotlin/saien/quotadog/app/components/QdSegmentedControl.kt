@@ -5,6 +5,7 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
@@ -36,8 +37,7 @@ import saien.quotadog.app.theme.QdTheme
 import kotlin.math.roundToInt
 
 /**
- * Pill-shaped segmented selector. Animates the active segment background. The whole control
- * shares one rounded outer track; pressing a segment swaps the highlighted index.
+ * Rectangular segmented selector (tab-like). Animates the active segment background.
  */
 @Composable
 fun <T> QdSegmentedControl(
@@ -58,6 +58,7 @@ fun <T> QdSegmentedControl(
     val indicatorHeight = remember { Animatable(0f) }
     var indicatorInitialized by remember { mutableStateOf(false) }
     val selectedBounds = segmentBounds[selectedIndex]
+    val shape = QdTheme.shapes.sm
 
     LaunchedEffect(selectedBounds) {
         val bounds = selectedBounds ?: return@LaunchedEffect
@@ -70,7 +71,7 @@ fun <T> QdSegmentedControl(
         }
 
         val animationSpec = tween<Float>(
-            durationMillis = 220,
+            durationMillis = 180,
             easing = FastOutSlowInEasing,
         )
         launch { indicatorX.animateTo(bounds.x.toFloat(), animationSpec) }
@@ -81,9 +82,10 @@ fun <T> QdSegmentedControl(
     Box(
         modifier = modifier
             .then(if (fillWidth) Modifier.fillMaxWidth() else Modifier)
-            .clip(QdTheme.shapes.pill)
-            .background(colors.surfaceMuted)
-            .padding(4.dp),
+            .clip(shape)
+            .background(colors.surfaceMuted.copy(alpha = 0.55f))
+            .border(1.dp, colors.border, shape)
+            .padding(2.dp),
     ) {
         if (indicatorInitialized && selectedBounds != null) {
             Box(
@@ -91,8 +93,9 @@ fun <T> QdSegmentedControl(
                     .offset { IntOffset(indicatorX.value.roundToInt(), 0) }
                     .width(with(density) { indicatorWidth.value.toDp() })
                     .height(with(density) { indicatorHeight.value.toDp() })
-                    .clip(QdTheme.shapes.pill)
-                    .background(colors.surface),
+                    .clip(QdTheme.shapes.xs)
+                    .background(colors.surface)
+                    .border(1.dp, colors.border, QdTheme.shapes.xs),
             )
         }
 
@@ -103,12 +106,12 @@ fun <T> QdSegmentedControl(
                 val active = value == selected
                 val targetFg by animateColorAsState(
                     if (active) colors.textPrimary else colors.textSecondary,
-                    animationSpec = tween(160),
+                    animationSpec = tween(140),
                 )
                 Box(
                     modifier = Modifier
                         .then(if (fillWidth) Modifier.weight(1f) else Modifier)
-                        .heightIn(min = 32.dp)
+                        .heightIn(min = 28.dp)
                         .onGloballyPositioned { coordinates ->
                             val position = coordinates.positionInParent()
                             val bounds = SegmentBounds(
@@ -120,13 +123,13 @@ fun <T> QdSegmentedControl(
                                 segmentBounds[index] = bounds
                             }
                         }
-                        .clip(QdTheme.shapes.pill)
+                        .clip(QdTheme.shapes.xs)
                         .clickable(
                             interactionSource = remember { MutableInteractionSource() },
                             indication = null,
                             onClick = { onSelect(value) },
                         )
-                        .padding(horizontal = spacing.md, vertical = 6.dp),
+                        .padding(horizontal = spacing.md, vertical = 5.dp),
                     contentAlignment = Alignment.Center,
                 ) {
                     Text(label, style = typo.labelLarge, color = targetFg)

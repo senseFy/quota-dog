@@ -399,7 +399,7 @@ private fun createAwtTrayImage(): Image {
     val g = image.createGraphics()
     try {
         g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
-        g.color = AwtColor(0x2F, 0x7D, 0x5B)
+        g.color = AwtColor(0x5A, 0x7D, 0x6C)
         g.stroke = BasicStroke(3f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND)
         g.drawArc(7, 8, 18, 18, 200, 140)
         g.drawLine(16, 18, 22, 13)

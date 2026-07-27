@@ -7,6 +7,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
@@ -85,17 +86,18 @@ fun QdBottomSheet(
                     )
                     .widthIn(max = if (isDesktop) 480.dp else 560.dp)
                     .fillMaxWidth()
-                    .clip(QdTheme.shapes.xl)
-                    .background(colors.backgroundElevated),
+                    .clip(QdTheme.shapes.lg)
+                    .background(colors.backgroundElevated)
+                    .border(1.dp, colors.border, QdTheme.shapes.lg),
             ) {
-                Column(modifier = Modifier.padding(spacing.xxl)) {
+                Column(modifier = Modifier.padding(spacing.xl)) {
                     if (!isDesktop) {
                         Box(
                             modifier = Modifier
                                 .align(Alignment.CenterHorizontally)
-                                .padding(bottom = spacing.lg)
-                                .size(width = 36.dp, height = 4.dp)
-                                .clip(QdTheme.shapes.pill)
+                                .padding(bottom = spacing.md)
+                                .size(width = 32.dp, height = 3.dp)
+                                .clip(QdTheme.shapes.xs)
                                 .background(colors.borderStrong),
                         )
                     }

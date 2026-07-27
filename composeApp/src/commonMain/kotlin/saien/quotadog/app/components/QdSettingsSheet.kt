@@ -7,6 +7,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -123,14 +124,15 @@ fun QdSettingsSheet(
                         top = spacing.md,
                         bottom = spacing.md + if (isDesktop) 0.dp else safeBottom,
                     )
-                    .clip(QdTheme.shapes.xl)
-                    .background(colors.backgroundElevated),
+                    .clip(QdTheme.shapes.lg)
+                    .background(colors.backgroundElevated)
+                    .border(1.dp, colors.border, QdTheme.shapes.lg),
             ) {
                 // Header row.
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(start = spacing.xxl, end = spacing.lg, top = spacing.xl, bottom = spacing.lg),
+                        .padding(start = spacing.xl, end = spacing.md, top = spacing.md, bottom = spacing.md),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
@@ -139,15 +141,15 @@ fun QdSettingsSheet(
                         color = colors.textPrimary,
                         modifier = Modifier.weight(1f),
                     )
-                    QdGlassIconButton(onClick = onDismiss, diameter = 44.dp) {
+                    QdGlassIconButton(onClick = onDismiss, diameter = 32.dp) {
                         if (isDesktop) {
-                            QdCloseIcon(tint = colors.textSecondary, size = 20.dp)
+                            QdCloseIcon(tint = colors.textSecondary, size = 16.dp)
                         } else {
                             // Re-use the chevron rotated 90 degrees as a "close down" affordance.
                             QdChevronRightIcon(
                                 modifier = Modifier.rotate(90f),
                                 tint = colors.textSecondary,
-                                size = 20.dp,
+                                size = 16.dp,
                             )
                         }
                     }
@@ -155,7 +157,7 @@ fun QdSettingsSheet(
 
                 Box(
                     modifier = Modifier
-                        .padding(horizontal = spacing.xxl)
+                        .padding(horizontal = spacing.xl)
                         .fillMaxWidth()
                         .height(1.dp)
                         .background(colors.border),
@@ -164,8 +166,8 @@ fun QdSettingsSheet(
                 Column(
                     modifier = Modifier
                         .verticalScroll(rememberScrollState())
-                        .padding(spacing.xxl),
-                    verticalArrangement = Arrangement.spacedBy(spacing.xxl),
+                        .padding(spacing.xl),
+                    verticalArrangement = Arrangement.spacedBy(spacing.lg),
                 ) {
                     // Appearance.
                     QdSettingsRow(
