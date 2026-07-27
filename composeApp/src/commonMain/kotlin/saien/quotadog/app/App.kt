@@ -97,6 +97,7 @@ import saien.quotadog.app.components.QdSnackbarTone
 import saien.quotadog.app.components.rememberQdSnackbarController
 import saien.quotadog.app.theme.QdTheme
 import saien.quotadog.app.theme.QuotaDogTheme
+import saien.quotadog.app.theme.rememberSystemDarkTheme
 
 @Composable
 fun App(
@@ -125,7 +126,7 @@ fun App(
     manageBackgroundEffects: Boolean = true,
 ) {
     val themeMode by preferences.themeMode.collectAsState()
-    val systemDark = androidx.compose.foundation.isSystemInDarkTheme()
+    val systemDark = rememberSystemDarkTheme()
     val effectiveDark = when (themeMode) {
         ThemeMode.System -> systemDark
         ThemeMode.Light -> false

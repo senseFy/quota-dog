@@ -8,7 +8,6 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -59,6 +58,8 @@ import saien.quotadog.app.components.QdProviderAvatar
 import saien.quotadog.app.components.QdRefreshIcon
 import saien.quotadog.app.theme.QdTheme
 import saien.quotadog.app.theme.QuotaDogTheme
+import saien.quotadog.app.theme.SystemThemeRefresh
+import saien.quotadog.app.theme.rememberSystemDarkTheme
 import java.awt.Frame
 import java.awt.event.WindowAdapter
 import java.awt.event.WindowEvent
@@ -137,6 +138,7 @@ fun main() = application {
                 focusToken = mainWindowFocusToken,
                 onRestore = { windowState.isMinimized = false },
             )
+            RefreshSystemThemeOnWindowResume(window)
             App(
                 tokenStore = tokenStore,
                 usageSnapshotStore = usageSnapshotStore,
@@ -164,6 +166,25 @@ private fun BringMainWindowToFront(
         window.isVisible = true
         window.toFront()
         window.requestFocus()
+        // Tray "Open" / re-show is a resume path for System theme.
+        SystemThemeRefresh.request()
+    }
+}
+
+/** Re-query OS appearance when the main window is shown or becomes active again. */
+@Composable
+private fun RefreshSystemThemeOnWindowResume(window: AwtWindow) {
+    DisposableEffect(window) {
+        val listener = object : WindowAdapter() {
+            override fun windowActivated(event: WindowEvent?) {
+                SystemThemeRefresh.request()
+            }
+        }
+        window.addWindowListener(listener)
+        SystemThemeRefresh.request()
+        onDispose {
+            window.removeWindowListener(listener)
+        }
     }
 }
 
@@ -179,7 +200,7 @@ private fun QuotaDogTray(
     val emailPrivacyMode by preferences.emailPrivacyMode.collectAsState()
     val usageDisplayMode by preferences.usageDisplayMode.collectAsState()
     val themeMode by preferences.themeMode.collectAsState()
-    val systemDark = isSystemInDarkTheme()
+    val systemDark = rememberSystemDarkTheme()
     val darkTheme = when (themeMode) {
         ThemeMode.System -> systemDark
         ThemeMode.Light -> false
@@ -221,6 +242,8 @@ private fun QuotaDogTray(
     }
 
     val maybeRefreshOnOpen = {
+        // Menu-bar / tray open is the other resume path for System theme.
+        SystemThemeRefresh.request()
         if (shouldAutoRefreshOnTrayOpen(refreshableAccounts)) {
             store.startRefreshAll()
         }
@@ -315,7 +338,7 @@ private fun QuotaDogTrayPanel(
     onQuit: () -> Unit,
 ) {
     val themeMode by preferences.themeMode.collectAsState()
-    val systemDark = isSystemInDarkTheme()
+    val systemDark = rememberSystemDarkTheme()
     val effectiveDark = when (themeMode) {
         ThemeMode.System -> systemDark
         ThemeMode.Light -> false
