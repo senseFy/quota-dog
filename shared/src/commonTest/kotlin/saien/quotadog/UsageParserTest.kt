@@ -15,6 +15,20 @@ class UsageParserTest {
     }
 
     @Test
+    fun normalizesKnownPercentFieldsIncludingOnePercent() {
+        // Codex/Grok/Cursor percent fields are 0–100: 1 means 1%, not full utilization.
+        // The ambiguous normalizeUtilization(1.0) == 1.0 heuristic must not be used on them.
+        assertEquals(0.01, normalizePercent(1.0))
+        assertEquals(0.0, normalizePercent(0.0))
+        assertEquals(0.22, normalizePercent(22.0))
+        assertEquals(0.50, normalizePercent(50.0))
+        assertEquals(1.0, normalizePercent(100.0))
+        assertEquals(1.0, normalizePercent(120.0))
+        assertEquals(0.0, normalizePercent(-1.0))
+        assertEquals(1.0, normalizeUtilization(1.0))
+    }
+
+    @Test
     fun preservesControlledProviderMessages() {
         val error = ProviderException(AuthState.RateLimited, "Codex usage was rate limited", 429)
 

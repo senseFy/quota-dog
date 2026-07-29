@@ -595,7 +595,8 @@ class QuotaDogClient(
                 UsageWindow(
                     id = "credits",
                     label = label,
-                    usedRatio = normalizeUtilization(billing.usedPercent),
+                    // Grok billing usedPercent is 0–100 (see GrokBillingTest: 50.0f => 50%).
+                    usedRatio = normalizePercent(billing.usedPercent),
                     resetsAt = billing.resetsAt,
                     durationSeconds = durationSeconds,
                 )
@@ -1280,7 +1281,8 @@ private fun parseCodexWindow(id: String, element: JsonElement?): UsageWindow? {
     return UsageWindow(
         id = id,
         label = label,
-        usedRatio = normalizeUtilization(used),
+        // Codex reports used_percent on a 0–100 scale (1 means 1%, not full).
+        usedRatio = normalizePercent(used),
         resetsAt = resetAt,
         durationSeconds = seconds?.toLong()
     )
@@ -1309,6 +1311,24 @@ private fun ProviderUsageSnapshot.asCachedSnapshot(authState: AuthState): Provid
     )
 }
 
+/**
+ * Normalize a value known to be a 0–100 percent into a 0–1 ratio.
+ *
+ * Prefer this for provider fields that are documented/named as percent
+ * (`used_percent`, `usedPercent`, `totalPercentUsed`, etc.). Using
+ * [normalizeUtilization] on those fields mis-classifies 1% as 100%.
+ */
+fun normalizePercent(value: Double): Double {
+    return (value / 100.0).coerceIn(0.0, 1.0)
+}
+
+/**
+ * Normalize a value that may already be a 0–1 ratio or a 0–100 percent.
+ *
+ * Values ≤ 1 are treated as ratios. Prefer [normalizePercent] when the
+ * field is known to be percent-scaled, since a true 1% (value `1`) cannot
+ * be distinguished from a full ratio here.
+ */
 fun normalizeUtilization(value: Double): Double {
     return (if (value > 1.0) value / 100.0 else value).coerceIn(0.0, 1.0)
 }

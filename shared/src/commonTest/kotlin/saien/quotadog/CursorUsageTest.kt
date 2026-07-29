@@ -103,6 +103,28 @@ class CursorUsageParserTest {
     }
 
     @Test
+    fun parsesOnePercentPlanUsageAsOnePercent() {
+        val snapshot = CursorUsageFetcher.parseUsageSummaryJson(
+            """
+            {
+              "membershipType": "pro",
+              "isUnlimited": false,
+              "billingCycleEnd": "2026-07-01T00:00:00.000Z",
+              "individualUsage": {
+                "plan": {
+                  "enabled": true,
+                  "totalPercentUsed": 1.0
+                }
+              }
+            }
+            """.trimIndent()
+        )
+
+        val plan = snapshot.windows.first { it.id == "plan-usage" }
+        assertEquals(0.01, plan.usedRatio, 0.000001)
+    }
+
+    @Test
     fun parsesUnlimitedPlan() {
         val snapshot = CursorUsageFetcher.parseUsageSummaryJson(
             """

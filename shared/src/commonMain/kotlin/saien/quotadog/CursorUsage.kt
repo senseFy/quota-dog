@@ -134,7 +134,7 @@ internal object CursorUsageFetcher {
 
     private fun planUsedRatio(plan: kotlinx.serialization.json.JsonObject): Double {
         val totalPercentUsed = plan["totalPercentUsed"]?.jsonPrimitive?.doubleOrNull
-        if (totalPercentUsed != null) return normalizeUtilization(totalPercentUsed)
+        if (totalPercentUsed != null) return normalizePercent(totalPercentUsed)
         val used = plan["used"]?.jsonPrimitive?.intOrNull
         val limit = plan["limit"]?.jsonPrimitive?.intOrNull
         if (used != null && limit != null && limit > 0) {
