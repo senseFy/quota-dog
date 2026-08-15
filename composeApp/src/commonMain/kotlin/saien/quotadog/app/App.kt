@@ -63,6 +63,8 @@ import saien.quotadog.EmailPrivacyMode
 import saien.quotadog.PlatformTokenStore
 import saien.quotadog.ProviderId
 import saien.quotadog.availableProviders
+import saien.quotadog.grokAuthFileHint
+import saien.quotadog.grokCliImportAvailable
 import saien.quotadog.QuotaDogClient
 import saien.quotadog.QuotaDogStore
 import saien.quotadog.SettingsUsageSnapshotStore
@@ -178,6 +180,7 @@ private fun QuotaDogScreen(
     val cloudSyncState by cloudSync.state.collectAsState()
     val callbackInputs = remember { mutableStateMapOf<AccountKey, String>() }
     var showProviderPicker by remember { mutableStateOf(false) }
+    var showGrokMethodPicker by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
     var pendingDelete by remember { mutableStateOf<AccountKey?>(null) }
     var showResetCloudSyncConfirm by remember { mutableStateOf(false) }
@@ -293,14 +296,43 @@ private fun QuotaDogScreen(
         ) {
             ProviderPickerContent(
                 onSelect = { provider ->
-                    showProviderPicker = false
-                    store.startLogin(provider)
+                    if (provider == ProviderId.GROK && grokCliImportAvailable()) {
+                        showProviderPicker = false
+                        showGrokMethodPicker = true
+                    } else {
+                        showProviderPicker = false
+                        store.startLogin(provider)
+                        snackbar.show(
+                            text = when (provider) {
+                                ProviderId.GROK -> "Opening xAI sign-in..."
+                                ProviderId.CURSOR -> "Importing Cursor app credentials..."
+                                else -> "Opening browser for ${provider.displayName}..."
+                            },
+                            tone = QdSnackbarTone.Info,
+                        )
+                    }
+                },
+            )
+        }
+
+        QdBottomSheet(
+            visible = showGrokMethodPicker,
+            onDismiss = { showGrokMethodPicker = false },
+        ) {
+            GrokMethodPickerContent(
+                onSelectOauth = {
+                    showGrokMethodPicker = false
+                    store.startGrokDeviceLogin()
                     snackbar.show(
-                        text = when (provider) {
-                            ProviderId.GROK -> "Importing Grok CLI credentials..."
-                            ProviderId.CURSOR -> "Importing Cursor app credentials..."
-                            else -> "Opening browser for ${provider.displayName}..."
-                        },
+                        text = "Opening xAI sign-in...",
+                        tone = QdSnackbarTone.Info,
+                    )
+                },
+                onSelectCliImport = {
+                    showGrokMethodPicker = false
+                    store.startImportGrok()
+                    snackbar.show(
+                        text = "Importing Grok CLI credentials...",
                         tone = QdSnackbarTone.Info,
                     )
                 },
@@ -569,6 +601,7 @@ private fun DesktopSummaryRow(
     val spacing = QdTheme.spacing
     val needsAction = accounts.count { account ->
         account.loginStart != null ||
+            account.deviceLogin != null ||
             account.authState == AuthState.TokenExpired ||
             account.authState == AuthState.Unauthorized ||
             account.authState == AuthState.RequiresRelogin ||
@@ -730,7 +763,7 @@ private fun AccountCard(
                         expanded = menuExpanded,
                         onDismissRequest = { menuExpanded = false },
                     ) {
-                        if (state.loginStart != null) {
+                        if (state.loginStart != null || state.deviceLogin != null) {
                             DropdownMenuItem(onClick = {
                                 menuExpanded = false
                                 onReopenLogin()
@@ -755,14 +788,43 @@ private fun AccountCard(
                 }
             } else {
                 InlineStatus(
-                    text = if (state.loginStart == null) {
-                        "No usage data yet - tap refresh to fetch the latest."
-                    } else if (state.busy) {
-                        "Authorization page opened - waiting for the automatic callback."
-                    } else {
-                        "Automatic callback not received. Use the manual fallback below."
+                    text = when {
+                        state.deviceLogin != null && state.busy ->
+                            "Approve access in the browser, then return here."
+                        state.deviceLogin != null ->
+                            "xAI sign-in is waiting. Reopen the authorization page or sign in again."
+                        state.loginStart == null ->
+                            "No usage data yet - tap refresh to fetch the latest."
+                        state.busy ->
+                            "Authorization page opened - waiting for the automatic callback."
+                        else ->
+                            "Automatic callback not received. Use the manual fallback below."
                     },
                 )
+            }
+
+            state.deviceLogin?.let { device ->
+                Column(verticalArrangement = Arrangement.spacedBy(spacing.sm)) {
+                    Text(
+                        "Code ${device.userCode}",
+                        style = typo.titleMedium,
+                        color = colors.textPrimary,
+                    )
+                    Text(
+                        device.authorizationUrl,
+                        style = typo.caption,
+                        color = colors.textTertiary,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    if (!state.busy) {
+                        QdButton(
+                            text = "Open auth page",
+                            onClick = onReopenLogin,
+                            size = QdButtonSize.Small,
+                        )
+                    }
+                }
             }
 
             state.loginStart?.let {
@@ -952,7 +1014,16 @@ private fun AccountStatusRow(
     val colors = QdTheme.colors
     val typo = QdTheme.typography
     val spacing = QdTheme.spacing
+    val deviceLogin = state.deviceLogin
     val status = when {
+        deviceLogin != null -> AccountStatusUi(
+            title = "Waiting for sign-in",
+            message = state.message ?: "Approve access in the browser. If asked, enter ${deviceLogin.userCode}.",
+            bg = colors.surfaceMuted,
+            fg = colors.textSecondary,
+            action = AccountStatusAction.ReopenLogin,
+            actionLabel = "Open auth page",
+        )
         state.busy -> AccountStatusUi(
             title = "Syncing",
             message = state.message ?: "Refreshing account data...",
@@ -1054,10 +1125,13 @@ private fun ProviderPickerContent(onSelect: (ProviderId) -> Unit) {
     val typo = QdTheme.typography
     val spacing = QdTheme.spacing
     val providers = availableProviders()
-    val description = if (ProviderId.GROK in providers || ProviderId.CURSOR in providers) {
-        "Choose a provider. Codex and Claude use browser OAuth; Grok and Cursor import local credentials on desktop."
-    } else {
-        "Choose a provider - we'll open the browser for OAuth and finish sign-in here."
+    val description = when {
+        ProviderId.CURSOR in providers && grokCliImportAvailable() ->
+            "Choose a provider. Codex, Claude, and Grok sign in through a browser. Grok can also import the local CLI; Cursor imports the local app."
+        ProviderId.GROK in providers ->
+            "Choose a provider. Codex, Claude, and Grok open a browser to sign in."
+        else ->
+            "Choose a provider - we'll open the browser for OAuth and finish sign-in here."
     }
     Column(verticalArrangement = Arrangement.spacedBy(spacing.lg)) {
         Column(verticalArrangement = Arrangement.spacedBy(spacing.xs)) {
@@ -1073,6 +1147,73 @@ private fun ProviderPickerContent(onSelect: (ProviderId) -> Unit) {
                 ProviderOptionRow(provider = provider, onClick = { onSelect(provider) })
             }
         }
+    }
+}
+
+@Composable
+private fun GrokMethodPickerContent(
+    onSelectOauth: () -> Unit,
+    onSelectCliImport: () -> Unit,
+) {
+    val colors = QdTheme.colors
+    val typo = QdTheme.typography
+    val spacing = QdTheme.spacing
+    Column(verticalArrangement = Arrangement.spacedBy(spacing.lg)) {
+        Column(verticalArrangement = Arrangement.spacedBy(spacing.xs)) {
+            Text("Add Grok", style = typo.titleLarge, color = colors.textPrimary)
+            Text(
+                "Sign in with xAI, or import credentials from the Grok CLI on this computer.",
+                style = typo.bodyMedium,
+                color = colors.textSecondary,
+            )
+        }
+        Column(verticalArrangement = Arrangement.spacedBy(spacing.sm)) {
+            GrokMethodOptionRow(
+                title = "Sign in with xAI",
+                subtitle = "Same device-code login as Grok CLI and CLI Proxy API",
+                onClick = onSelectOauth,
+            )
+            GrokMethodOptionRow(
+                title = "Import from Grok CLI",
+                subtitle = "Read credentials from ${grokAuthFileHint()}",
+                onClick = onSelectCliImport,
+            )
+        }
+    }
+}
+
+@Composable
+private fun GrokMethodOptionRow(
+    title: String,
+    subtitle: String,
+    onClick: () -> Unit,
+) {
+    val colors = QdTheme.colors
+    val typo = QdTheme.typography
+    val spacing = QdTheme.spacing
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    val bg = if (hovered) colors.surfaceHover else colors.surface
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(QdTheme.shapes.md)
+            .background(bg)
+            .border(1.dp, colors.border, QdTheme.shapes.md)
+            .clickable(
+                interactionSource = interaction,
+                indication = null,
+                onClick = onClick,
+            )
+            .padding(spacing.md),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(spacing.md),
+    ) {
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(title, style = typo.titleMedium, color = colors.textPrimary)
+            Text(subtitle, style = typo.caption, color = colors.textTertiary)
+        }
+        QdChevronRightIcon(tint = colors.textTertiary)
     }
 }
 
@@ -1113,6 +1254,7 @@ private fun AccountUiState.shouldShowAccount(): Boolean {
         (authState != AuthState.NotConfigured && authState != AuthState.Unknown) ||
         snapshot != null ||
         loginStart != null ||
+        deviceLogin != null ||
         busy
 }
 
@@ -1166,7 +1308,7 @@ private fun String.maskEmailPlain(): String {
 private fun ProviderId.subtitle(): String = when (this) {
     ProviderId.CODEX -> "OpenAI Codex / ChatGPT usage"
     ProviderId.CLAUDE_CODE -> "Anthropic Claude Code usage"
-    ProviderId.GROK -> "Grok Build / SuperGrok credits (desktop)"
+    ProviderId.GROK -> "Grok Build / SuperGrok credits"
     ProviderId.CURSOR -> "Cursor plan / on-demand usage (desktop)"
 }
 

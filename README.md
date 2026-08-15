@@ -10,7 +10,7 @@ QuotaDog is built with Kotlin Multiplatform and Compose Multiplatform, with app 
 
 The app currently focuses on a small workflow:
 
-- Sign in to Codex or Claude Code through browser-based OAuth, import Grok credentials from the Grok CLI on desktop, or import Cursor credentials from the local Cursor app on desktop.
+- Sign in to Codex or Claude Code through browser-based OAuth, sign in to Grok with xAI device-code OAuth (or import Grok CLI credentials on desktop), or import Cursor credentials from the local Cursor app on desktop.
 - View usage windows, quota progress, and reset timing.
 - Refresh accounts, remove local account data, and optionally mask account emails in the UI.
 - Optionally sync encrypted account tokens, cached usage, and preferences through a user-provided Dropbox app folder.

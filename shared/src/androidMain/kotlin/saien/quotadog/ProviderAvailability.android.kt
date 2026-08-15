@@ -3,16 +3,19 @@ package saien.quotadog
 actual fun availableProviders(): List<ProviderId> = listOf(
     ProviderId.CODEX,
     ProviderId.CLAUDE_CODE,
+    ProviderId.GROK,
 )
 
 actual fun loadGrokCredentialsFromCli(): OAuthTokenBundle {
     throw ProviderException(
         AuthState.NotConfigured,
-        "Grok is only available on the desktop app."
+        "Grok CLI import is only available on the desktop app. Sign in with xAI instead."
     )
 }
 
 actual fun grokAuthFileHint(): String = "~/.grok/auth.json"
+
+actual fun grokCliImportAvailable(): Boolean = false
 
 actual fun loadCursorCredentialsFromLocalApp(): OAuthTokenBundle {
     throw ProviderException(

@@ -14,6 +14,8 @@ import kotlinx.datetime.Instant
 internal data class GrokBillingSnapshot(
     val usedPercent: Double,
     val resetsAt: Instant?,
+    val periodType: String? = null,
+    val subscriptionTier: String? = null,
 )
 
 internal object GrokBillingFetcher {
@@ -44,7 +46,7 @@ internal object GrokBillingFetcher {
         if (statusCode == HttpStatusCode.Unauthorized.value || statusCode == HttpStatusCode.Forbidden.value) {
             throw ProviderException(
                 AuthState.RequiresRelogin,
-                "Grok billing rejected credentials. Run `grok login` to refresh xAI auth.",
+                "Grok billing rejected credentials. Sign in with xAI again.",
                 statusCode,
             )
         }
@@ -133,7 +135,7 @@ internal object GrokBillingFetcher {
         if (isAuthenticationFailure(status, message)) {
             throw ProviderException(
                 AuthState.RequiresRelogin,
-                "Grok billing rejected credentials. Run `grok login` to refresh xAI auth.",
+                "Grok billing rejected credentials. Sign in with xAI again.",
             )
         }
         throw ProviderException(AuthState.Error, "Grok billing RPC failed with status $status: $message")
@@ -325,7 +327,16 @@ private class ProtobufScan {
     }
 }
 
-internal fun grokCreditsWindowLabel(resetsAt: Instant?, now: Instant = Clock.System.now()): String {
+internal fun grokCreditsWindowLabel(
+    resetsAt: Instant?,
+    now: Instant = Clock.System.now(),
+    periodType: String? = null,
+): String {
+    val type = periodType.orEmpty().uppercase()
+    when {
+        type.contains("WEEKLY") -> return "Weekly credits"
+        type.contains("MONTHLY") -> return "Monthly credits"
+    }
     val resetAtMillis = resetsAt?.toEpochMilliseconds() ?: return "Credits"
     val remainingMillis = (resetAtMillis - now.toEpochMilliseconds()).coerceAtLeast(0)
     return when {

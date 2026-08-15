@@ -32,6 +32,8 @@ actual fun loadGrokCredentialsFromCli(): OAuthTokenBundle {
 
 actual fun grokAuthFileHint(): String = grokAuthFile().absolutePath
 
+actual fun grokCliImportAvailable(): Boolean = true
+
 actual fun loadCursorCredentialsFromLocalApp(): OAuthTokenBundle {
     val dbFile = cursorStateDbFile()
     if (!dbFile.exists()) {

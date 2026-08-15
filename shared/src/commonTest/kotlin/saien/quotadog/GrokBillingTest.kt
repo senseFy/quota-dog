@@ -14,6 +14,16 @@ class GrokBillingTest {
     }
 
     @Test
+    fun prefersPeriodTypeOverResetWindow() {
+        val now = Instant.fromEpochSeconds(1_700_000_000)
+        val resetAt = now.plusTestSeconds(30L * 24L * 60L * 60L)
+        assertEquals(
+            "Weekly credits",
+            grokCreditsWindowLabel(resetAt, now, periodType = "USAGE_PERIOD_TYPE_WEEKLY"),
+        )
+    }
+
+    @Test
     fun mapsMonthlyCreditsLabelFromResetWindow() {
         val now = Instant.fromEpochSeconds(1_700_000_000)
         val resetAt = now.plusTestSeconds(30L * 24L * 60L * 60L)

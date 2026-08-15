@@ -15,8 +15,12 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
 import platform.Foundation.NSUserDefaults
+import platform.Foundation.NSURL
 import platform.Security.SecRandomCopyBytes
 import platform.Security.kSecRandomDefault
+import platform.UIKit.UIApplication
+import platform.darwin.dispatch_async
+import platform.darwin.dispatch_get_main_queue
 
 actual class PlatformTokenStore actual constructor() : TokenStore {
     private val delegate = SettingsTokenStore(
@@ -56,7 +60,18 @@ actual class PlatformTokenStore actual constructor() : TokenStore {
 
 actual class PlatformBrowserLauncher actual constructor() : BrowserLauncher {
     override fun open(url: String): Boolean {
-        return IosBrowserSession.openAuthorizationUrl(url)
+        if (IosBrowserSession.hasPreparedSession()) {
+            return IosBrowserSession.openAuthorizationUrl(url)
+        }
+        val nsUrl = NSURL.URLWithString(url) ?: return false
+        dispatch_async(dispatch_get_main_queue()) {
+            UIApplication.sharedApplication.openURL(
+                nsUrl,
+                options = emptyMap<Any?, Any>(),
+                completionHandler = null,
+            )
+        }
+        return true
     }
 }
 
@@ -101,6 +116,8 @@ private object IosBrowserSession {
     private var expectedPort: Int? = null
     private var expectedPath: String? = null
     private var result: CompletableDeferred<String?>? = null
+
+    fun hasPreparedSession(): Boolean = expectedPort != null && expectedPath != null
 
     fun prepare(port: Int, path: String): CompletableDeferred<String?> {
         result?.complete(null)

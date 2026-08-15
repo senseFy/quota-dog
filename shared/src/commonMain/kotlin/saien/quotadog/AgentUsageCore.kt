@@ -15,7 +15,9 @@ import io.ktor.http.URLBuilder
 import io.ktor.http.Url
 import io.ktor.http.isSuccess
 import kotlinx.coroutines.async
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
@@ -130,12 +132,22 @@ data class OAuthLoginStart(
     val redirectUri: String
 )
 
+data class DeviceCodeLoginStart(
+    val userCode: String,
+    val verificationUri: String,
+    val verificationUriComplete: String,
+) {
+    val authorizationUrl: String
+        get() = verificationUriComplete.ifBlank { verificationUri }
+}
+
 data class AccountUiState(
     val accountKey: AccountKey,
     val providerId: ProviderId = accountKey.providerId,
     val added: Boolean = false,
     val authState: AuthState = AuthState.Unknown,
     val loginStart: OAuthLoginStart? = null,
+    val deviceLogin: DeviceCodeLoginStart? = null,
     val snapshot: ProviderUsageSnapshot? = null,
     val busy: Boolean = false,
     val message: String? = null
@@ -188,7 +200,7 @@ private object ProviderSpecs {
         ProviderId.CLAUDE_CODE -> claude
         ProviderId.GROK -> throw ProviderException(
             AuthState.NotConfigured,
-            "Grok uses the Grok CLI auth file instead of browser OAuth."
+            "Grok uses xAI device-code sign-in instead of a localhost OAuth callback."
         )
         ProviderId.CURSOR -> throw ProviderException(
             AuthState.NotConfigured,
@@ -248,6 +260,19 @@ class QuotaDogClient(
 
     fun openAuthorizationUrl(start: OAuthLoginStart): Boolean {
         return browserLauncher.open(start.authorizationUrl)
+    }
+
+    fun openUrl(url: String): Boolean {
+        return browserLauncher.open(url)
+    }
+
+    internal suspend fun startGrokDeviceLogin(): GrokDeviceCode {
+        return GrokOAuth.requestDeviceCode(httpClient)
+    }
+
+    internal suspend fun completeGrokDeviceLogin(device: GrokDeviceCode): AccountKey {
+        val token = GrokOAuth.waitForAuthorization(httpClient, device)
+        return tokenStore.save(ProviderId.GROK, token)
     }
 
     suspend fun waitForLocalCallback(providerId: ProviderId, timeoutMillis: Long = 300_000): String? {
@@ -310,26 +335,34 @@ class QuotaDogClient(
     private suspend fun ensureFreshGrokToken(accountKey: AccountKey): OAuthTokenBundle {
         val stored = tokenStore.load(accountKey)
             ?: throw ProviderException(AuthState.NotConfigured, "Not signed in to ${accountKey.providerId.displayName}")
-        val reloaded = runCatching { loadGrokCredentialsFromCli() }.getOrNull()
-        if (reloaded != null && !reloaded.isExpired()) {
-            val reloadedKey = accountKeyForToken(ProviderId.GROK, reloaded)
-            if (reloadedKey != accountKey) {
-                if (!stored.isExpired()) return stored
-                throw ProviderException(
-                    AuthState.RequiresRelogin,
-                    "Grok CLI is signed in as a different account. Remove this account and import again.",
-                )
+        if (!stored.isExpired()) return stored
+        if (stored.refreshToken.isNotBlank()) {
+            val refreshed = runCatching {
+                GrokOAuth.refresh(httpClient, stored.refreshToken).withIdentityFrom(stored)
+            }.getOrNull()
+            if (refreshed != null) {
+                tokenStore.save(accountKey, refreshed)
+                return refreshed
             }
-            val merged = reloaded.withIdentityFrom(stored)
-            tokenStore.save(accountKey, merged)
-            return merged
         }
-        if (!stored.isExpired()) {
-            return stored
+        if (grokCliImportAvailable()) {
+            val reloaded = runCatching { loadGrokCredentialsFromCli() }.getOrNull()
+            if (reloaded != null && !reloaded.isExpired()) {
+                val reloadedKey = accountKeyForToken(ProviderId.GROK, reloaded)
+                if (reloadedKey != accountKey) {
+                    throw ProviderException(
+                        AuthState.RequiresRelogin,
+                        "Grok CLI is signed in as a different account. Remove this account and import again.",
+                    )
+                }
+                val merged = reloaded.withIdentityFrom(stored)
+                tokenStore.save(accountKey, merged)
+                return merged
+            }
         }
         throw ProviderException(
             AuthState.RequiresRelogin,
-            "Grok credentials expired. Run `grok login` and refresh again."
+            "Grok credentials expired. Sign in with xAI again."
         )
     }
 
@@ -403,7 +436,7 @@ class QuotaDogClient(
             }
             ProviderId.GROK -> throw ProviderException(
                 AuthState.NotConfigured,
-                "Grok does not use browser OAuth. Import credentials from the Grok CLI instead."
+                "Grok uses xAI device-code sign-in instead of a localhost OAuth callback."
             )
             ProviderId.CURSOR -> throw ProviderException(
                 AuthState.NotConfigured,
@@ -413,9 +446,9 @@ class QuotaDogClient(
     }
 
     private suspend fun refreshToken(providerId: ProviderId, refreshToken: String): OAuthTokenBundle {
-        val spec = ProviderSpecs.forProvider(providerId)
         return when (providerId) {
             ProviderId.CODEX -> {
+                val spec = ProviderSpecs.forProvider(providerId)
                 val responseText = httpClient.post(spec.tokenUrl) {
                     contentType(ContentType.Application.FormUrlEncoded)
                     setBody(FormDataContent(Parameters.build {
@@ -428,6 +461,7 @@ class QuotaDogClient(
                 json.decodeFromString(CodexTokenResponse.serializer(), responseText).toBundle()
             }
             ProviderId.CLAUDE_CODE -> {
+                val spec = ProviderSpecs.forProvider(providerId)
                 val responseText = httpClient.post(spec.tokenUrl) {
                     contentType(ContentType.Application.Json)
                     setBody(
@@ -439,10 +473,7 @@ class QuotaDogClient(
                 }.expectSuccessBody("Claude token refresh")
                 json.decodeFromString(ClaudeTokenResponse.serializer(), responseText).toBundle()
             }
-            ProviderId.GROK -> throw ProviderException(
-                AuthState.RequiresRelogin,
-                "Grok credentials are refreshed by the Grok CLI. Run `grok login` and refresh again."
-            )
+            ProviderId.GROK -> GrokOAuth.refresh(httpClient, refreshToken)
             ProviderId.CURSOR -> throw ProviderException(
                 AuthState.RequiresRelogin,
                 "Cursor credentials are refreshed by the Cursor app. Sign in again, then re-import."
@@ -476,8 +507,8 @@ class QuotaDogClient(
     }
 
     private suspend fun fetchGrokUsage(token: OAuthTokenBundle): ProviderUsageSnapshot {
-        val billing = GrokBillingFetcher.fetch(httpClient, token.accessToken)
-        val label = grokCreditsWindowLabel(billing.resetsAt)
+        val billing = fetchGrokBillingSnapshot(token)
+        val label = grokCreditsWindowLabel(billing.resetsAt, periodType = billing.periodType)
         val durationSeconds = inferWindowDurationSeconds("credits", label)
         return ProviderUsageSnapshot(
             providerId = ProviderId.GROK,
@@ -493,8 +524,31 @@ class QuotaDogClient(
             ),
             collectedAt = Clock.System.now(),
             accountEmail = token.email,
-            message = "Source: Grok CLI auth (${grokAuthFileHint()})",
+            message = buildString {
+                billing.subscriptionTier?.let { append("Plan: $it") }
+                if (isNotEmpty()) append(" · ")
+                append("Source: xAI billing")
+            },
         )
+    }
+
+    private suspend fun fetchGrokBillingSnapshot(token: OAuthTokenBundle): GrokBillingSnapshot {
+        val proxyResult = runCatching {
+            GrokCreditsProxyFetcher.fetch(httpClient, token.accessToken, token.accountId)
+        }
+        proxyResult.getOrNull()?.let { return it }
+        val proxyError = proxyResult.exceptionOrNull()
+        if (proxyError is ProviderException &&
+            (proxyError.state == AuthState.RequiresRelogin || proxyError.state == AuthState.Unauthorized)
+        ) {
+            throw proxyError
+        }
+        val grpcResult = runCatching {
+            GrokBillingFetcher.fetch(httpClient, token.accessToken)
+        }
+        grpcResult.getOrNull()?.let { return it }
+        throw proxyError ?: grpcResult.exceptionOrNull()
+            ?: ProviderException(AuthState.Error, "Could not load Grok billing usage.")
     }
 
     private suspend fun fetchCursorUsage(token: OAuthTokenBundle): ProviderUsageSnapshot {
@@ -566,6 +620,7 @@ class QuotaDogStore(
     private val refreshMutex = Mutex()
     private val activeRefreshes = mutableSetOf<AccountKey>()
     private var detectStarted = false
+    private var grokDeviceLoginJob: Job? = null
     private val _state = MutableStateFlow(DashboardState())
     val state: StateFlow<DashboardState> = _state
 
@@ -580,7 +635,28 @@ class QuotaDogStore(
     }
 
     fun startLogin(providerId: ProviderId) {
+        if (providerId == ProviderId.GROK) {
+            startGrokDeviceLogin()
+            return
+        }
         launchSafely("beginLogin:${providerId.name}") { beginLoginAndWait(providerId) }
+    }
+
+    fun startGrokDeviceLogin() {
+        grokDeviceLoginJob?.cancel()
+        grokDeviceLoginJob = storeScope.launch {
+            try {
+                beginGrokDeviceLoginAndWait()
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Throwable) {
+                platformDebugLog("store action failed label=grokDeviceLogin")
+            }
+        }
+    }
+
+    fun startImportGrok() {
+        launchSafely("importGrok") { importGrokAccountAndRefresh() }
     }
 
     fun startCompleteLogin(accountKey: AccountKey, callbackUri: String) {
@@ -591,7 +667,22 @@ class QuotaDogStore(
 
     fun startReopenLogin(accountKey: AccountKey) {
         launchSafely("reopenLogin:${accountKey.providerId.name}") {
-            val start = state.value.accounts[accountKey]?.loginStart ?: return@launchSafely
+            val account = state.value.accounts[accountKey] ?: return@launchSafely
+            val deviceLogin = account.deviceLogin
+            if (deviceLogin != null) {
+                val opened = client.openUrl(deviceLogin.authorizationUrl)
+                update(accountKey) {
+                    it.copy(
+                        message = if (opened) {
+                            "Browser opened. Approve access, then return here. Code: ${deviceLogin.userCode}"
+                        } else {
+                            "Could not open the browser. Visit ${deviceLogin.authorizationUrl} and enter ${deviceLogin.userCode}."
+                        }
+                    )
+                }
+                return@launchSafely
+            }
+            val start = account.loginStart ?: return@launchSafely
             val opened = client.openAuthorizationUrl(start)
             update(accountKey) {
                 it.copy(
@@ -655,7 +746,7 @@ class QuotaDogStore(
     suspend fun beginLoginAndWait(providerId: ProviderId) {
         when (providerId) {
             ProviderId.GROK -> {
-                importGrokAccountAndRefresh()
+                beginGrokDeviceLoginAndWait()
                 return
             }
             ProviderId.CURSOR -> {
@@ -755,6 +846,81 @@ class QuotaDogStore(
                         message = safeUserMessage(error, "Sign-in failed. Please try again.")
                     )
                 }
+            }
+        }
+    }
+
+    private suspend fun beginGrokDeviceLoginAndWait() {
+        val pendingKey = AccountKey.pending(ProviderId.GROK, "device")
+        var deviceUi: DeviceCodeLoginStart? = null
+        try {
+            update(pendingKey) {
+                it.copy(
+                    added = true,
+                    authState = AuthState.Unknown,
+                    busy = true,
+                    loginStart = null,
+                    deviceLogin = null,
+                    message = "Starting xAI sign-in...",
+                )
+            }
+            val device = client.startGrokDeviceLogin()
+            deviceUi = DeviceCodeLoginStart(
+                userCode = device.userCode,
+                verificationUri = device.verificationUri,
+                verificationUriComplete = device.verificationUriComplete,
+            )
+            update(pendingKey) {
+                it.copy(
+                    added = true,
+                    busy = true,
+                    deviceLogin = deviceUi,
+                    message = "Approve access in the browser. If asked, enter ${device.userCode}.",
+                )
+            }
+            val opened = client.openUrl(device.authorizationUrl)
+            if (!opened) {
+                update(pendingKey) {
+                    it.copy(
+                        added = true,
+                        busy = true,
+                        deviceLogin = deviceUi,
+                        message = "Could not open the browser. Visit ${device.authorizationUrl} and enter ${device.userCode}.",
+                    )
+                }
+            }
+            val accountKey = client.completeGrokDeviceLogin(device)
+            if (state.value.accounts[pendingKey] == null) return
+            replacePendingWithAccount(
+                pendingKey = pendingKey,
+                accountKey = accountKey,
+                message = "Sign-in successful, refreshing usage...",
+            )
+            onLocalDataChanged?.invoke()
+            refresh(accountKey)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: ProviderException) {
+            platformDebugLog("store grokDeviceLogin provider error state=${error.state} status=${error.statusCode}")
+            update(pendingKey) {
+                it.copy(
+                    added = true,
+                    authState = error.state,
+                    busy = false,
+                    deviceLogin = deviceUi,
+                    message = safeUserMessage(error, "xAI sign-in failed. Please try again."),
+                )
+            }
+        } catch (error: Throwable) {
+            platformDebugLog("store grokDeviceLogin unexpected error")
+            update(pendingKey) {
+                it.copy(
+                    added = true,
+                    authState = AuthState.Error,
+                    busy = false,
+                    deviceLogin = deviceUi,
+                    message = safeUserMessage(error, "xAI sign-in failed. Please try again."),
+                )
             }
         }
     }
@@ -898,6 +1064,10 @@ class QuotaDogStore(
     }
 
     suspend fun delete(accountKey: AccountKey) {
+        if (accountKey.providerId == ProviderId.GROK && accountKey.isPending) {
+            grokDeviceLoginJob?.cancel()
+            grokDeviceLoginJob = null
+        }
         client.logout(accountKey)
         usageSnapshotStore.delete(accountKey)
         onLocalAccountDeleted?.invoke(accountKey) ?: onLocalDataChanged?.invoke()
@@ -924,6 +1094,7 @@ class QuotaDogStore(
                 added = true,
                 authState = AuthState.LoggedIn,
                 loginStart = null,
+                deviceLogin = null,
                 busy = true,
                 snapshot = existing?.snapshot ?: pending?.snapshot,
                 message = message
