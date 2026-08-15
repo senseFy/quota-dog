@@ -170,7 +170,6 @@ fun QdSettingsSheet(
                     // Appearance.
                     QdSettingsRow(
                         title = "Appearance",
-                        description = "Switch between light, dark, or follow your system.",
                         control = {
                             QdSegmentedControl(
                                 options = listOf(
@@ -187,7 +186,7 @@ fun QdSettingsSheet(
                     // Quota display.
                     QdSettingsRow(
                         title = "Quota display",
-                        description = "Choose whether progress bars emphasize used or remaining quota.",
+                        description = "Progress bars show used or remaining quota.",
                         control = {
                             QdSegmentedControl(
                                 options = listOf(
@@ -203,7 +202,7 @@ fun QdSettingsSheet(
                     // Usage estimate.
                     QdSettingsRow(
                         title = "Usage estimate",
-                        description = "Project session and weekly totals from the current pace.",
+                        description = "Project totals from the current pace.",
                         control = {
                             QdSegmentedControl(
                                 options = listOf(
@@ -219,7 +218,7 @@ fun QdSettingsSheet(
                     // Email privacy.
                     QdSettingsRow(
                         title = "Email privacy",
-                        description = "Mask the middle of account emails while keeping both ends visible.",
+                        description = "Hide the middle of account emails.",
                         control = {
                             QdSegmentedControl(
                                 options = listOf(
@@ -235,11 +234,7 @@ fun QdSettingsSheet(
                     // Auto refresh.
                     QdSettingsRow(
                         title = "Auto refresh",
-                        description = if (autoRefreshMinutes == 0) {
-                            "Quota windows are pulled only when you tap refresh."
-                        } else {
-                            "Quota windows refresh every $autoRefreshMinutes minutes while QuotaDog is running."
-                        },
+                        description = "Only while QuotaDog is open.",
                         control = {
                             QdSegmentedControl(
                                 options = listOf(
@@ -258,11 +253,6 @@ fun QdSettingsSheet(
                     // Manual refresh.
                     QdSettingsRow(
                         title = "Refresh now",
-                        description = if (refreshAllBusy) {
-                            "Refreshing signed-in providers concurrently."
-                        } else {
-                            "Pull every signed-in provider immediately."
-                        },
                         trailing = {
                             QdButton(
                                 text = if (refreshAllBusy) "Refreshing" else "Refresh all",
@@ -280,12 +270,23 @@ fun QdSettingsSheet(
                     // Cloud sync.
                     QdSettingsRow(
                         title = "Cloud sync",
-                        description = cloudSyncDescription(cloudSyncState),
+                        description = "Encrypted tokens and settings across your devices.",
                         control = {
                             Column(
                                 modifier = Modifier.fillMaxWidth(),
                                 verticalArrangement = Arrangement.spacedBy(spacing.sm),
                             ) {
+                                cloudSyncStatusText(cloudSyncState)?.let { status ->
+                                    Text(
+                                        text = status,
+                                        style = typo.caption,
+                                        color = if (cloudSyncState.status == CloudSyncStatus.Error) {
+                                            colors.danger
+                                        } else {
+                                            colors.textSecondary
+                                        },
+                                    )
+                                }
                                 OutlinedTextField(
                                     value = syncPassphrase,
                                     onValueChange = onSyncPassphraseChange,
@@ -373,7 +374,7 @@ fun QdSettingsSheet(
                     // About.
                     QdSettingsRow(
                         title = "About",
-                        description = "QuotaDog $versionLabel - track provider quota usage.",
+                        description = "QuotaDog $versionLabel",
                     )
                 }
             }
@@ -381,13 +382,13 @@ fun QdSettingsSheet(
     }
 }
 
-private fun cloudSyncDescription(state: CloudSyncUiState): String {
+private fun cloudSyncStatusText(state: CloudSyncUiState): String? {
     state.message?.let { return it }
     return when (state.status) {
-        CloudSyncStatus.Disconnected -> "Use your own Dropbox App Folder to sync encrypted tokens, usage cache, and settings across devices."
-        CloudSyncStatus.Locked -> "Dropbox is connected. Enter your sync passphrase to unlock this device."
+        CloudSyncStatus.Disconnected -> null
+        CloudSyncStatus.Locked -> "Enter your sync passphrase to unlock this device."
         CloudSyncStatus.Connecting -> "Connecting to Dropbox..."
-        CloudSyncStatus.Syncing -> "Syncing encrypted QuotaDog data with Dropbox..."
+        CloudSyncStatus.Syncing -> "Syncing with Dropbox..."
         CloudSyncStatus.Connected -> "Dropbox sync is enabled."
         CloudSyncStatus.Error -> "Dropbox sync needs attention."
     }
