@@ -58,7 +58,11 @@ Package.resolved
 .DS_Store
 .AppleDouble
 .LSOverride
-Icon?
+# Finder folder-icon file is "Icon\r". "Icon?" also matches composeApp/icons/.
+Icon
+!**/icons/
+!**/icons/**
+**/icons/*.iconset/
 ._*
 
 # Windows

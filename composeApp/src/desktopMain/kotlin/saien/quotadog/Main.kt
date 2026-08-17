@@ -44,6 +44,9 @@ import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.WindowPosition
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
+import org.jetbrains.compose.resources.painterResource
+import quotadog.composeapp.generated.resources.Res
+import quotadog.composeapp.generated.resources.quotadog_app_icon
 import kotlinx.datetime.Clock
 import saien.quotadog.app.App
 import saien.quotadog.app.QuotaDogBackgroundEffects
@@ -118,6 +121,7 @@ fun main() = application {
                 }
             },
             title = "QuotaDog",
+            icon = painterResource(Res.drawable.quotadog_app_icon),
             state = windowState,
         ) {
             if (isMacOs()) {

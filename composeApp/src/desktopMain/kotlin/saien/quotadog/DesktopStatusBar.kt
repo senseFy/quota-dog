@@ -12,7 +12,6 @@ import com.sun.jna.Library
 import com.sun.jna.Native
 import com.sun.jna.Pointer
 import java.awt.AWTException
-import java.awt.BasicStroke
 import java.awt.EventQueue
 import java.awt.GraphicsEnvironment
 import java.awt.Image
@@ -24,6 +23,10 @@ import java.awt.Toolkit
 import java.awt.TrayIcon
 import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
+import java.awt.geom.AffineTransform
+import java.awt.geom.Arc2D
+import java.awt.geom.Ellipse2D
+import java.awt.geom.Path2D
 import java.awt.image.BufferedImage
 import java.nio.file.Files
 import java.awt.Color as AwtColor
@@ -399,11 +402,24 @@ private fun createAwtTrayImage(): Image {
     val g = image.createGraphics()
     try {
         g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
-        g.color = AwtColor(0x5A, 0x7D, 0x6C)
-        g.stroke = BasicStroke(3f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND)
-        g.drawArc(7, 8, 18, 18, 200, 140)
-        g.drawLine(16, 18, 22, 13)
-        g.fillOval(14, 16, 4, 4)
+        val pad = 3.0
+        val r = size / 2.0 - pad
+        val cx = size / 2.0
+        val cy = size / 2.0
+        val a = 0.6 * r
+        val disk = Ellipse2D.Double(cx - r, cy - r, r * 2, r * 2)
+        g.color = AwtColor(0xB8, 0xB8, 0xB8)
+        g.fill(disk)
+
+        // Remaining (80%) on the left: circle's left half + elliptical terminator.
+        val remain = Path2D.Double()
+        remain.append(Arc2D.Double(cx - r, cy - r, r * 2, r * 2, 90.0, 180.0, Arc2D.OPEN), false)
+        val ellipse = AffineTransform.getTranslateInstance(cx, cy).apply { scale(a, r) }
+            .createTransformedShape(Arc2D.Double(-1.0, -1.0, 2.0, 2.0, 270.0, 180.0, Arc2D.OPEN))
+        remain.append(ellipse, true)
+        remain.closePath()
+        g.color = AwtColor(0x11, 0x11, 0x11)
+        g.fill(remain)
     } finally {
         g.dispose()
     }

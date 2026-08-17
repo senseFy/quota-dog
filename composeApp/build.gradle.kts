@@ -168,6 +168,7 @@ tasks.named("desktopProcessResources") {
 compose.desktop {
     application {
         mainClass = "saien.quotadog.MainKt"
+        jvmArgs += "-Xdock:icon=${project.file("icons/QuotaDog.png").absolutePath}"
 
         nativeDistributions {
             // Dmg = macOS, Msi = Windows installer, Deb = Debian/Ubuntu Linux.
@@ -183,8 +184,16 @@ compose.desktop {
                 if (stripped.matches(Regex("\\d+\\.\\d+\\.\\d+"))) stripped else "1.0.0"
             }
 
+            windows {
+                iconFile.set(project.file("icons/QuotaDog.ico"))
+            }
+            linux {
+                iconFile.set(project.file("icons/QuotaDog.png"))
+            }
+
             macOS {
                 bundleID = "saien.quotadog"
+                iconFile.set(project.file("icons/QuotaDog.icns"))
                 // Formal release signing is driven by scripts/build_release*.sh, which export
                 // QUOTADOG_MAC_SIGN=1 and CODESIGN_IDENTITY (same Developer ID as Saytive).
                 // CI / local unsigned packages leave those unset and stay unsigned.

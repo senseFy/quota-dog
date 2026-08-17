@@ -38,6 +38,50 @@ static const CGFloat QDEmptyContentHeight = 96.0;
 static const NSUInteger QDMaxAccounts = 4;
 static const NSUInteger QDMaxWindows = 3;
 
+/// 80% remaining moon (left lit). Template image so the menu bar tints it.
+static NSImage *QDMenuBarMoonImage(void) {
+    const CGFloat pointSize = 16.0;
+    NSImage *image = [NSImage imageWithSize:NSMakeSize(pointSize, pointSize)
+                                    flipped:NO
+                             drawingHandler:^BOOL(NSRect dest) {
+        CGFloat pad = 1.4;
+        CGFloat r = MIN(dest.size.width, dest.size.height) / 2.0 - pad;
+        NSPoint c = NSMakePoint(NSMidX(dest), NSMidY(dest));
+        CGFloat a = 0.6 * r;
+
+        NSBezierPath *disk = [NSBezierPath bezierPathWithOvalInRect:
+            NSMakeRect(c.x - r, c.y - r, r * 2.0, r * 2.0)];
+        [[NSColor colorWithCalibratedWhite:0.0 alpha:0.38] setFill];
+        [disk fill];
+
+        NSBezierPath *remain = [NSBezierPath bezierPath];
+        [remain moveToPoint:NSMakePoint(c.x, c.y + r)];
+        // Circle left: top → bottom via 9 o'clock.
+        [remain appendBezierPathWithArcWithCenter:c
+                                           radius:r
+                                       startAngle:90.0
+                                         endAngle:270.0
+                                        clockwise:NO];
+        NSBezierPath *terminator = [NSBezierPath bezierPath];
+        [terminator appendBezierPathWithArcWithCenter:NSZeroPoint
+                                               radius:1.0
+                                           startAngle:270.0
+                                             endAngle:90.0
+                                            clockwise:NO];
+        NSAffineTransform *xf = [NSAffineTransform transform];
+        [xf translateXBy:c.x yBy:c.y];
+        [xf scaleXBy:a yBy:r];
+        [terminator transformUsingAffineTransform:xf];
+        [remain appendBezierPath:terminator];
+        [remain closePath];
+        [[NSColor colorWithCalibratedWhite:0.0 alpha:1.0] setFill];
+        [remain fill];
+        return YES;
+    }];
+    image.template = YES;
+    return image;
+}
+
 #pragma mark - Design tokens (mirrors QdTheme light / dark)
 
 typedef struct {
@@ -617,10 +661,11 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
     _state = @{};
     _panelSize = NSMakeSize(QDPanelWidth, 200.0);
 
-    _statusItem = [[NSStatusBar systemStatusBar] statusItemWithLength:NSVariableStatusItemLength];
+    _statusItem = [[NSStatusBar systemStatusBar] statusItemWithLength:NSSquareStatusItemLength];
     NSStatusBarButton *button = _statusItem.button;
-    button.title = @"Q";
-    button.font = [NSFont boldSystemFontOfSize:13.0];
+    button.title = @"";
+    button.image = QDMenuBarMoonImage();
+    button.imageScaling = NSImageScaleProportionallyDown;
     button.target = self;
     button.action = @selector(togglePanel:);
     button.toolTip = @"QuotaDog";
