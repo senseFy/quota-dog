@@ -28,6 +28,9 @@ run: desktop-run ## Run the desktop app.
 desktop-run: ## Run the Compose desktop app.
 	@$(GRADLE) :composeApp:run
 
+icons: ## Regenerate desktop app icons (PNG / ICNS / ICO).
+	@python3 scripts/generate_app_icons.py
+
 desktop-package: ## Build a desktop package for the current OS.
 	@$(GRADLE) :composeApp:packageDistributionForCurrentOS
 

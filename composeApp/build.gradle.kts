@@ -168,6 +168,8 @@ tasks.named("desktopProcessResources") {
 compose.desktop {
     application {
         mainClass = "saien.quotadog.MainKt"
+        // AWT paints `-Xdock:icon` as the raw bitmap. The PNG already includes a
+        // transparent squircle; an opaque square would show sharp corners in the Dock.
         jvmArgs += "-Xdock:icon=${project.file("icons/QuotaDog.png").absolutePath}"
 
         nativeDistributions {
