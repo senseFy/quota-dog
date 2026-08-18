@@ -41,8 +41,9 @@ SUPERSAMPLE = 4
 SQUIRCLE_N = 5.0
 # Keep a 1px ring of transparent pixels so LANCZOS never samples a clipped edge.
 PLATE_INSET = 4.0
-# Moon diameter relative to the plate, close to the previous 73% content box.
-MOON_PAD_RATIO = 0.16
+# Old square export used a ~72% moon. The same mark on a squircle reads larger
+# because the gray corners are gone; 60% restores typical macOS icon padding.
+MOON_DIAMETER_RATIO = 0.60
 
 
 def _grid(size: int) -> tuple[np.ndarray, np.ndarray]:
@@ -57,10 +58,10 @@ def squircle_distance(size: int, n: float, inset: float) -> np.ndarray:
     return np.abs((xx - center) / radius) ** n + np.abs((yy - center) / radius) ** n
 
 
-def moon_masks(size: int, pad_ratio: float) -> tuple[np.ndarray, np.ndarray]:
+def moon_masks(size: int, diameter_ratio: float) -> tuple[np.ndarray, np.ndarray]:
     xx, yy = _grid(size)
     center = size / 2.0
-    radius = center * (1.0 - 2.0 * pad_ratio)
+    radius = center * diameter_ratio
     # Same terminator as the AWT / AppKit menu-bar moon: left 80% remaining.
     ellipse_x = 0.6 * radius
     dx = xx - center
@@ -83,7 +84,7 @@ def _downscale_mask(mask: np.ndarray, final_size: int) -> np.ndarray:
 def compose_desktop_icon(size: int = MASTER_SIZE) -> Image.Image:
     work = size * SUPERSAMPLE
     plate = _downscale_mask(squircle_distance(work, SQUIRCLE_N, PLATE_INSET * SUPERSAMPLE) <= 1.0, size)
-    remain, crescent = moon_masks(work, MOON_PAD_RATIO)
+    remain, crescent = moon_masks(work, MOON_DIAMETER_RATIO)
     remain_a = _downscale_mask(remain, size)
     crescent_a = _downscale_mask(crescent, size)
 
