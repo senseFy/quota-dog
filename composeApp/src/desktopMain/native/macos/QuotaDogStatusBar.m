@@ -2,12 +2,13 @@
 
 typedef void (*QDActionCallback)(void);
 typedef void (*QDProviderCallback)(const char *provider);
+typedef void (*QDAccountCallback)(const char *accountKey);
 
 // Set to 1 to paint layout containers in loud colors and log sizes.
 #define QD_DEBUG_LAYOUT 0
 
 #if QD_DEBUG_LAYOUT
-static NSString * const QDStatusBarBuildId = @"panel-v6";
+static NSString * const QDStatusBarBuildId = @"panel-v7";
 
 static void QDLog(NSString *format, ...) NS_FORMAT_FUNCTION(1, 2);
 static void QDLog(NSString *format, ...) {
@@ -37,6 +38,8 @@ static const CGFloat QDFooterBottomPad = 10.0;
 static const CGFloat QDEmptyContentHeight = 96.0;
 static const NSUInteger QDMaxAccounts = 4;
 static const NSUInteger QDMaxWindows = 3;
+static const CGFloat QDAccountRefreshSize = 18.0;
+static const CGFloat QDAccountRefreshGap = 4.0;
 
 /// 80% remaining moon (left lit). Template image so the menu bar tints it.
 static NSImage *QDMenuBarMoonImage(void) {
@@ -408,6 +411,7 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
 @property(nonatomic, assign) BOOL hovering;
 @property(nonatomic, assign) BOOL pressed;
 @property(nonatomic, copy) NSString *providerIdentifier;
+@property(nonatomic, copy) NSString *accountIdentifier;
 + (instancetype)buttonWithTitle:(NSString *)title
                           style:(QDButtonStyle)style
                         palette:(QDPalette)palette
@@ -424,6 +428,8 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
     self = [super initWithFrame:frame];
     if (self) {
         self.wantsLayer = YES;
+        self.layer.backgroundColor = [NSColor clearColor].CGColor;
+        self.layer.opaque = NO;
         self.layerContentsRedrawPolicy = NSViewLayerContentsRedrawOnSetNeedsDisplay;
     }
     return self;
@@ -480,9 +486,9 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
     button.action = action;
     button.qdStyle = QDButtonStyleGhost;
     button.restBg = [NSColor clearColor];
-    button.hoverBg = palette.surfaceHover;
-    button.pressedBg = palette.surfaceMuted;
-    button.fgColor = palette.textTertiary;
+    button.hoverBg = [NSColor clearColor];
+    button.pressedBg = [NSColor clearColor];
+    button.fgColor = palette.textSecondary;
     button.borderColor = nil;
     button.title = @"";
 
@@ -567,19 +573,26 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
         bg = self.hoverBg ?: bg;
     }
 
-    CGFloat radius = MIN(self.bounds.size.height, self.bounds.size.width) / 2.0;
-    NSBezierPath *path = [NSBezierPath bezierPathWithRoundedRect:NSInsetRect(self.bounds, 0.5, 0.5)
-                                                         xRadius:radius
-                                                         yRadius:radius];
-    [bg setFill];
-    [path fill];
-    if (self.borderColor) {
-        [self.borderColor setStroke];
-        path.lineWidth = 1.0;
-        [path stroke];
+    if (bg.alphaComponent > 0.01) {
+        CGFloat radius = MIN(self.bounds.size.height, self.bounds.size.width) / 2.0;
+        NSBezierPath *path = [NSBezierPath bezierPathWithRoundedRect:NSInsetRect(self.bounds, 0.5, 0.5)
+                                                             xRadius:radius
+                                                             yRadius:radius];
+        [bg setFill];
+        [path fill];
+        if (self.borderColor) {
+            [self.borderColor setStroke];
+            path.lineWidth = 1.0;
+            [path stroke];
+        }
     }
 
     NSColor *fg = self.enabled ? self.fgColor : [self.fgColor colorWithAlphaComponent:0.55];
+    if (self.enabled && self.pressed) {
+        fg = [fg colorWithAlphaComponent:0.7];
+    } else if (self.enabled && self.hovering) {
+        fg = self.fgColor;
+    }
     if (self.image) {
         NSImage *source = self.image;
         NSSize size = source.size;
@@ -621,6 +634,65 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
 }
 @end
 
+@interface QDAccountCardView : QDFillView
+@property(nonatomic, strong) QDPillButton *refreshButton;
+@property(nonatomic, assign) BOOL accountBusy;
+@property(nonatomic, assign) BOOL refreshable;
+@property(nonatomic, assign) BOOL hovering;
+- (void)syncRefreshVisibility;
+@end
+
+@implementation QDAccountCardView
+- (void)updateTrackingAreas {
+    [super updateTrackingAreas];
+    for (NSTrackingArea *area in self.trackingAreas) {
+        [self removeTrackingArea:area];
+    }
+    NSTrackingArea *area = [[NSTrackingArea alloc] initWithRect:self.bounds
+                                                        options:(NSTrackingMouseEnteredAndExited | NSTrackingActiveAlways | NSTrackingInVisibleRect)
+                                                          owner:self
+                                                       userInfo:nil];
+    [self addTrackingArea:area];
+    [self syncHoverFromMouse];
+}
+
+- (void)viewDidMoveToWindow {
+    [super viewDidMoveToWindow];
+    [self syncHoverFromMouse];
+}
+
+- (void)mouseEntered:(NSEvent *)event {
+    self.hovering = YES;
+    [self syncRefreshVisibility];
+}
+
+- (void)mouseExited:(NSEvent *)event {
+    NSPoint local = [self convertPoint:event.locationInWindow fromView:nil];
+    if (NSPointInRect(local, self.bounds)) {
+        return;
+    }
+    self.hovering = NO;
+    [self syncRefreshVisibility];
+}
+
+- (void)syncHoverFromMouse {
+    if (!self.window) {
+        [self syncRefreshVisibility];
+        return;
+    }
+    NSPoint windowPoint = [self.window mouseLocationOutsideOfEventStream];
+    NSPoint local = [self convertPoint:windowPoint fromView:nil];
+    self.hovering = NSPointInRect(local, self.bounds);
+    [self syncRefreshVisibility];
+}
+
+- (void)syncRefreshVisibility {
+    BOOL show = self.refreshable && (self.hovering || self.accountBusy);
+    self.refreshButton.hidden = !show;
+    self.refreshButton.enabled = self.refreshable && !self.accountBusy;
+}
+@end
+
 #pragma mark - Controller
 
 @interface QDStatusBarController : NSObject
@@ -638,6 +710,7 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
 @property(nonatomic, assign) QDActionCallback onOpenHide;
 @property(nonatomic, assign) QDActionCallback onQuit;
 @property(nonatomic, assign) QDProviderCallback onSelectProvider;
+@property(nonatomic, assign) QDAccountCallback onRefreshAccount;
 @property(nonatomic, strong) QDFillView *providerIndicator;
 @property(nonatomic, assign) NSUInteger providerSelectionGeneration;
 @property(nonatomic, copy) NSString *pendingProviderSelection;
@@ -649,7 +722,8 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
                            show:(QDActionCallback)show
                        openHide:(QDActionCallback)openHide
                            quit:(QDActionCallback)quit
-                 selectProvider:(QDProviderCallback)selectProvider {
+                 selectProvider:(QDProviderCallback)selectProvider
+                 refreshAccount:(QDAccountCallback)refreshAccount {
     self = [super init];
     if (!self) return nil;
 
@@ -658,6 +732,7 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
     _onOpenHide = openHide;
     _onQuit = quit;
     _onSelectProvider = selectProvider;
+    _onRefreshAccount = refreshAccount;
     _state = @{};
     _panelSize = NSMakeSize(QDPanelWidth, 200.0);
 
@@ -825,6 +900,12 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
 
 - (void)refreshClicked:(id)sender {
     if (self.onRefresh) self.onRefresh();
+}
+
+- (void)accountRefreshClicked:(QDPillButton *)sender {
+    NSString *key = sender.accountIdentifier ?: @"";
+    if (key.length == 0 || !self.onRefreshAccount) return;
+    self.onRefreshAccount(key.UTF8String);
 }
 
 - (void)providerFilterClicked:(QDPillButton *)sender {
@@ -1137,8 +1218,15 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
     row.wantsLayer = YES;
 
     NSFont *metaFont = [NSFont monospacedDigitSystemFontOfSize:11.0 weight:NSFontWeightMedium];
-    CGFloat metaWidth = ceil([metaText sizeWithAttributes:@{NSFontAttributeName: metaFont}].width);
-    metaWidth = MIN(width * 0.62, MAX(88.0, metaWidth));
+    NSTextField *meta = [self label:metaText
+                           fontSize:11.0
+                             weight:NSFontWeightMedium
+                              color:fill];
+    meta.font = metaFont;
+    meta.alignment = NSTextAlignmentRight;
+    meta.lineBreakMode = NSLineBreakByClipping;
+    CGFloat metaWidth = ceil(meta.fittingSize.width);
+    metaWidth = MIN(MAX(metaWidth, 1.0), MAX(48.0, width - 56.0));
     CGFloat nameWidth = MAX(48.0, width - metaWidth - 8.0);
 
     NSTextField *name = [self label:[self stringIn:window key:@"label" fallback:@"Usage"]
@@ -1148,12 +1236,6 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
     name.frame = NSMakeRect(0, 0, nameWidth, 14);
     [row addSubview:name];
 
-    NSTextField *meta = [self label:metaText
-                           fontSize:11.0
-                             weight:NSFontWeightMedium
-                              color:fill];
-    meta.font = metaFont;
-    meta.alignment = NSTextAlignmentRight;
     meta.frame = NSMakeRect(width - metaWidth, 0, metaWidth, 14);
     [row addSubview:meta];
 
@@ -1171,7 +1253,7 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
                      palette:(QDPalette)palette
             remainingDisplay:(BOOL)remainingDisplay {
     CGFloat height = [self heightForAccount:account];
-    QDFillView *card = [[QDFillView alloc] initWithFrame:NSMakeRect(0, 0, width, height)];
+    QDAccountCardView *card = [[QDAccountCardView alloc] initWithFrame:NSMakeRect(0, 0, width, height)];
     card.fillColor = palette.surface;
     card.borderColor = palette.border;
     card.cornerRadius = QDCardRadius;
@@ -1184,8 +1266,11 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
     avatar.frame = NSMakeRect(QDCardPad, y, QDAvatarSize, QDAvatarSize);
     [card addSubview:avatar];
 
+    BOOL busy = [self boolIn:account key:@"busy"];
+    BOOL refreshable = [self boolIn:account key:@"refreshable"];
     CGFloat titleX = QDCardPad + QDAvatarSize + 8.0;
-    CGFloat titleW = contentWidth - QDAvatarSize - 8.0;
+    CGFloat trailing = refreshable ? (QDAccountRefreshSize + QDAccountRefreshGap) : 0.0;
+    CGFloat titleW = MAX(40.0, width - QDCardPad - trailing - titleX);
 
     NSTextField *title = [self label:[self stringIn:account key:@"title" fallback:@"Account"]
                             fontSize:14.0
@@ -1194,13 +1279,35 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
     title.frame = NSMakeRect(titleX, y, titleW, 16);
     [card addSubview:title];
 
-    BOOL busy = [self boolIn:account key:@"busy"];
-    NSTextField *status = [self label:[self stringIn:account key:@"status" fallback:@"No usage data yet"]
-                             fontSize:11.0
-                               weight:NSFontWeightRegular
-                                color:busy ? palette.textSecondary : palette.textTertiary];
-    status.frame = NSMakeRect(titleX, y + 16, titleW, 14);
-    [card addSubview:status];
+    NSString *statusText = [self stringIn:account key:@"status" fallback:@""];
+    if (statusText.length > 0) {
+        NSTextField *status = [self label:statusText
+                                 fontSize:11.0
+                                   weight:NSFontWeightRegular
+                                    color:busy ? palette.textSecondary : palette.textTertiary];
+        status.frame = NSMakeRect(titleX, y + 16, titleW, 14);
+        [card addSubview:status];
+    }
+
+    if (refreshable) {
+        QDPillButton *refresh = [QDPillButton iconButtonWithSystemSymbol:@"arrow.clockwise"
+                                                                 palette:palette
+                                                                  target:self
+                                                                  action:@selector(accountRefreshClicked:)];
+        refresh.accountIdentifier = [self stringIn:account key:@"id" fallback:@""];
+        refresh.frame = NSMakeRect(
+            width - QDCardPad - QDAccountRefreshSize,
+            y - 1.0,
+            QDAccountRefreshSize,
+            QDAccountRefreshSize);
+        refresh.toolTip = @"Refresh this account";
+        refresh.enabled = !busy;
+        [card addSubview:refresh];
+        card.refreshButton = refresh;
+        card.refreshable = YES;
+        card.accountBusy = busy;
+        [card syncRefreshVisibility];
+    }
 
     y += QDAvatarSize + 12.0;
 
@@ -1209,7 +1316,7 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
         QDFillView *empty = [[QDFillView alloc] initWithFrame:NSMakeRect(QDCardPad, y, contentWidth, 32)];
         empty.fillColor = palette.surfaceMuted;
         empty.cornerRadius = 10.0;
-        NSTextField *emptyLabel = [self label:[self stringIn:account key:@"status" fallback:@"No usage data yet"]
+        NSTextField *emptyLabel = [self label:[self stringIn:account key:@"emptyLabel" fallback:@"No usage data yet"]
                                      fontSize:11.0
                                        weight:NSFontWeightRegular
                                         color:palette.textSecondary];
@@ -1261,11 +1368,10 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
     NSInteger moreAccounts = [self integerForKey:@"moreAccounts" fallback:0];
     CGFloat intrinsicContentHeight = [self heightForAccountsContent:accounts moreAccounts:moreAccounts];
 
-    // Header + single-row footer chrome; leftover budget is the scrollable content max.
-    CGFloat headerHeight = QDOuterPad + 44.0 + QDSectionGap;
-    if (showsProviderSwitcher) {
-        headerHeight += QDSwitcherHeight + QDSectionGap;
-    }
+    // Filter row + refresh; leftover budget is the scrollable content max.
+    CGFloat headerButtonSize = 28.0;
+    CGFloat headerGap = 8.0;
+    CGFloat headerHeight = QDOuterPad + QDSwitcherHeight + QDSectionGap;
     CGFloat footerHeight = QDSectionGap + QDButtonHeight + QDFooterBottomPad;
     CGFloat maxContentHeight = MAX(80.0, QDPanelMaxHeight - headerHeight - footerHeight);
     CGFloat contentHeight = MIN(intrinsicContentHeight, maxContentHeight);
@@ -1292,52 +1398,37 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
     [root addSubview:dbgLabel];
 #endif
 
-    // Header
-    CGFloat headerButtonSize = 28.0;
-    CGFloat titleWidth = contentWidth - headerButtonSize - 12.0;
+    // Header: provider filter on the left, refresh on the far right.
 #if QD_DEBUG_LAYOUT
     QDFillView *headerBg = [[QDFillView alloc] initWithFrame:NSMakeRect(0, 0, QDPanelWidth, headerHeight - 18)];
     headerBg.fillColor = QDHex(0x2563EB);
     [root addSubview:headerBg];
 #endif
 
-    NSString *titleText = @"QuotaDog";
-#if QD_DEBUG_LAYOUT
-    titleText = [NSString stringWithFormat:@"QuotaDog [%@]", QDStatusBarBuildId];
-#endif
-    NSTextField *title = [self label:titleText
-                            fontSize:20.0
-                              weight:NSFontWeightBold
-                               color:palette.textPrimary];
-    title.frame = NSMakeRect(QDOuterPad, QDOuterPad, titleWidth, 26);
-    [root addSubview:title];
-
-    NSTextField *summary = [self label:[self stringForKey:@"summary" fallback:@"No accounts yet"]
-                              fontSize:12.0
-                                weight:NSFontWeightRegular
-                                 color:palette.textSecondary];
-    summary.frame = NSMakeRect(QDOuterPad, QDOuterPad + 28, titleWidth, 16);
-    [root addSubview:summary];
-
     QDPillButton *refresh = [QDPillButton iconButtonWithSystemSymbol:@"arrow.clockwise"
                                                              palette:palette
                                                               target:self
                                                               action:@selector(refreshClicked:)];
-    refresh.frame = NSMakeRect(QDPanelWidth - QDOuterPad - headerButtonSize, QDOuterPad + 4.0, headerButtonSize, headerButtonSize);
+    refresh.frame = NSMakeRect(
+        QDPanelWidth - QDOuterPad - headerButtonSize,
+        QDOuterPad,
+        headerButtonSize,
+        headerButtonSize);
     refresh.enabled = [self boolForKey:@"refreshEnabled"];
     refresh.toolTip = @"Refresh";
-    [root addSubview:refresh];
 
     if (showsProviderSwitcher) {
+        CGFloat switcherWidth = contentWidth - headerButtonSize - headerGap;
         NSView *switcher = [self buildProviderSwitcher:providerFilters
                                               selected:[self stringForKey:@"selectedProvider" fallback:@""]
-                                                 width:contentWidth
+                                                 width:switcherWidth
                                                palette:palette];
-        [switcher setFrameOrigin:NSMakePoint(QDOuterPad, QDOuterPad + 44.0 + QDSectionGap)];
+        [switcher setFrameOrigin:NSMakePoint(QDOuterPad, QDOuterPad)];
         [root addSubview:switcher];
     } else {
         self.providerIndicator = nil;
     }
+    [root addSubview:refresh];
 
     CGFloat contentTop = headerHeight;
 
@@ -1544,14 +1635,16 @@ void *qd_statusbar_create(QDActionCallback onRefresh,
                           QDActionCallback onShow,
                           QDActionCallback onOpenHide,
                           QDActionCallback onQuit,
-                          QDProviderCallback onSelectProvider) {
+                          QDProviderCallback onSelectProvider,
+                          QDAccountCallback onRefreshAccount) {
     __block QDStatusBarController *controller = nil;
     void (^create)(void) = ^{
         controller = [[QDStatusBarController alloc] initWithRefresh:onRefresh
                                                                show:onShow
                                                            openHide:onOpenHide
                                                                quit:onQuit
-                                                     selectProvider:onSelectProvider];
+                                                     selectProvider:onSelectProvider
+                                                     refreshAccount:onRefreshAccount];
     };
     if ([NSThread isMainThread]) {
         create();
@@ -1580,6 +1673,7 @@ void qd_statusbar_dispose(void *handle) {
         controller.onOpenHide = NULL;
         controller.onQuit = NULL;
         controller.onSelectProvider = NULL;
+        controller.onRefreshAccount = NULL;
         controller.pendingProviderSelection = nil;
         [controller closePanel:nil];
         [[NSStatusBar systemStatusBar] removeStatusItem:controller.statusItem];

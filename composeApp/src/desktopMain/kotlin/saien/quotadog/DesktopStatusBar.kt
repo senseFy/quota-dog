@@ -39,7 +39,6 @@ private const val TRAY_PANEL_MARGIN = 8
 
 internal data class DesktopStatusBarState(
     val tooltip: String,
-    val summary: String,
     val providerFilters: List<DesktopStatusBarProviderFilter>,
     val selectedProvider: String,
     val accounts: List<DesktopStatusBarAccount>,
@@ -57,10 +56,13 @@ internal data class DesktopStatusBarProviderFilter(
 )
 
 internal data class DesktopStatusBarAccount(
+    val id: String,
     val title: String,
     val status: String,
+    val emptyLabel: String,
     val provider: String,
     val busy: Boolean,
+    val refreshable: Boolean,
     val windows: List<DesktopStatusBarUsageWindow>,
 )
 
@@ -75,6 +77,7 @@ internal data class DesktopStatusBarUsageWindow(
 internal fun DesktopStatusBarIcon(
     state: DesktopStatusBarState,
     onRefresh: () -> Unit,
+    onRefreshAccount: (String) -> Unit,
     onShow: () -> Unit,
     onOpenWindow: () -> Unit,
     onQuit: () -> Unit,
@@ -84,6 +87,7 @@ internal fun DesktopStatusBarIcon(
 ) {
     val currentState = rememberUpdatedState(state)
     val currentOnRefresh = rememberUpdatedState(onRefresh)
+    val currentOnRefreshAccount = rememberUpdatedState(onRefreshAccount)
     val currentOnShow = rememberUpdatedState(onShow)
     val currentOnOpenWindow = rememberUpdatedState(onOpenWindow)
     val currentOnQuit = rememberUpdatedState(onQuit)
@@ -93,6 +97,7 @@ internal fun DesktopStatusBarIcon(
     val callbacks = remember {
         StatusBarCallbacks(
             refresh = { currentOnRefresh.value() },
+            refreshAccount = { currentOnRefreshAccount.value(it) },
             show = { currentOnShow.value() },
             openHide = {
                 currentOnOpenWindow.value()
@@ -147,6 +152,7 @@ internal fun statusBarPanelPosition(x: Int, y: Int): WindowPosition {
 
 private data class StatusBarCallbacks(
     val refresh: () -> Unit,
+    val refreshAccount: (String) -> Unit,
     val show: () -> Unit,
     val openHide: () -> Unit,
     val quit: () -> Unit,
@@ -213,6 +219,7 @@ private class MacStatusBarIcon private constructor(
     private val native: MacStatusBarNative,
     private val handle: Pointer,
     private val refreshCallback: NativeActionCallback,
+    private val refreshAccountCallback: NativeAccountCallback,
     private val showCallback: NativeActionCallback,
     private val openHideCallback: NativeActionCallback,
     private val quitCallback: NativeActionCallback,
@@ -241,6 +248,10 @@ private class MacStatusBarIcon private constructor(
                 val refreshCallback = NativeActionCallback {
                     EventQueue.invokeLater { callbacks.refresh() }
                 }
+                val refreshAccountCallback = NativeAccountCallback { accountKey ->
+                    val id = accountKey.orEmpty()
+                    EventQueue.invokeLater { callbacks.refreshAccount(id) }
+                }
                 val showCallback = NativeActionCallback {
                     EventQueue.invokeLater { callbacks.show() }
                 }
@@ -259,11 +270,13 @@ private class MacStatusBarIcon private constructor(
                     openHideCallback,
                     quitCallback,
                     selectProviderCallback,
+                    refreshAccountCallback,
                 ) ?: error("Native status bar helper returned null")
                 MacStatusBarIcon(
                     native,
                     handle,
                     refreshCallback,
+                    refreshAccountCallback,
                     showCallback,
                     openHideCallback,
                     quitCallback,
@@ -299,6 +312,7 @@ private interface MacStatusBarNative : Library {
         onOpenHide: NativeActionCallback,
         onQuit: NativeActionCallback,
         onSelectProvider: NativeProviderCallback,
+        onRefreshAccount: NativeAccountCallback,
     ): Pointer?
 
     fun qd_statusbar_update(handle: Pointer, json: String)
@@ -313,12 +327,24 @@ private fun interface NativeProviderCallback : Callback {
     fun invoke(provider: String?)
 }
 
+private fun interface NativeAccountCallback : Callback {
+    fun invoke(accountKey: String?)
+}
+
+internal fun AccountKey.toStatusBarId(): String = "${providerId.name}:$accountId"
+
+internal fun parseStatusBarAccountKey(raw: String): AccountKey? {
+    val separator = raw.indexOf(':')
+    if (separator <= 0 || separator >= raw.lastIndex) return null
+    val provider = ProviderId.entries.firstOrNull { it.name == raw.substring(0, separator) }
+        ?: return null
+    return AccountKey(provider, raw.substring(separator + 1))
+}
+
 private fun DesktopStatusBarState.toJson(): String {
     return buildString {
         append('{')
         appendJsonField("tooltip", tooltip)
-        append(',')
-        appendJsonField("summary", summary)
         append(',')
         appendJsonField("selectedProvider", selectedProvider)
         append(',')
@@ -347,13 +373,19 @@ private fun DesktopStatusBarState.toJson(): String {
         accounts.forEachIndexed { index, account ->
             if (index > 0) append(',')
             append('{')
+            appendJsonField("id", account.id)
+            append(',')
             appendJsonField("title", account.title)
             append(',')
             appendJsonField("status", account.status)
             append(',')
+            appendJsonField("emptyLabel", account.emptyLabel)
+            append(',')
             appendJsonField("provider", account.provider)
             append(',')
             append("\"busy\":").append(account.busy)
+            append(',')
+            append("\"refreshable\":").append(account.refreshable)
             append(',')
             append("\"windows\":[")
             account.windows.forEachIndexed { windowIndex, window ->

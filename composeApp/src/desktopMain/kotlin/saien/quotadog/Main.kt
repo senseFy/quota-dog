@@ -8,14 +8,19 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.hoverable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.Text
@@ -55,10 +60,11 @@ import saien.quotadog.app.components.QdButtonSize
 import saien.quotadog.app.components.QdButtonVariant
 import saien.quotadog.app.components.QdCard
 import saien.quotadog.app.components.QdCloseIcon
-import saien.quotadog.app.components.QdGlassIconButton
+import saien.quotadog.app.components.QdIconButton
 import saien.quotadog.app.components.QdProgressBar
 import saien.quotadog.app.components.QdProviderAvatar
 import saien.quotadog.app.components.QdRefreshIcon
+import saien.quotadog.app.components.QdSegmentedControl
 import saien.quotadog.app.theme.QdTheme
 import saien.quotadog.app.theme.QuotaDogTheme
 import saien.quotadog.app.theme.SystemThemeRefresh
@@ -256,6 +262,9 @@ private fun QuotaDogTray(
     DesktopStatusBarIcon(
         state = statusBarState,
         onRefresh = { store.startRefreshAll() },
+        onRefreshAccount = { raw ->
+            parseStatusBarAccountKey(raw)?.let { store.startRefresh(it) }
+        },
         onShow = maybeRefreshOnOpen,
         onOpenWindow = onOpenWindow,
         onQuit = onQuit,
@@ -296,11 +305,16 @@ private fun QuotaDogTray(
             }
             QuotaDogTrayPanel(
                 preferences = preferences,
-                accounts = accounts,
+                accounts = statusBarAccounts,
+                allAccounts = accounts,
+                availableProviders = availableProviders,
+                selectedProvider = activeStatusBarProvider,
                 refreshableAccounts = refreshableAccounts,
                 emailPrivacyMode = emailPrivacyMode,
                 usageDisplayMode = usageDisplayMode,
+                onSelectProvider = { selectedStatusBarProvider = it },
                 onRefresh = { store.startRefreshAll() },
+                onRefreshAccount = { store.startRefresh(it) },
                 onOpenWindow = {
                     panelVisible = false
                     onOpenWindow()
@@ -333,10 +347,15 @@ private fun ClosePanelOnFocusLost(window: AwtWindow, onClose: () -> Unit) {
 private fun QuotaDogTrayPanel(
     preferences: AppPreferences,
     accounts: List<AccountUiState>,
+    allAccounts: List<AccountUiState>,
+    availableProviders: List<ProviderId>,
+    selectedProvider: ProviderId?,
     refreshableAccounts: List<AccountUiState>,
     emailPrivacyMode: EmailPrivacyMode,
     usageDisplayMode: UsageDisplayMode,
+    onSelectProvider: (ProviderId?) -> Unit,
     onRefresh: () -> Unit,
+    onRefreshAccount: (AccountKey) -> Unit,
     onOpenWindow: () -> Unit,
     onClose: () -> Unit,
     onQuit: () -> Unit,
@@ -352,10 +371,15 @@ private fun QuotaDogTrayPanel(
     QuotaDogTheme(darkTheme = effectiveDark) {
         QuotaDogTrayPanelContent(
             accounts = accounts,
+            allAccounts = allAccounts,
+            availableProviders = availableProviders,
+            selectedProvider = selectedProvider,
             refreshableAccounts = refreshableAccounts,
             emailPrivacyMode = emailPrivacyMode,
             usageDisplayMode = usageDisplayMode,
+            onSelectProvider = onSelectProvider,
             onRefresh = onRefresh,
+            onRefreshAccount = onRefreshAccount,
             onOpenWindow = onOpenWindow,
             onClose = onClose,
             onQuit = onQuit,
@@ -366,10 +390,15 @@ private fun QuotaDogTrayPanel(
 @Composable
 private fun QuotaDogTrayPanelContent(
     accounts: List<AccountUiState>,
+    allAccounts: List<AccountUiState>,
+    availableProviders: List<ProviderId>,
+    selectedProvider: ProviderId?,
     refreshableAccounts: List<AccountUiState>,
     emailPrivacyMode: EmailPrivacyMode,
     usageDisplayMode: UsageDisplayMode,
+    onSelectProvider: (ProviderId?) -> Unit,
     onRefresh: () -> Unit,
+    onRefreshAccount: (AccountKey) -> Unit,
     onOpenWindow: () -> Unit,
     onClose: () -> Unit,
     onQuit: () -> Unit,
@@ -408,27 +437,23 @@ private fun QuotaDogTrayPanelContent(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(spacing.sm),
             ) {
-                Column(
-                    modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(1.dp),
-                ) {
-                    Text(
-                        text = "QuotaDog",
-                        style = typo.titleLarge,
-                        color = colors.textPrimary,
-                    )
-                    Text(
-                        text = accounts.trayPanelSummaryLabel(usageDisplayMode),
-                        style = typo.caption,
-                        color = colors.textSecondary,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
+                if (availableProviders.size > 1) {
+                    QdSegmentedControl(
+                        options = listOf("All (${allAccounts.size})" to null) +
+                            availableProviders.map { provider ->
+                                val count = allAccounts.count { it.providerId == provider }
+                                "${provider.displayName} ($count)" to provider
+                            },
+                        selected = selectedProvider,
+                        onSelect = onSelectProvider,
+                        fillWidth = false,
                     )
                 }
-                QdGlassIconButton(
+                Spacer(modifier = Modifier.weight(1f))
+                QdIconButton(
                     onClick = onRefresh,
                     enabled = refreshEnabled,
-                    diameter = 30.dp,
+                    diameter = 28.dp,
                 ) {
                     val rotation = rememberTrayRefreshRotation(active = refreshBusy)
                     QdRefreshIcon(
@@ -437,12 +462,12 @@ private fun QuotaDogTrayPanelContent(
                         modifier = Modifier.rotate(rotation),
                     )
                 }
-                QdGlassIconButton(onClick = onClose, diameter = 30.dp) {
+                QdIconButton(onClick = onClose, diameter = 28.dp) {
                     QdCloseIcon(tint = colors.textSecondary, size = 15.dp)
                 }
             }
 
-            if (accounts.isEmpty()) {
+            if (allAccounts.isEmpty()) {
                 TrayEmptyState(
                     modifier = Modifier.weight(1f),
                     onOpenWindow = onOpenWindow,
@@ -459,6 +484,7 @@ private fun QuotaDogTrayPanelContent(
                             account = account,
                             emailPrivacyMode = emailPrivacyMode,
                             usageDisplayMode = usageDisplayMode,
+                            onRefresh = { onRefreshAccount(account.accountKey) },
                         )
                     }
                     if (accounts.size > TRAY_ACCOUNT_LIMIT) {
@@ -523,13 +549,19 @@ private fun TrayAccountCard(
     account: AccountUiState,
     emailPrivacyMode: EmailPrivacyMode,
     usageDisplayMode: UsageDisplayMode,
+    onRefresh: () -> Unit,
 ) {
     val colors = QdTheme.colors
     val typo = QdTheme.typography
     val spacing = QdTheme.spacing
     val windows = account.snapshot?.windows.orEmpty()
+    val hoverInteraction = remember { MutableInteractionSource() }
+    val hovered by hoverInteraction.collectIsHoveredAsState()
+    val refreshable = account.canRefreshFromTray()
+    val showRefresh = refreshable && (hovered || account.busy)
 
     QdCard(
+        modifier = Modifier.hoverable(hoverInteraction),
         padding = PaddingValues(spacing.sm),
         background = colors.surface,
         elevated = false,
@@ -537,7 +569,7 @@ private fun TrayAccountCard(
         Column(verticalArrangement = Arrangement.spacedBy(spacing.sm)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
+                verticalAlignment = Alignment.Top,
                 horizontalArrangement = Arrangement.spacedBy(spacing.sm),
             ) {
                 QdProviderAvatar(account.providerId, size = 18.dp)
@@ -549,13 +581,39 @@ private fun TrayAccountCard(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
-                    Text(
-                        text = account.trayStatusLabel(),
-                        style = typo.caption,
-                        color = if (account.busy) colors.textSecondary else colors.textTertiary,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
+                    val status = account.trayStatusLabel()
+                    if (status.isNotEmpty()) {
+                        Text(
+                            text = status,
+                            style = typo.caption,
+                            color = if (account.busy) colors.textSecondary else colors.textTertiary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+                if (refreshable) {
+                    Box(
+                        modifier = Modifier.size(18.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        if (showRefresh) {
+                            QdIconButton(
+                                onClick = onRefresh,
+                                enabled = !account.busy,
+                                diameter = 18.dp,
+                                hoverColor = Color.Transparent,
+                                pressedColor = Color.Transparent,
+                            ) {
+                                val rotation = rememberTrayRefreshRotation(active = account.busy)
+                                QdRefreshIcon(
+                                    tint = colors.textSecondary,
+                                    size = 12.dp,
+                                    modifier = Modifier.rotate(rotation),
+                                )
+                            }
+                        }
+                    }
                 }
             }
 
@@ -699,7 +757,6 @@ private fun List<AccountUiState>.toDesktopStatusBarState(
     val refreshBusy = refreshableAccounts.any { it.busy }
     return DesktopStatusBarState(
         tooltip = allAccounts.traySummaryLabel(usageDisplayMode),
-        summary = trayPanelSummaryLabel(usageDisplayMode),
         providerFilters =
             listOf(DesktopStatusBarProviderFilter(id = "", label = "All (${allAccounts.size})")) +
                 availableProviders.map { provider ->
@@ -712,10 +769,13 @@ private fun List<AccountUiState>.toDesktopStatusBarState(
         selectedProvider = selectedProvider?.name.orEmpty(),
         accounts = visibleAccounts.map { account ->
             DesktopStatusBarAccount(
+                id = account.accountKey.toStatusBarId(),
                 title = account.trayAccountTitle(emailPrivacyMode),
                 status = account.trayStatusLabel(),
+                emptyLabel = account.trayEmptyLabel(),
                 provider = account.providerId.name,
                 busy = account.busy || account.loginStart != null,
+                refreshable = account.canRefreshFromTray(),
                 windows = account.snapshot?.windows.orEmpty().map { window ->
                     DesktopStatusBarUsageWindow(
                         label = window.trayWindowLabel(),
@@ -749,18 +809,6 @@ private fun List<AccountUiState>.traySummaryLabel(displayMode: UsageDisplayMode)
     }
 }
 
-private fun List<AccountUiState>.trayPanelSummaryLabel(displayMode: UsageDisplayMode): String {
-    if (isEmpty()) return "No accounts yet"
-    val accountLabel = "${size} account${if (size == 1) "" else "s"}"
-    val windows = flatMap { it.snapshot?.windows.orEmpty() }
-    val extreme = windows.extremeDisplayRatio(displayMode) ?: return accountLabel
-    val pct = (extreme * 100).roundToInt()
-    return when (displayMode) {
-        UsageDisplayMode.Used -> "$accountLabel · $pct% max used"
-        UsageDisplayMode.Remaining -> "$accountLabel · $pct% min left"
-    }
-}
-
 private fun List<UsageWindow>.extremeDisplayRatio(displayMode: UsageDisplayMode): Double? {
     return when (displayMode) {
         UsageDisplayMode.Used -> maxOfOrNull { it.usedRatio }
@@ -779,8 +827,12 @@ private fun AccountUiState.trayStatusLabel(): String {
     }
     if (authState == AuthState.RateLimited) return message ?: "Rate limited"
     if (authState == AuthState.Error) return message ?: "Action needed"
-    snapshot?.collectedAt?.let { return "Updated ${it.toEpochMilliseconds().agoLabel()}" }
+    snapshot?.collectedAt?.let { return it.toEpochMilliseconds().agoLabel() }
     return message ?: "No usage data yet"
+}
+
+private fun AccountUiState.trayEmptyLabel(): String {
+    return message?.takeIf { it.isNotBlank() } ?: "No usage data yet"
 }
 
 @Composable
