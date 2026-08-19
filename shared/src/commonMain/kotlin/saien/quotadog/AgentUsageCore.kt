@@ -72,6 +72,7 @@ data class AccountKey(
     val accountId: String
 ) {
     val isPending: Boolean get() = accountId.startsWith(PENDING_PREFIX)
+    val isPendingImport: Boolean get() = accountId == "${PENDING_PREFIX}import"
 
     companion object {
         private const val PENDING_PREFIX = "pending:"
@@ -205,7 +206,7 @@ private object ProviderSpecs {
         )
         ProviderId.CURSOR -> throw ProviderException(
             AuthState.NotConfigured,
-            "Cursor imports credentials from the local Cursor app instead of browser OAuth."
+            "Cursor imports credentials from the local Cursor app or `cursor-agent` CLI instead of browser OAuth."
         )
         ProviderId.ANTIGRAVITY -> throw ProviderException(
             AuthState.NotConfigured,
@@ -308,7 +309,15 @@ class QuotaDogClient(
     }
 
     suspend fun importCursorAccount(): AccountKey {
-        val token = loadCursorCredentialsFromLocalApp()
+        var token = loadCursorCredentialsFromLocalApp()
+        if (token.email.isNullOrBlank()) {
+            val email = runCatching {
+                CursorUsageFetcher.fetchUserEmail(httpClient, token.accessToken)
+            }.getOrNull()
+            if (!email.isNullOrBlank()) {
+                token = token.copy(email = email)
+            }
+        }
         return tokenStore.save(ProviderId.CURSOR, token)
     }
 
@@ -513,7 +522,7 @@ class QuotaDogClient(
             )
             ProviderId.CURSOR -> throw ProviderException(
                 AuthState.NotConfigured,
-                "Cursor does not use browser OAuth. Import credentials from the local Cursor app instead."
+                "Cursor does not use browser OAuth. Import credentials from the local Cursor app or CLI instead."
             )
             ProviderId.ANTIGRAVITY -> throw ProviderException(
                 AuthState.NotConfigured,
@@ -553,7 +562,7 @@ class QuotaDogClient(
             ProviderId.GROK -> GrokOAuth.refresh(httpClient, refreshToken)
             ProviderId.CURSOR -> throw ProviderException(
                 AuthState.RequiresRelogin,
-                "Cursor credentials are refreshed by the Cursor app. Sign in again, then re-import."
+                "Cursor credentials are refreshed by the Cursor app or CLI. Sign in again, then re-import."
             )
             ProviderId.ANTIGRAVITY -> AntigravityUsageFetcher.refreshAccessToken(httpClient, refreshToken)
         }
@@ -633,16 +642,22 @@ class QuotaDogClient(
     private suspend fun fetchCursorUsage(token: OAuthTokenBundle): ProviderUsageSnapshot {
         val usage = CursorUsageFetcher.fetch(httpClient, token.accessToken)
         val planLabel = formatCursorPlanLabel(usage.membershipType ?: token.accountId)
+        val email = token.email
+            ?: runCatching { CursorUsageFetcher.fetchUserEmail(httpClient, token.accessToken) }.getOrNull()
         return ProviderUsageSnapshot(
             providerId = ProviderId.CURSOR,
             authState = AuthState.LoggedIn,
             windows = usage.windows,
             collectedAt = Clock.System.now(),
-            accountEmail = token.email,
+            accountEmail = email,
             message = buildString {
                 if (planLabel != null) append("Plan: $planLabel")
+                formatCursorSpend(usage.includedSpendCents, usage.includedLimitCents)?.let { spend ->
+                    if (isNotEmpty()) append(" · ")
+                    append(spend)
+                }
                 if (isNotEmpty()) append(" · ")
-                append("Source: Cursor app (${cursorAuthFileHint()})")
+                append("Source: Cursor (${cursorAuthFileHint()})")
             },
         )
     }
@@ -794,6 +809,17 @@ class QuotaDogStore(
     }
 
     fun startRefresh(accountKey: AccountKey) {
+        if (accountKey.isPendingImport) {
+            when (accountKey.providerId) {
+                ProviderId.CURSOR -> launchSafely("importCursor") { importCursorAccountAndRefresh() }
+                ProviderId.GROK -> launchSafely("importGrok") { importGrokAccountAndRefresh() }
+                ProviderId.ANTIGRAVITY -> launchSafely("importAntigravity") { importAntigravityAccountAndRefresh() }
+                ProviderId.CODEX, ProviderId.CLAUDE_CODE -> launchSafely("refresh:${accountKey.providerId.name}") {
+                    refresh(accountKey)
+                }
+            }
+            return
+        }
         launchSafely("refresh:${accountKey.providerId.name}") { refresh(accountKey) }
     }
 
@@ -1297,7 +1323,8 @@ private fun parseClaudeWindow(id: String, label: String, element: JsonElement?):
     return UsageWindow(
         id = id,
         label = label,
-        usedRatio = normalizeUtilization(used),
+        // Claude reports utilization on a 0–100 percent scale (1 means 1%, not full).
+        usedRatio = normalizePercent(used),
         resetsAt = resetAt,
         durationSeconds = inferWindowDurationSeconds(id, label)
     )
@@ -1350,7 +1377,7 @@ private fun inferWindowDurationSeconds(id: String, label: String): Long? {
     return when (id) {
         "primary", "five_hour" -> FIVE_HOUR_SECONDS
         "secondary", "seven_day", "seven_day_sonnet", "seven_day_opus" -> SEVEN_DAY_SECONDS
-        "plan-usage", "on-demand" -> THIRTY_DAY_SECONDS
+        "plan-usage", "on-demand", "cursor-auto", "cursor-api" -> THIRTY_DAY_SECONDS
         "antigravity-gemini-session", "antigravity-claude-gpt-session" -> FIVE_HOUR_SECONDS
         "antigravity-gemini-weekly", "antigravity-claude-gpt-weekly" -> SEVEN_DAY_SECONDS
         "credits" -> when {
@@ -1376,6 +1403,23 @@ private fun formatCursorPlanLabel(raw: String?): String? {
         .joinToString(" ") { part ->
             part.lowercase().replaceFirstChar { it.titlecase() }
         }
+}
+
+private fun formatCursorSpend(usedCents: Int?, limitCents: Int?): String? {
+    if (usedCents == null || limitCents == null || limitCents <= 0) return null
+    return "${formatCursorCents(usedCents)} / ${formatCursorCents(limitCents)} included"
+}
+
+private fun formatCursorCents(cents: Int): String {
+    val sign = if (cents < 0) "-" else ""
+    val abs = kotlin.math.abs(cents)
+    val dollars = abs / 100
+    val remainder = abs % 100
+    return if (remainder == 0) {
+        "$sign$$dollars"
+    } else {
+        "$sign$$dollars.${remainder.toString().padStart(2, '0')}"
+    }
 }
 
 private const val FIVE_HOUR_SECONDS = 5L * 60L * 60L

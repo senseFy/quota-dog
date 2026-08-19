@@ -35,22 +35,30 @@ actual fun grokAuthFileHint(): String = grokAuthFile().absolutePath
 actual fun grokCliImportAvailable(): Boolean = true
 
 actual fun loadCursorCredentialsFromLocalApp(): OAuthTokenBundle {
-    val dbFile = cursorStateDbFile()
-    if (!dbFile.exists()) {
-        throw ProviderException(
-            AuthState.NotConfigured,
-            "Cursor auth database not found at ${dbFile.absolutePath}. Install Cursor, sign in, then import again.",
-        )
-    }
-    val rows = readCursorAuthRows(dbFile)
-    return CursorAuthParser.fromAuthRows(rows)
+    val fromDb = runCatching { loadCursorCredentialsFromStateDb() }
+    fromDb.getOrNull()?.let { return it }
+
+    val fromKeychain = runCatching { loadCursorCredentialsFromKeychain() }
+    fromKeychain.getOrNull()?.let { return it }
+
+    throw preferredCursorImportError(fromDb.exceptionOrNull(), fromKeychain.exceptionOrNull())
 }
 
-actual fun cursorAuthFileHint(): String = cursorStateDbFile().absolutePath
+actual fun cursorAuthFileHint(): String {
+    val dbFile = cursorStateDbFile()
+    return if (isMacOs()) {
+        if (dbFile.exists()) {
+            "${dbFile.absolutePath} or macOS Keychain (cursor-access-token)"
+        } else {
+            "macOS Keychain (cursor-access-token) or ${dbFile.absolutePath}"
+        }
+    } else {
+        dbFile.absolutePath
+    }
+}
 
 actual fun loadAntigravityCredentialsFromCli(): OAuthTokenBundle {
-    val os = System.getProperty("os.name").orEmpty().lowercase()
-    if (!os.contains("mac") && !os.contains("darwin")) {
+    if (!isMacOs()) {
         throw ProviderException(
             AuthState.NotConfigured,
             "Antigravity CLI import is currently supported on macOS only. Run `agy` on a Mac, then import.",
@@ -58,7 +66,12 @@ actual fun loadAntigravityCredentialsFromCli(): OAuthTokenBundle {
     }
     val service = System.getenv("ANTIGRAVITY_KEYRING_SERVICE")?.takeIf { it.isNotBlank() } ?: "gemini"
     val account = System.getenv("ANTIGRAVITY_KEYRING_ACCOUNT")?.takeIf { it.isNotBlank() } ?: "antigravity"
-    val secret = readMacKeychainSecret(service = service, account = account)
+    val secret = readMacKeychainSecret(
+        service = service,
+        account = account,
+        notFoundMessage = "Antigravity CLI credentials not found in Keychain ($service / $account). " +
+            "Run `agy`, sign in with Google OAuth, then import again.",
+    )
     return AntigravityAuthParser.parseKeyringSecret(secret)
 }
 
@@ -85,6 +98,55 @@ private fun cursorStateDbFile(): File {
         else -> File(home, ".config/Cursor/User/globalStorage/state.vscdb")
     }
     return path
+}
+
+private fun loadCursorCredentialsFromStateDb(): OAuthTokenBundle {
+    val dbFile = cursorStateDbFile()
+    if (!dbFile.exists()) {
+        throw ProviderException(
+            AuthState.NotConfigured,
+            "Cursor auth database not found at ${dbFile.absolutePath}. Install Cursor, sign in, then import again.",
+        )
+    }
+    val rows = readCursorAuthRows(dbFile)
+    return CursorAuthParser.fromAuthRows(rows)
+}
+
+private fun loadCursorCredentialsFromKeychain(): OAuthTokenBundle {
+    if (!isMacOs()) {
+        throw ProviderException(
+            AuthState.NotConfigured,
+            "Cursor CLI keychain import is currently supported on macOS only.",
+        )
+    }
+    val accessToken = readMacKeychainSecret(
+        service = "cursor-access-token",
+        account = "cursor-user",
+        notFoundMessage = "Cursor CLI access token not found in Keychain. Run `cursor-agent login`, then import again.",
+    )
+    val refreshToken = runCatching {
+        readMacKeychainSecret(service = "cursor-refresh-token", account = "cursor-user")
+    }.getOrNull()
+    return CursorAuthParser.toTokenBundle(
+        accessToken = accessToken,
+        refreshToken = refreshToken,
+        email = CursorAuthParser.emailFromAccessToken(accessToken),
+    )
+}
+
+private fun preferredCursorImportError(dbError: Throwable?, keychainError: Throwable?): ProviderException {
+    val errors = listOfNotNull(dbError, keychainError).filterIsInstance<ProviderException>()
+    val hardError = errors.firstOrNull { it.state != AuthState.NotConfigured }
+    return ProviderException(
+        state = hardError?.state ?: AuthState.NotConfigured,
+        message = hardError?.message
+            ?: "Cursor credentials not found. Sign in to the Cursor app, or run `cursor-agent login`, then import again.",
+    )
+}
+
+private fun isMacOs(): Boolean {
+    val os = System.getProperty("os.name").orEmpty().lowercase()
+    return os.contains("mac") || os.contains("darwin")
 }
 
 private fun readCursorAuthRows(dbFile: File): Map<String, String> {
@@ -131,7 +193,11 @@ private fun parseSqliteJsonRows(output: String): Map<String, String> {
     return rows
 }
 
-private fun readMacKeychainSecret(service: String, account: String): String {
+private fun readMacKeychainSecret(
+    service: String,
+    account: String,
+    notFoundMessage: String? = null,
+): String {
     val process = runCatching {
         ProcessBuilder(
             "security",
@@ -145,7 +211,7 @@ private fun readMacKeychainSecret(service: String, account: String): String {
     }.getOrElse {
         throw ProviderException(
             AuthState.Error,
-            "Could not run macOS `security` to read Antigravity CLI credentials.",
+            "Could not run macOS `security` to read local credentials.",
         )
     }
     val output = process.inputStream.bufferedReader().use { it.readText() }
@@ -158,10 +224,9 @@ private fun readMacKeychainSecret(service: String, account: String): String {
         throw ProviderException(
             if (notFound) AuthState.NotConfigured else AuthState.Error,
             if (notFound) {
-                "Antigravity CLI credentials not found in Keychain ($service / $account). " +
-                    "Run `agy`, sign in with Google OAuth, then import again."
+                notFoundMessage ?: "Keychain item not found ($service / $account)."
             } else {
-                "Failed to read Antigravity CLI Keychain item: $preview"
+                "Failed to read Keychain item ($service / $account): $preview"
             },
         )
     }

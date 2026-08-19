@@ -321,7 +321,7 @@ private fun QuotaDogScreen(
                         snackbar.show(
                             text = when (provider) {
                                 ProviderId.GROK -> "Opening xAI sign-in..."
-                                ProviderId.CURSOR -> "Importing Cursor app credentials..."
+                                ProviderId.CURSOR -> "Importing Cursor app or CLI credentials..."
                                 ProviderId.ANTIGRAVITY -> "Importing Antigravity CLI credentials..."
                                 else -> "Opening browser for ${provider.displayName}..."
                             },
@@ -720,8 +720,10 @@ private fun AccountCard(
                     windows.forEach { UsageWindowRow(it, usageDisplayMode, showProjectedUsage) }
                 }
             } else {
+                val statusMessage = state.message?.takeIf { it.isNotBlank() }
                 InlineStatus(
                     text = when {
+                        statusMessage != null -> statusMessage
                         state.deviceLogin != null && state.busy ->
                             "Approve access in the browser, then return here."
                         state.deviceLogin != null ->
@@ -900,7 +902,10 @@ private fun UsageWindowRow(window: UsageWindow, displayMode: UsageDisplayMode, s
                     overflow = TextOverflow.Ellipsis,
                 )
                 Text(
-                    "$pct%",
+                    when (displayMode) {
+                        UsageDisplayMode.Used -> "$pct% used"
+                        UsageDisplayMode.Remaining -> "$pct% left"
+                    },
                     style = typo.numeric.copy(fontWeight = FontWeight.SemiBold),
                     color = progressFill,
                     maxLines = 1,
@@ -970,7 +975,8 @@ private fun AccountStatusRow(
             action = AccountStatusAction.ReopenLogin,
             actionLabel = "Open auth page",
         )
-        state.authState == AuthState.TokenExpired ||
+        state.authState == AuthState.NotConfigured ||
+            state.authState == AuthState.TokenExpired ||
             state.authState == AuthState.Unauthorized ||
             state.authState == AuthState.RequiresRelogin -> AccountStatusUi(
                 title = "Sign-in needed",
@@ -1059,7 +1065,7 @@ private fun ProviderPickerContent(onSelect: (ProviderId) -> Unit) {
     val providers = availableProviders()
     val description = when {
         (ProviderId.CURSOR in providers || ProviderId.ANTIGRAVITY in providers) && grokCliImportAvailable() ->
-            "Choose a provider. Codex, Claude, and Grok sign in through a browser. Grok can also import the local CLI; Cursor and Antigravity import local credentials."
+            "Choose a provider. Codex, Claude, and Grok sign in through a browser. Grok can also import the local CLI; Cursor imports the desktop app or `cursor-agent` CLI; Antigravity imports local CLI credentials."
         ProviderId.ANTIGRAVITY in providers ->
             "Choose a provider. Codex, Claude, and Grok sign in through a browser. Antigravity imports local CLI credentials on desktop."
         ProviderId.GROK in providers ->
@@ -1243,7 +1249,7 @@ private fun ProviderId.subtitle(): String = when (this) {
     ProviderId.CODEX -> "OpenAI Codex / ChatGPT usage"
     ProviderId.CLAUDE_CODE -> "Anthropic Claude Code usage"
     ProviderId.GROK -> "Grok Build / SuperGrok credits"
-    ProviderId.CURSOR -> "Cursor plan / on-demand usage (desktop)"
+    ProviderId.CURSOR -> "Cursor plan / on-demand usage (app or CLI)"
     ProviderId.ANTIGRAVITY -> "Antigravity CLI quota windows (desktop)"
 }
 
@@ -1272,7 +1278,9 @@ private fun UsageWindow.infoLabel(): String = when (id) {
     "seven_day_sonnet" -> "Weekly Sonnet"
     "seven_day_opus" -> "Weekly Opus"
     "credits" -> "Credits"
-    "plan-usage" -> "Plan"
+    "plan-usage" -> "Included"
+    "cursor-auto" -> "Auto"
+    "cursor-api" -> "API"
     "on-demand" -> "On-demand"
     else -> label
 }

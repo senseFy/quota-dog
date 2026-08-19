@@ -799,7 +799,9 @@ private fun UsageWindow.trayWindowLabel(): String = when (id) {
     "seven_day_sonnet" -> "Weekly Sonnet"
     "seven_day_opus" -> "Weekly Opus"
     "credits" -> "Credits"
-    "plan-usage" -> "Plan"
+    "plan-usage" -> "Included"
+    "cursor-auto" -> "Auto"
+    "cursor-api" -> "API"
     "on-demand" -> "On-demand"
     else -> label
 }

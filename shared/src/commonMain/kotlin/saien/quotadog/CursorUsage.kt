@@ -3,8 +3,12 @@ package saien.quotadog
 import io.ktor.client.HttpClient
 import io.ktor.client.request.get
 import io.ktor.client.request.header
+import io.ktor.client.request.post
+import io.ktor.client.request.setBody
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
+import io.ktor.http.ContentType
+import io.ktor.http.contentType
 import io.ktor.http.isSuccess
 import kotlinx.datetime.Clock
 import kotlinx.datetime.Instant
@@ -21,11 +25,31 @@ internal data class CursorUsageSnapshot(
     val isUnlimited: Boolean,
     val billingCycleEnd: Instant?,
     val windows: List<UsageWindow>,
+    val includedSpendCents: Int? = null,
+    val includedLimitCents: Int? = null,
 )
 
 internal object CursorUsageFetcher {
     private const val ENDPOINT = "https://api2.cursor.sh/auth/usage-summary"
+    private const val ME_ENDPOINT = "https://api2.cursor.sh/aiserver.v1.DashboardService/GetMe"
     private val json = Json { ignoreUnknownKeys = true }
+
+    suspend fun fetchUserEmail(httpClient: HttpClient, accessToken: String): String? {
+        val response = httpClient.post(ME_ENDPOINT) {
+            header("Authorization", "Bearer $accessToken")
+            header("Connect-Protocol-Version", "1")
+            header("Accept", "application/json")
+            contentType(ContentType.Application.Json)
+            setBody("{}")
+        }
+        if (!response.status.isSuccess()) return null
+        return parseMeEmail(response.bodyAsText())
+    }
+
+    internal fun parseMeEmail(text: String): String? {
+        val root = runCatching { json.parseToJsonElement(text).jsonObject }.getOrNull() ?: return null
+        return root["email"]?.jsonPrimitive?.contentOrNull?.trim()?.takeIf { it.isNotEmpty() }
+    }
 
     suspend fun fetch(httpClient: HttpClient, accessToken: String): CursorUsageSnapshot {
         val response = httpClient.get(ENDPOINT) {
@@ -71,47 +95,50 @@ internal object CursorUsageFetcher {
         val individualUsage = root["individualUsage"]?.jsonObject
 
         val windows = mutableListOf<UsageWindow>()
+        val cycleSeconds = inferCursorCycleDurationSeconds(billingCycleStart, billingCycleEnd, now)
+        val plan = individualUsage?.get("plan")?.jsonObject
         if (isUnlimited) {
             windows += UsageWindow(
                 id = "plan-usage",
                 label = "Unlimited",
                 usedRatio = 0.0,
                 resetsAt = billingCycleEnd,
-                durationSeconds = inferCursorCycleDurationSeconds(billingCycleStart, billingCycleEnd, now),
+                durationSeconds = cycleSeconds,
             )
-        } else {
-            val plan = individualUsage?.get("plan")?.jsonObject
-            if (plan != null && (plan["enabled"]?.jsonPrimitive?.booleanOrNull ?: true)) {
-                val usedRatio = planUsedRatio(plan)
-                windows += UsageWindow(
-                    id = "plan-usage",
-                    label = "Plan usage",
-                    usedRatio = usedRatio,
-                    resetsAt = billingCycleEnd,
-                    durationSeconds = inferCursorCycleDurationSeconds(billingCycleStart, billingCycleEnd, now),
-                )
+        } else if (plan != null && (plan["enabled"]?.jsonPrimitive?.booleanOrNull ?: true)) {
+            // Match cursor-agent: Included uses totalPercentUsed, then spend/limit.
+            windows += UsageWindow(
+                id = "plan-usage",
+                label = "Included",
+                usedRatio = planUsedRatio(plan),
+                resetsAt = billingCycleEnd,
+                durationSeconds = cycleSeconds,
+            )
+            percentWindow(plan, "autoPercentUsed", "cursor-auto", "Auto", billingCycleEnd, cycleSeconds)
+                ?.let { windows += it }
+            percentWindow(plan, "apiPercentUsed", "cursor-api", "API", billingCycleEnd, cycleSeconds)
+                ?.let { windows += it }
+        }
+        val onDemand = individualUsage?.get("onDemand")?.jsonObject
+        if (!isUnlimited && onDemand != null && (onDemand["enabled"]?.jsonPrimitive?.booleanOrNull ?: false)) {
+            val used = onDemand["used"]?.jsonPrimitive?.intOrNull ?: 0
+            val limit = onDemand["limit"]?.jsonPrimitive?.intOrNull
+            val usedRatio = if (limit != null && limit > 0) {
+                (used.toDouble() / limit.toDouble()).coerceIn(0.0, 1.0)
+            } else {
+                0.0
             }
-            val onDemand = individualUsage?.get("onDemand")?.jsonObject
-            if (onDemand != null && (onDemand["enabled"]?.jsonPrimitive?.booleanOrNull ?: false)) {
-                val used = onDemand["used"]?.jsonPrimitive?.intOrNull ?: 0
-                val limit = onDemand["limit"]?.jsonPrimitive?.intOrNull
-                val usedRatio = if (limit != null && limit > 0) {
-                    (used.toDouble() / limit.toDouble()).coerceIn(0.0, 1.0)
+            windows += UsageWindow(
+                id = "on-demand",
+                label = if (limit != null && limit > 0) {
+                    "On-demand"
                 } else {
-                    0.0
-                }
-                windows += UsageWindow(
-                    id = "on-demand",
-                    label = if (limit != null && limit > 0) {
-                        "On-demand"
-                    } else {
-                        "On-demand · $used used"
-                    },
-                    usedRatio = usedRatio,
-                    resetsAt = billingCycleEnd,
-                    durationSeconds = inferCursorCycleDurationSeconds(billingCycleStart, billingCycleEnd, now),
-                )
-            }
+                    "On-demand · $used used"
+                },
+                usedRatio = usedRatio,
+                resetsAt = billingCycleEnd,
+                durationSeconds = cycleSeconds,
+            )
         }
 
         if (windows.isEmpty()) {
@@ -129,22 +156,48 @@ internal object CursorUsageFetcher {
             isUnlimited = isUnlimited,
             billingCycleEnd = billingCycleEnd,
             windows = windows,
+            includedSpendCents = plan?.intField("used") ?: plan?.intField("includedSpend"),
+            includedLimitCents = plan?.intField("limit"),
         )
     }
 
     private fun planUsedRatio(plan: kotlinx.serialization.json.JsonObject): Double {
+        // cursor-agent: percentage ?? (used/limit*100). Do not prefer spend/limit
+        // when totalPercentUsed exists — Ultra spend can be ~98% while Included is ~16%.
         val totalPercentUsed = plan["totalPercentUsed"]?.jsonPrimitive?.doubleOrNull
         if (totalPercentUsed != null) return normalizePercent(totalPercentUsed)
-        val used = plan["used"]?.jsonPrimitive?.intOrNull
-        val limit = plan["limit"]?.jsonPrimitive?.intOrNull
+        val used = plan.intField("used") ?: plan.intField("includedSpend")
+        val limit = plan.intField("limit")
         if (used != null && limit != null && limit > 0) {
             return (used.toDouble() / limit.toDouble()).coerceIn(0.0, 1.0)
         }
-        val remaining = plan["remaining"]?.jsonPrimitive?.intOrNull
+        val remaining = plan.intField("remaining")
         if (remaining != null && limit != null && limit > 0) {
             return (1.0 - remaining.toDouble() / limit.toDouble()).coerceIn(0.0, 1.0)
         }
         return 0.0
+    }
+
+    private fun percentWindow(
+        plan: kotlinx.serialization.json.JsonObject,
+        key: String,
+        id: String,
+        label: String,
+        resetsAt: Instant?,
+        durationSeconds: Long?,
+    ): UsageWindow? {
+        val percent = plan[key]?.jsonPrimitive?.doubleOrNull ?: return null
+        return UsageWindow(
+            id = id,
+            label = label,
+            usedRatio = normalizePercent(percent),
+            resetsAt = resetsAt,
+            durationSeconds = durationSeconds,
+        )
+    }
+
+    private fun kotlinx.serialization.json.JsonObject.intField(name: String): Int? {
+        return this[name]?.jsonPrimitive?.intOrNull
     }
 
     private fun parseInstant(raw: String?): Instant? {

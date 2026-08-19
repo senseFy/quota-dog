@@ -2,6 +2,7 @@ package saien.quotadog
 
 import kotlinx.datetime.Clock
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
@@ -36,17 +37,31 @@ internal object CursorAuthParser {
         return toTokenBundle(
             accessToken = accessToken,
             refreshToken = rows["cursorAuth/refreshToken"],
-            email = rows["cursorAuth/cachedEmail"],
+            email = rows["cursorAuth/cachedEmail"] ?: emailFromAccessToken(accessToken),
             membershipType = rows["cursorAuth/stripeMembershipType"],
         )
     }
 
+    internal fun emailFromAccessToken(jwt: String): String? {
+        val claims = jwtClaims(jwt) ?: return null
+        val email = claims.stringClaim("email")
+        if (email != null) return email
+        return claims.stringClaim("sub")?.takeIf { it.contains('@') }
+    }
+
     internal fun jwtExpiryEpochMillis(jwt: String): Long? {
+        val expSeconds = jwtClaims(jwt)?.get("exp")?.jsonPrimitive?.longOrNull ?: return null
+        return expSeconds * 1_000L
+    }
+
+    private fun jwtClaims(jwt: String): kotlinx.serialization.json.JsonObject? {
         val payload = jwt.split(".").getOrNull(1) ?: return null
         val decoded = runCatching { base64UrlDecode(payload).decodeToString() }.getOrNull() ?: return null
-        val claims = runCatching { json.parseToJsonElement(decoded).jsonObject }.getOrNull() ?: return null
-        val expSeconds = claims["exp"]?.jsonPrimitive?.longOrNull ?: return null
-        return expSeconds * 1_000L
+        return runCatching { json.parseToJsonElement(decoded).jsonObject }.getOrNull()
+    }
+
+    private fun kotlinx.serialization.json.JsonObject.stringClaim(name: String): String? {
+        return this[name]?.jsonPrimitive?.contentOrNull?.trim()?.takeIf { it.isNotEmpty() }
     }
 
     private fun base64UrlDecode(input: String): ByteArray {

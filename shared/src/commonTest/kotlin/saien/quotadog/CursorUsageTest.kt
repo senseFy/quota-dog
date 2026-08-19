@@ -37,6 +37,21 @@ class CursorAuthParserTest {
         assertNull(CursorAuthParser.jwtExpiryEpochMillis("not-a-jwt"))
     }
 
+    @Test
+    fun readsEmailFromJwtWhenCachedEmailMissing() {
+        val token = CursorAuthParser.fromAuthRows(
+            mapOf("cursorAuth/accessToken" to sampleJwt(expSeconds = 1_800_000_000L)),
+        )
+        assertEquals("user@cursor.com", token.email)
+    }
+
+    @Test
+    fun treatsEmailLikeSubAsAccountEmail() {
+        val header = "eyJhbGciOiJub25lIn0"
+        val payload = base64UrlEncode("""{"exp":1800000000,"sub":"cli@cursor.com"}""".encodeToByteArray())
+        assertEquals("cli@cursor.com", CursorAuthParser.emailFromAccessToken("$header.$payload.sig"))
+    }
+
     private fun sampleJwt(expSeconds: Long): String {
         val header = "eyJhbGciOiJub25lIn0"
         val payloadJson = """{"exp":$expSeconds,"email":"user@cursor.com"}"""
@@ -96,6 +111,7 @@ class CursorUsageParserTest {
         assertEquals("pro", snapshot.membershipType)
         assertEquals(2, snapshot.windows.size)
         val plan = snapshot.windows.first { it.id == "plan-usage" }
+        assertEquals("Included", plan.label)
         assertEquals(0.25, plan.usedRatio, 0.000001)
         assertNotNull(plan.resetsAt)
         val onDemand = snapshot.windows.first { it.id == "on-demand" }
@@ -141,5 +157,42 @@ class CursorUsageParserTest {
         assertEquals(1, snapshot.windows.size)
         assertEquals("Unlimited", snapshot.windows.single().label)
         assertEquals(0.0, snapshot.windows.single().usedRatio)
+    }
+
+    @Test
+    fun prefersTotalPercentWhenItDivergesFromSpend() {
+        val snapshot = CursorUsageFetcher.parseUsageSummaryJson(
+            """
+            {
+              "membershipType": "ultra",
+              "isUnlimited": false,
+              "billingCycleEnd": "2026-09-12T03:11:40.000Z",
+              "individualUsage": {
+                "plan": {
+                  "enabled": true,
+                  "used": 39273,
+                  "limit": 40000,
+                  "remaining": 727,
+                  "autoPercentUsed": 0.171,
+                  "apiPercentUsed": 77.862,
+                  "totalPercentUsed": 15.7092
+                }
+              }
+            }
+            """.trimIndent()
+        )
+
+        val plan = snapshot.windows.first { it.id == "plan-usage" }
+        assertEquals(0.157092, plan.usedRatio, 0.000001)
+        assertEquals(39273, snapshot.includedSpendCents)
+        assertEquals(40000, snapshot.includedLimitCents)
+        assertEquals(0.00171, snapshot.windows.first { it.id == "cursor-auto" }.usedRatio, 0.000001)
+        assertEquals(0.77862, snapshot.windows.first { it.id == "cursor-api" }.usedRatio, 0.000001)
+    }
+
+    @Test
+    fun parsesGetMeEmail() {
+        assertEquals("user@cursor.com", CursorUsageFetcher.parseMeEmail("""{"email":"user@cursor.com","userId":1}"""))
+        assertNull(CursorUsageFetcher.parseMeEmail("""{"userId":1}"""))
     }
 }
