@@ -30,6 +30,7 @@ static const CGFloat QDCardPad = 12.0;
 static const CGFloat QDAvatarSize = 20.0;
 static const CGFloat QDProgressHeight = 4.0;
 static const CGFloat QDWindowRowHeight = 22.0;
+static const CGFloat QDResetRowHeight = 16.0;
 static const CGFloat QDSwitcherHeight = 28.0;
 static const CGFloat QDButtonHeight = 28.0;
 static const CGFloat QDAccountGap = 12.0;
@@ -1089,13 +1090,22 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
 
 - (CGFloat)heightForAccount:(NSDictionary *)account {
     NSArray *windows = [account[@"windows"] isKindOfClass:[NSArray class]] ? account[@"windows"] : @[];
+    NSInteger resetAvailable = [self integerIn:account key:@"resetAvailable" fallback:0];
     CGFloat height = QDCardPad + QDAvatarSize + 12.0; // header + gap
     if (windows.count == 0) {
-        height += 32.0; // empty muted box
+        if (resetAvailable <= 0) {
+            height += 32.0; // empty muted box
+        }
     } else {
         NSUInteger count = MIN(windows.count, QDMaxWindows);
         // each window: label(14) + gap4 + bar = QDWindowRowHeight, plus gap 6 between
         height += count * QDWindowRowHeight + MAX(0, (NSInteger)count - 1) * 6.0;
+        if (resetAvailable > 0) {
+            height += 6.0;
+        }
+    }
+    if (resetAvailable > 0) {
+        height += QDResetRowHeight;
     }
     height += QDCardPad;
     return height;
@@ -1248,6 +1258,39 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
     return row;
 }
 
+- (NSView *)buildResetCreditsRow:(NSDictionary *)account
+                           width:(CGFloat)width
+                         palette:(QDPalette)palette {
+    BOOL urgent = [self boolIn:account key:@"resetUrgent"];
+    NSColor *fill = urgent ? palette.warning : palette.success;
+    NSString *resetLabel = [self stringIn:account key:@"resetLabel" fallback:@"Reset available"];
+    QDFlippedView *row = [[QDFlippedView alloc] initWithFrame:NSMakeRect(0, 0, width, QDResetRowHeight)];
+    row.wantsLayer = YES;
+
+    NSFont *metaFont = [NSFont monospacedDigitSystemFontOfSize:11.0 weight:NSFontWeightMedium];
+    NSTextField *meta = [self label:resetLabel
+                           fontSize:11.0
+                             weight:NSFontWeightMedium
+                              color:fill];
+    meta.font = metaFont;
+    meta.alignment = NSTextAlignmentRight;
+    meta.lineBreakMode = NSLineBreakByClipping;
+    CGFloat metaWidth = ceil(meta.fittingSize.width);
+    metaWidth = MIN(MAX(metaWidth, 1.0), MAX(48.0, width - 56.0));
+    CGFloat nameWidth = MAX(48.0, width - metaWidth - 8.0);
+
+    NSTextField *name = [self label:@"Reset"
+                           fontSize:11.0
+                             weight:NSFontWeightMedium
+                              color:palette.textSecondary];
+    name.frame = NSMakeRect(0, 1, nameWidth, 14);
+    [row addSubview:name];
+
+    meta.frame = NSMakeRect(width - metaWidth, 1, metaWidth, 14);
+    [row addSubview:meta];
+    return row;
+}
+
 - (NSView *)buildAccountCard:(NSDictionary *)account
                        width:(CGFloat)width
                      palette:(QDPalette)palette
@@ -1312,17 +1355,20 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
     y += QDAvatarSize + 12.0;
 
     NSArray *windows = [account[@"windows"] isKindOfClass:[NSArray class]] ? account[@"windows"] : @[];
+    NSInteger resetAvailable = [self integerIn:account key:@"resetAvailable" fallback:0];
     if (windows.count == 0) {
-        QDFillView *empty = [[QDFillView alloc] initWithFrame:NSMakeRect(QDCardPad, y, contentWidth, 32)];
-        empty.fillColor = palette.surfaceMuted;
-        empty.cornerRadius = 10.0;
-        NSTextField *emptyLabel = [self label:[self stringIn:account key:@"emptyLabel" fallback:@"No usage data yet"]
-                                     fontSize:11.0
-                                       weight:NSFontWeightRegular
-                                        color:palette.textSecondary];
-        emptyLabel.frame = NSMakeRect(12, 8, contentWidth - 24, 16);
-        [empty addSubview:emptyLabel];
-        [card addSubview:empty];
+        if (resetAvailable <= 0) {
+            QDFillView *empty = [[QDFillView alloc] initWithFrame:NSMakeRect(QDCardPad, y, contentWidth, 32)];
+            empty.fillColor = palette.surfaceMuted;
+            empty.cornerRadius = 10.0;
+            NSTextField *emptyLabel = [self label:[self stringIn:account key:@"emptyLabel" fallback:@"No usage data yet"]
+                                         fontSize:11.0
+                                           weight:NSFontWeightRegular
+                                            color:palette.textSecondary];
+            emptyLabel.frame = NSMakeRect(12, 8, contentWidth - 24, 16);
+            [empty addSubview:emptyLabel];
+            [card addSubview:empty];
+        }
     } else {
         NSUInteger count = MIN(windows.count, QDMaxWindows);
         for (NSUInteger i = 0; i < count; i++) {
@@ -1335,6 +1381,15 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
             [card addSubview:row];
             y += QDWindowRowHeight + (i + 1 < count ? 6.0 : 0.0);
         }
+    }
+
+    if (resetAvailable > 0) {
+        if (windows.count > 0) {
+            y += 6.0;
+        }
+        NSView *resetRow = [self buildResetCreditsRow:account width:contentWidth palette:palette];
+        resetRow.frame = NSMakeRect(QDCardPad, y, contentWidth, QDResetRowHeight);
+        [card addSubview:resetRow];
     }
 
     return card;

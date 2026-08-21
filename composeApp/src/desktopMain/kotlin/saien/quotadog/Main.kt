@@ -555,6 +555,7 @@ private fun TrayAccountCard(
     val typo = QdTheme.typography
     val spacing = QdTheme.spacing
     val windows = account.snapshot?.windows.orEmpty()
+    val resetSummary = account.snapshot?.codexResetSummary()
     val hoverInteraction = remember { MutableInteractionSource() }
     val hovered by hoverInteraction.collectIsHoveredAsState()
     val refreshable = account.canRefreshFromTray()
@@ -617,7 +618,7 @@ private fun TrayAccountCard(
                 }
             }
 
-            if (windows.isEmpty()) {
+            if (windows.isEmpty() && resetSummary == null) {
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -636,6 +637,7 @@ private fun TrayAccountCard(
                     windows.forEach { window ->
                         TrayUsageWindowRow(window, usageDisplayMode)
                     }
+                    resetSummary?.let { TrayResetCreditsRow(it) }
                 }
             }
         }
@@ -682,6 +684,32 @@ private fun TrayUsageWindowRow(window: UsageWindow, displayMode: UsageDisplayMod
             progress = primaryPct / 100f,
             height = 3.dp,
             fill = fill,
+        )
+    }
+}
+
+@Composable
+private fun TrayResetCreditsRow(summary: CodexResetSummary) {
+    val colors = QdTheme.colors
+    val typo = QdTheme.typography
+    val fill = if (summary.expiringSoon) colors.warning else colors.success
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = "Reset",
+            style = typo.caption,
+            color = colors.textSecondary,
+            modifier = Modifier.weight(1f),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Text(
+            text = summary.compactLabel(),
+            style = typo.numeric.copy(fontWeight = FontWeight.SemiBold),
+            color = fill,
+            maxLines = 1,
         )
     }
 }
@@ -768,6 +796,7 @@ private fun List<AccountUiState>.toDesktopStatusBarState(
                 },
         selectedProvider = selectedProvider?.name.orEmpty(),
         accounts = visibleAccounts.map { account ->
+            val resetSummary = account.snapshot?.codexResetSummary()
             DesktopStatusBarAccount(
                 id = account.accountKey.toStatusBarId(),
                 title = account.trayAccountTitle(emailPrivacyMode),
@@ -784,6 +813,9 @@ private fun List<AccountUiState>.toDesktopStatusBarState(
                         resetLabel = window.trayResetLabel(),
                     )
                 },
+                resetAvailable = resetSummary?.availableCount ?: 0,
+                resetLabel = resetSummary?.compactLabel(),
+                resetUrgent = resetSummary?.expiringSoon == true,
             )
         },
         moreAccounts = (size - visibleAccounts.size).coerceAtLeast(0),

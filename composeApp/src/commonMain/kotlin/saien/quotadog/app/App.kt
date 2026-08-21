@@ -58,15 +58,18 @@ import saien.quotadog.AppPreferences
 import saien.quotadog.AuthState
 import saien.quotadog.CloudSyncCoordinator
 import saien.quotadog.CloudSyncLocalRepository
+import saien.quotadog.CodexResetSummary
 import saien.quotadog.DashboardState
 import saien.quotadog.EmailPrivacyMode
 import saien.quotadog.PlatformTokenStore
 import saien.quotadog.ProviderId
 import saien.quotadog.availableProviders
+import saien.quotadog.codexResetSummary
 import saien.quotadog.grokAuthFileHint
 import saien.quotadog.grokCliImportAvailable
 import saien.quotadog.QuotaDogClient
 import saien.quotadog.QuotaDogStore
+import saien.quotadog.remainingLabel
 import saien.quotadog.SettingsUsageSnapshotStore
 import saien.quotadog.ThemeMode
 import saien.quotadog.TokenStore
@@ -715,9 +718,11 @@ private fun AccountCard(
             }
 
             val windows = state.snapshot?.windows.orEmpty()
-            if (windows.isNotEmpty()) {
+            val resetSummary = state.snapshot?.codexResetSummary()
+            if (windows.isNotEmpty() || resetSummary != null) {
                 Column(verticalArrangement = Arrangement.spacedBy(spacing.sm)) {
                     windows.forEach { UsageWindowRow(it, usageDisplayMode, showProjectedUsage) }
+                    resetSummary?.let { CodexResetCreditsBlock(it) }
                 }
             } else {
                 val statusMessage = state.message?.takeIf { it.isNotBlank() }
@@ -925,6 +930,65 @@ private fun UsageWindowRow(window: UsageWindow, displayMode: UsageDisplayMode, s
             progress = progress.toFloat(),
             fill = progressFill,
         )
+    }
+}
+
+@Composable
+private fun CodexResetCreditsBlock(summary: CodexResetSummary) {
+    val colors = QdTheme.colors
+    val typo = QdTheme.typography
+    val accent = if (summary.expiringSoon) colors.warning else colors.success
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                "Reset",
+                style = typo.caption,
+                color = colors.textSecondary,
+                modifier = Modifier.weight(1f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                if (summary.credits.isEmpty()) summary.compactLabel() else "${summary.availableCount} available",
+                style = typo.numeric.copy(fontWeight = FontWeight.SemiBold),
+                color = accent,
+                maxLines = 1,
+            )
+        }
+        summary.credits.take(4).forEach { credit ->
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    credit.title ?: "Banked reset",
+                    style = typo.caption,
+                    color = colors.textTertiary,
+                    modifier = Modifier.weight(1f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    credit.remainingLabel(),
+                    style = typo.numeric,
+                    color = if (summary.expiringSoon) colors.warning else colors.textTertiary,
+                    maxLines = 1,
+                )
+            }
+        }
+        val extra = summary.availableCount - summary.credits.size
+        if (extra > 0) {
+            Text(
+                "+$extra more",
+                style = typo.caption,
+                color = colors.textTertiary,
+            )
+        }
     }
 }
 

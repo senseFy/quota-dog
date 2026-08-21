@@ -20,7 +20,8 @@ class CloudSyncCryptoTest {
                             accessToken = "access",
                             refreshToken = "refresh",
                             email = "user@example.com",
-                            expiresAtEpochMillis = Long.MAX_VALUE
+                            expiresAtEpochMillis = Long.MAX_VALUE,
+                            lastRefreshEpochMillis = 1_000,
                         ),
                         updatedAtEpochMillis = 1_000
                     ),

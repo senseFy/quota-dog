@@ -35,10 +35,8 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
-import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.doubleOrNull
-import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
@@ -111,6 +109,19 @@ data class UsageWindow(
 }
 
 @Serializable
+data class CodexResetCredit(
+    val id: String,
+    val status: String,
+    val title: String? = null,
+    val description: String? = null,
+    val grantedAt: Instant? = null,
+    val expiresAt: Instant? = null,
+) {
+    val isAvailable: Boolean
+        get() = status.equals("available", ignoreCase = true)
+}
+
+@Serializable
 data class ProviderUsageSnapshot(
     val providerId: ProviderId,
     val authState: AuthState,
@@ -118,7 +129,9 @@ data class ProviderUsageSnapshot(
     val collectedAt: Instant,
     val stale: Boolean = false,
     val accountEmail: String? = null,
-    val message: String? = null
+    val message: String? = null,
+    val resetCreditsAvailable: Int? = null,
+    val resetCredits: List<CodexResetCredit> = emptyList(),
 )
 
 data class StoredToken(
@@ -570,27 +583,41 @@ class QuotaDogClient(
 
     private suspend fun fetchCodexUsage(token: OAuthTokenBundle): ProviderUsageSnapshot {
         val text = httpClient.get("https://chatgpt.com/backend-api/wham/usage") {
-            header("Authorization", "Bearer ${token.accessToken}")
-            header("Accept", "application/json")
-            header("User-Agent", "codex_cli_rs/0.116.0 (QuotaDog; Kotlin)")
-            header("Originator", "codex_cli_rs")
-            token.accountId?.let { header("Chatgpt-Account-Id", it) }
+            applyCodexWhamHeaders(token)
         }.expectSuccessBody("Codex usage")
-        val root = json.parseToJsonElement(text).jsonObject
-        val rateLimit = root["rate_limit"]?.jsonObject
-            ?: throw ProviderException(AuthState.Error, "Codex usage response is missing 'rate_limit'")
-        val windows = listOfNotNull(
-            parseCodexWindow("primary", rateLimit["primary_window"]),
-            parseCodexWindow("secondary", rateLimit["secondary_window"])
-        ).sortedBy { it.resetsAt?.toEpochMilliseconds() ?: Long.MAX_VALUE }
+        val parsed = CodexUsageParser.parseUsage(text)
+        val details = if ((parsed.resetCreditsAvailable ?: 0) > 0) {
+            runCatching {
+                val detailsText = httpClient.get("https://chatgpt.com/backend-api/wham/rate-limit-reset-credits") {
+                    applyCodexWhamHeaders(token)
+                }.expectSuccessBody("Codex reset credits")
+                CodexUsageParser.parseResetCredits(detailsText)
+            }.getOrNull()
+        } else {
+            null
+        }
+        val (available, credits) = CodexUsageParser.mergeResetCredits(
+            parsed.resetCreditsAvailable,
+            details,
+        )
         return ProviderUsageSnapshot(
             providerId = ProviderId.CODEX,
             authState = AuthState.LoggedIn,
-            windows = windows,
+            windows = parsed.windows,
             collectedAt = Clock.System.now(),
             accountEmail = token.email,
-            message = root["plan_type"]?.jsonPrimitive?.contentOrNull?.let { "Plan: $it" }
+            message = parsed.planType?.let { "Plan: $it" },
+            resetCreditsAvailable = available,
+            resetCredits = credits,
         )
+    }
+
+    private fun io.ktor.client.request.HttpRequestBuilder.applyCodexWhamHeaders(token: OAuthTokenBundle) {
+        header("Authorization", "Bearer ${token.accessToken}")
+        header("Accept", "application/json")
+        header("User-Agent", "codex_cli_rs/0.116.0 (QuotaDog; Kotlin)")
+        header("Originator", "codex_cli_rs")
+        token.accountId?.let { header("Chatgpt-Account-Id", it) }
     }
 
     private suspend fun fetchGrokUsage(token: OAuthTokenBundle): ProviderUsageSnapshot {
@@ -1290,28 +1317,6 @@ class QuotaDogStore(
             activeRefreshes.remove(accountKey)
         }
     }
-}
-
-private fun parseCodexWindow(id: String, element: JsonElement?): UsageWindow? {
-    if (element == null || element is JsonNull) return null
-    val obj = element.jsonObject
-    val used = obj["used_percent"]?.jsonPrimitive?.doubleOrNull ?: return null
-    val seconds = obj["limit_window_seconds"]?.jsonPrimitive?.intOrNull
-    val label = when (seconds) {
-        18_000 -> "5-hour window"
-        604_800 -> "7-day window"
-        else -> if ((seconds ?: 0) >= 604_800) "Weekly window" else "Window ${seconds ?: "unknown"}s"
-    }
-    val resetAt = obj["reset_at"]?.jsonPrimitive?.contentOrNull?.toLongOrNull()
-        ?.let { Instant.fromEpochSeconds(it) }
-    return UsageWindow(
-        id = id,
-        label = label,
-        // Codex reports used_percent on a 0–100 scale (1 means 1%, not full).
-        usedRatio = normalizePercent(used),
-        resetsAt = resetAt,
-        durationSeconds = seconds?.toLong()
-    )
 }
 
 private fun parseClaudeWindow(id: String, label: String, element: JsonElement?): UsageWindow? {
