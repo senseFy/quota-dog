@@ -351,14 +351,14 @@ assert_contains "Google Play internal" "$directory/output"
 android_fixture="$FIXTURES/android-upload-check"
 mkdir -p \
   "$android_fixture/scripts/lib" \
-  "$android_fixture/composeApp" \
+  "$android_fixture/androidApp" \
   "$android_fixture/bin"
 cp "$ROOT_DIR/scripts/release-android.sh" "$android_fixture/scripts/"
 cp "$ROOT_DIR/scripts/android-version.sh" "$android_fixture/scripts/"
 cp "$ROOT_DIR/scripts/lib/build-identity.sh" "$android_fixture/scripts/lib/"
 cp "$ROOT_DIR/scripts/lib/product-version.sh" "$android_fixture/scripts/lib/"
 cp "$ROOT_DIR/version.properties" "$android_fixture/"
-cp "$ROOT_DIR/composeApp/build.gradle.kts" "$android_fixture/composeApp/"
+cp "$ROOT_DIR/androidApp/build.gradle.kts" "$android_fixture/androidApp/"
 touch "$android_fixture/upload.jks" "$android_fixture/service-account.json"
 cat > "$android_fixture/bin/keytool" <<'EOF'
 #!/usr/bin/env bash

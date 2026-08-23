@@ -48,10 +48,10 @@ Use the bundled Gradle wrapper:
 ```bash
 ./gradlew :shared:allTests              # multiplatform unit tests
 ./gradlew :composeApp:run               # run the desktop app
-./gradlew :composeApp:assembleDebug     # build a debug APK
-./gradlew :composeApp:installDebug      # install debug APK on a connected device
-./gradlew :composeApp:assembleRelease   # build a release APK (needs signing env vars below)
-./gradlew :composeApp:bundleRelease     # build a release AAB for Play
+./gradlew :androidApp:assembleDebug     # build a debug APK
+./gradlew :androidApp:installDebug      # install debug APK on a connected device
+./gradlew :androidApp:assembleRelease   # build a release APK (needs signing env vars below)
+./gradlew :androidApp:bundleRelease     # build a release AAB for Play
 ```
 
 Or use `make help` to list the common command aliases.
@@ -275,7 +275,8 @@ command line. Store signing and upload commands are documented above.
 ### Project Layout
 
 - `shared`: provider logic, OAuth flow, token storage, usage parsing, and tests.
-- `composeApp`: shared Compose UI plus Android, desktop, and iOS Compose entry points.
+- `androidApp`: Android application entry point, manifest, signing, and store artifacts.
+- `composeApp`: shared Compose UI plus desktop and iOS Compose entry points.
 - `iosApp`: SwiftUI host app and Xcode project.
 - `gradle`: version catalog and Gradle wrapper configuration.
 

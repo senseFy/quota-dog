@@ -8,7 +8,7 @@ ARGS ?=
 ANDROID_RELEASE_SCRIPT ?= ./scripts/release-android.sh
 ANDROID_VERSION_SCRIPT ?= ./scripts/android-version.sh
 ANDROID_RELEASE_ENV ?= $(HOME)/.config/quotadog/android-release.env
-ANDROID_PLAY_AAB ?= composeApp/build/outputs/bundle/release/composeApp-release.aab
+ANDROID_PLAY_AAB ?= androidApp/build/outputs/bundle/release/androidApp-release.aab
 ANDROID_PLAY_PACKAGE_NAME ?= saien.quotadog
 ANDROID_PLAY_TRACK ?= internal
 ANDROID_PLAY_RELEASE_STATUS ?= completed
@@ -107,16 +107,16 @@ desktop-package: ## Build a desktop package for the current OS.
 	@$(GRADLE) :composeApp:packageDistributionForCurrentOS
 
 android-debug: ## Build an Android debug APK.
-	@$(GRADLE) :composeApp:assembleDebug
+	@$(GRADLE) :androidApp:assembleDebug
 
 android-install: ## Install the Android debug APK on a connected device.
-	@$(GRADLE) :composeApp:installDebug
+	@$(GRADLE) :androidApp:installDebug
 
 release-apk: ## Build an Android release APK; requires signing env vars.
-	@$(GRADLE) :composeApp:assembleRelease
+	@$(GRADLE) :androidApp:assembleRelease
 
 release-aab: ## Build an Android release AAB; requires signing env vars.
-	@$(GRADLE) :composeApp:bundleRelease
+	@$(GRADLE) :androidApp:bundleRelease
 
 release-app: ## Build a Developer ID–signed macOS .app into releases/.
 	@./scripts/build_release.sh

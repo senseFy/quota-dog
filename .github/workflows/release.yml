@@ -75,14 +75,14 @@ jobs:
           QUOTADOG_KEYSTORE_PASSWORD: ${{ secrets.QUOTADOG_KEYSTORE_PASSWORD }}
           QUOTADOG_KEY_ALIAS: ${{ secrets.QUOTADOG_KEY_ALIAS }}
           QUOTADOG_KEY_PASSWORD: ${{ secrets.QUOTADOG_KEY_PASSWORD }}
-        run: ./gradlew :composeApp:assembleRelease :composeApp:bundleRelease --stacktrace
+        run: ./gradlew :androidApp:assembleRelease :androidApp:bundleRelease --stacktrace
 
       - name: Stage Android artifacts
         run: |
           mkdir -p staging
           ver="${{ needs.prepare.outputs.version }}"
-          cp composeApp/build/outputs/apk/release/*.apk "staging/QuotaDog-${ver}.apk"
-          cp composeApp/build/outputs/bundle/release/*.aab "staging/QuotaDog-${ver}.aab"
+          cp androidApp/build/outputs/apk/release/*.apk "staging/QuotaDog-${ver}.apk"
+          cp androidApp/build/outputs/bundle/release/*.aab "staging/QuotaDog-${ver}.aab"
           ls -la staging
 
       - uses: actions/upload-artifact@v4

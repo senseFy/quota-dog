@@ -31,7 +31,7 @@ Quick checks:
 
 ```bash
 ./gradlew :shared:allTests
-./gradlew :composeApp:assembleDebug
+./gradlew :androidApp:assembleDebug
 ```
 
 ## Pull requests

@@ -7,7 +7,7 @@ if [[ "${1:-}" == "--json" ]]; then
   OUTPUT_FORMAT="json"
   shift
 fi
-AAB_PATH="${1:-$ROOT_DIR/composeApp/build/outputs/bundle/release/composeApp-release.aab}"
+AAB_PATH="${1:-$ROOT_DIR/androidApp/build/outputs/bundle/release/androidApp-release.aab}"
 [[ $# -le 1 ]] || {
   printf 'Usage: %s [--json] [aab-path]\n' "$0" >&2
   exit 2

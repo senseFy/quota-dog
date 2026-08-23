@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-AAB_PATH="${ANDROID_PLAY_AAB_PATH:-$ROOT_DIR/composeApp/build/outputs/bundle/release/composeApp-release.aab}"
+AAB_PATH="${ANDROID_PLAY_AAB_PATH:-$ROOT_DIR/androidApp/build/outputs/bundle/release/androidApp-release.aab}"
 PACKAGE_NAME="${ANDROID_PLAY_PACKAGE_NAME:-saien.quotadog}"
 TRACK="${ANDROID_PLAY_TRACK:-internal}"
 RELEASE_STATUS="${ANDROID_PLAY_RELEASE_STATUS:-completed}"

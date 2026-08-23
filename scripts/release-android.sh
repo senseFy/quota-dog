@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD_IDENTITY_HELPER="$ROOT_DIR/scripts/lib/build-identity.sh"
 RELEASE_ENV="${ANDROID_RELEASE_ENV:-$HOME/.config/quotadog/android-release.env}"
-AAB_PATH="${ANDROID_PLAY_AAB_PATH:-$ROOT_DIR/composeApp/build/outputs/bundle/release/composeApp-release.aab}"
+AAB_PATH="${ANDROID_PLAY_AAB_PATH:-$ROOT_DIR/androidApp/build/outputs/bundle/release/androidApp-release.aab}"
 PACKAGE_NAME="${ANDROID_PLAY_PACKAGE_NAME:-saien.quotadog}"
 MODE="${1:-build}"
 
@@ -152,7 +152,7 @@ fi
 if [[ "$MODE" == "build" || "$MODE" == "upload" ]]; then
   (
     cd "$ROOT_DIR"
-    ./gradlew :composeApp:bundleRelease
+    ./gradlew :androidApp:bundleRelease
   )
 fi
 
