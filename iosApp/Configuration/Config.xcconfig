@@ -1,3 +1,13 @@
-TEAM_ID=
-BUNDLE_ID=saien.quotadog
-APP_NAME=QuotaDog
+// Product version and build number are shared with Android and desktop.
+#include "../../version.properties"
+
+TEAM_ID=45V6QJP3A2
+PRODUCT_NAME=QuotaDog
+PRODUCT_BUNDLE_IDENTIFIER=saien.quotadog
+
+// Compatibility aliases used by the existing Xcode project.
+BUNDLE_ID=$(PRODUCT_BUNDLE_IDENTIFIER)
+APP_NAME=$(PRODUCT_NAME)
+
+CURRENT_PROJECT_VERSION=$(VERSION_CODE)
+MARKETING_VERSION=$(VERSION_NAME)

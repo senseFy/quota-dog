@@ -32,6 +32,9 @@ jobs:
       - name: Run multiplatform tests
         run: ./gradlew :shared:allTests --stacktrace
 
+      - name: Run mobile release contract tests
+        run: make test-mobile-release
+
       - name: Assemble Android debug APK
         run: ./gradlew :composeApp:assembleDebug --stacktrace
 

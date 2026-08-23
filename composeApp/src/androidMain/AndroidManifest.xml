@@ -8,6 +8,15 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:theme="@style/AppTheme"
         android:label="QuotaDog">
+        <meta-data
+            android:name="saien.quotadog.build.COMMIT"
+            android:value="${quotadogBuildCommit}" />
+        <meta-data
+            android:name="saien.quotadog.build.COMMIT_SHORT"
+            android:value="${quotadogBuildCommitShort}" />
+        <meta-data
+            android:name="saien.quotadog.build.DIRTY"
+            android:value="${quotadogBuildDirty}" />
         <activity
             android:name=".MainActivity"
             android:exported="true">

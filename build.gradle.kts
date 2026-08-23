@@ -6,3 +6,5 @@ plugins {
     alias(libs.plugins.kotlinMultiplatform) apply false
     alias(libs.plugins.kotlinSerialization) apply false
 }
+
+apply(from = "gradle/build-identity.gradle.kts")

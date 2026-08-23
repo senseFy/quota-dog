@@ -4,6 +4,14 @@
 <dict>
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
+	<key>QuotaDogSourceCommit</key>
+	<string>$(QUOTADOG_BUILD_COMMIT)</string>
+	<key>QuotaDogSourceCommitShort</key>
+	<string>$(QUOTADOG_BUILD_COMMIT_SHORT)</string>
+	<key>QuotaDogSourceDirty</key>
+	<string>$(QUOTADOG_BUILD_DIRTY)</string>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleExecutable</key>

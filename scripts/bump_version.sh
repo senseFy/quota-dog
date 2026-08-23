@@ -26,8 +26,9 @@ Description:
   Manage VERSION_NAME (x.y.z) and VERSION_CODE in version.properties.
 
 Defaults:
-  - With no args: bump VERSION_CODE by 1
+  - With no args: bump VERSION_NAME patch and VERSION_CODE by 1
   - --set-version also bumps VERSION_CODE by 1 unless --set-code is given
+  - --bump-code only bumps VERSION_CODE by 1
 EOF
 }
 
@@ -50,6 +51,13 @@ validate_semver() {
   [[ "$value" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "VERSION_NAME must be x.y.z (found: $value)"
   local major="${value%%.*}"
   [[ "$major" -ge 1 ]] || die "VERSION_NAME major must be >= 1 (Compose Desktop installer constraint)."
+}
+
+bump_patch_version() {
+  local major minor patch
+  validate_semver "$VERSION_NAME"
+  IFS=. read -r major minor patch <<<"$VERSION_NAME"
+  VERSION_NAME="$major.$minor.$((10#$patch + 1))"
 }
 
 write_versions() {
@@ -141,8 +149,10 @@ if [[ -n "$SET_NAME" ]]; then
 elif [[ -n "$SET_CODE" ]]; then
   [[ "$SET_CODE" =~ ^[0-9]+$ ]] || die "VERSION_CODE must be an integer (found: $SET_CODE)"
   VERSION_CODE="$SET_CODE"
-elif [[ "$BUMP_CODE" == "1" ]] || [[ -z "$SET_NAME$SET_CODE" && "$BUMP_CODE" == "0" ]]; then
-  # Default action with no args: bump code.
+elif [[ "$BUMP_CODE" == "1" ]]; then
+  VERSION_CODE="$((VERSION_CODE + 1))"
+else
+  bump_patch_version
   VERSION_CODE="$((VERSION_CODE + 1))"
 fi
 

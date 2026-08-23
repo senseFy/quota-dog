@@ -1,3 +1,13 @@
+import org.gradle.api.DefaultTask
+import org.gradle.api.file.DirectoryProperty
+import org.gradle.api.file.RegularFileProperty
+import org.gradle.api.provider.MapProperty
+import org.gradle.api.tasks.Input
+import org.gradle.api.tasks.InputFile
+import org.gradle.api.tasks.OutputDirectory
+import org.gradle.api.tasks.PathSensitive
+import org.gradle.api.tasks.PathSensitivity
+import org.gradle.api.tasks.TaskAction
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
 import java.util.Properties
@@ -26,6 +36,17 @@ val releaseVersionCode: Int =
     System.getenv("RELEASE_VERSION_CODE")?.toIntOrNull()
         ?: versionProperties.getProperty("VERSION_CODE")?.toIntOrNull()
         ?: 1
+
+@Suppress("UNCHECKED_CAST")
+val buildIdentity = rootProject.extensions.extraProperties
+    .get("quotadogBuildIdentity") as Map<String, String>
+val verifyReleaseBuildIdentity = rootProject.tasks.named("verifyReleaseBuildIdentity")
+
+tasks.configureEach {
+    if (name == "preReleaseBuild") {
+        dependsOn(verifyReleaseBuildIdentity)
+    }
+}
 
 val macStatusBarResourcesDir = layout.buildDirectory.dir("generated/macosStatusBarResources")
 val compileMacStatusBar by tasks.registering(Exec::class) {
@@ -117,6 +138,9 @@ android {
         targetSdk = libs.versions.android.targetSdk.get().toInt()
         versionCode = releaseVersionCode
         versionName = releaseVersionName
+        manifestPlaceholders["quotadogBuildCommit"] = buildIdentity.getValue("commit")
+        manifestPlaceholders["quotadogBuildCommitShort"] = buildIdentity.getValue("short")
+        manifestPlaceholders["quotadogBuildDirty"] = buildIdentity.getValue("dirty")
     }
 
     compileOptions {
@@ -158,6 +182,59 @@ android {
         getByName("release") {
             signingConfig = signingConfigs.getByName("release")
         }
+    }
+}
+
+// Embed a signed, plain-text source envelope in every AAB. Store promotion can
+// then authenticate the artifact without trusting the current checkout.
+abstract class GenerateBuildIdentityAsset : DefaultTask() {
+    @get:InputFile
+    @get:PathSensitive(PathSensitivity.NONE)
+    abstract val template: RegularFileProperty
+
+    @get:Input
+    abstract val tokens: MapProperty<String, String>
+
+    @get:OutputDirectory
+    abstract val outputDirectory: DirectoryProperty
+
+    @TaskAction
+    fun generate() {
+        val source = template.get().asFile
+        val rendered = tokens.get().entries.fold(source.readText()) { text, (key, value) ->
+            text.replace("@$key@", value)
+        }
+        val destination = outputDirectory.get().asFile.resolve(source.name)
+        destination.parentFile.mkdirs()
+        destination.writeText(rendered)
+    }
+}
+
+val buildIdentityTokens = mapOf(
+    "PACKAGE_NAME" to android.defaultConfig.applicationId.orEmpty(),
+    "VERSION_NAME" to android.defaultConfig.versionName.orEmpty(),
+    "VERSION_CODE" to (android.defaultConfig.versionCode ?: 0).toString(),
+    "COMMIT_SHA" to buildIdentity.getValue("commit"),
+    "SHORT_COMMIT_SHA" to buildIdentity.getValue("short"),
+    "DIRTY" to buildIdentity.getValue("dirty"),
+)
+
+androidComponents {
+    onVariants { variant ->
+        val generateTask = tasks.register<GenerateBuildIdentityAsset>(
+            "generate${variant.name.replaceFirstChar(Char::uppercase)}BuildIdentityAsset",
+        ) {
+            template.set(
+                layout.projectDirectory.file(
+                    "src/buildIdentity/quotadog-build-identity.properties",
+                ),
+            )
+            tokens.set(buildIdentityTokens)
+        }
+        variant.sources.assets?.addGeneratedSourceDirectory(
+            generateTask,
+            GenerateBuildIdentityAsset::outputDirectory,
+        )
     }
 }
 

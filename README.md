@@ -83,12 +83,94 @@ Manage the checked-in version file:
 
 ```bash
 make version-current
+make version-bump                              # 1.0.0 (12) -> 1.0.1 (13)
 make version-bump ARGS='--set-version 1.2.0'   # also bumps VERSION_CODE unless --set-code is set
-make version-bump ARGS='--bump-code'
+make version-bump ARGS='--bump-code'           # bump VERSION_CODE only
 make git-build-info
 ```
 
 Compose Desktop's installer formats reject `MAJOR=0`, so `0.x.y` cannot be used.
+
+### Mobile store publishing
+
+The store release commands mirror the guarded workflow used by Enjoy. Android
+and iOS both use [`version.properties`](version.properties); every promoted
+artifact also embeds the clean Git commit that produced it. Release preparation
+fails for a dirty checkout, a mismatched signature, or inconsistent artifact
+metadata.
+
+#### Android / Google Play
+
+Keep Android signing and publisher credentials outside the repository in
+`~/.config/quotadog/android-release.env` (or export the same variables directly;
+override `ANDROID_RELEASE_ENV` to use another file):
+
+```bash
+QUOTADOG_KEYSTORE_PATH=/absolute/path/to/upload.jks
+QUOTADOG_KEYSTORE_PASSWORD=...
+QUOTADOG_KEY_ALIAS=...
+QUOTADOG_KEY_PASSWORD=...
+ANDROID_PLAY_SERVICE_ACCOUNT_JSON=/absolute/path/to/google-play-service-account.json
+```
+
+The service account must have permission to publish the `saien.quotadog`
+application in Play Console.
+
+```bash
+make android-release-check     # signing preflight
+make android-upload-check      # signing + publisher preflight
+make android-release-play      # build and verify the signed AAB
+make android-play-dry-run      # verify the existing AAB; no API calls
+make android-upload-play       # upload the existing AAB to internal
+```
+
+Other tracks are explicit. Production additionally requires a second guard:
+
+```bash
+make android-upload-play \
+  ANDROID_PLAY_TRACK=production \
+  ANDROID_PLAY_CONFIRM_PRODUCTION=yes
+```
+
+#### iOS / App Store Connect
+
+The checked-in Xcode configuration uses Team `45V6QJP3A2`, bundle identifier
+`saien.quotadog`, and the shared product version/build number. Override the
+Make variables when a different signing setup is needed. TestFlight upload uses
+an App Store Connect API key:
+
+```bash
+export APP_STORE_CONNECT_API_KEY_PATH=/absolute/path/to/AuthKey_ABC123.p8
+export APP_STORE_CONNECT_API_KEY_ID=ABC123
+export APP_STORE_CONNECT_API_ISSUER_ID=00000000-0000-0000-0000-000000000000
+
+make ios-release-check         # signing/archive preflight
+make ios-upload-check          # signing + App Store Connect preflight
+make ios-archive               # create and verify an xcarchive
+make ios-release               # archive and export an IPA locally
+make ios-upload-testflight     # archive and upload a new build
+make ios-upload-archive        # upload the already verified archive
+```
+
+For manual signing, also set `IOS_RELEASE_PROFILE` to the installed App Store
+provisioning profile name. `IOS_APP_STORE_CONNECT_APP_ID` is optional and only
+used to print the direct TestFlight URL.
+
+#### Combined test-track release
+
+`publish-tracks` prepares and verifies both artifacts before asking once for
+confirmation, then uploads Android to Play `internal` and iOS to TestFlight in
+parallel. It never targets Play production.
+
+```bash
+make publish-tracks MOBILE_RELEASE_ARGS="--prepare-only"  # build/verify only
+make publish-tracks                                        # interactive upload
+make publish-tracks MOBILE_RELEASE_ARGS="--yes --no-tui"  # explicit non-TTY confirmation
+```
+
+Logs are kept under `build/release/test-tracks/`. If only one store accepts an
+upload, the command exits unsuccessfully and prints the safe single-platform
+recovery command. Run `make test-mobile-release` to verify the release contracts.
 
 ### Dropbox Sync Setup
 
@@ -176,19 +258,11 @@ git tag v1.0.0
 git push origin v1.0.0
 ```
 
-### iOS
+### iOS development
 
-The repository includes a minimal Xcode project at `iosApp/iosApp.xcodeproj`.
-
-Set signing values in `iosApp/Configuration/Config.xcconfig` before building for a device:
-
-```xcconfig
-TEAM_ID=YOUR_APPLE_TEAM_ID
-BUNDLE_ID=saien.quotadog
-APP_NAME=QuotaDog
-```
-
-Then build and install with Xcode, or use `xcodebuild` and `xcrun devicectl` from the command line.
+The repository includes the Xcode project at `iosApp/iosApp.xcodeproj`. Build
+and install with Xcode, or use `xcodebuild` and `xcrun devicectl` from the
+command line. Store signing and upload commands are documented above.
 
 ### Project Layout
 
