@@ -166,7 +166,15 @@ parallel. It never targets Play production.
 make publish-tracks MOBILE_RELEASE_ARGS="--prepare-only"  # build/verify only
 make publish-tracks                                        # interactive upload
 make publish-tracks MOBILE_RELEASE_ARGS="--yes --no-tui"  # explicit non-TTY confirmation
+make publish-tracks MOBILE_RELEASE_ARGS="--rebuild"       # replace the current iOS archive
 ```
+
+The command is safe to retry before upload. If the iOS archive for the current
+version and build already exists, it is reused only after its signature, bundle
+identifier, team, version, build number, clean-source marker, and source commit
+all match the release checkout. A mismatch stops the release without deleting
+the archive. Use `--rebuild` only when the local archive must be replaced and
+you have verified that the build did not already reach App Store Connect.
 
 Logs are kept under `build/release/test-tracks/`. If only one store accepts an
 upload, the command exits unsuccessfully and prints the safe single-platform

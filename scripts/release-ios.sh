@@ -39,7 +39,9 @@ DO_EXPORT=1
 DESTINATION="export"
 CHECK_ONLY=0
 CLEAN=0
+REUSE_EXISTING=0
 VERBOSE=0
+ARCHIVE_REUSED=0
 
 usage() {
   cat <<'EOF'
@@ -68,6 +70,7 @@ Options:
   --upload                        Upload to TestFlight
   --check                         Verify prerequisites without building
   --clean                         Replace outputs for the same version/build
+  --reuse-existing                Verify and reuse a matching existing archive
   --verbose                       Print full xcodebuild output
 EOF
 }
@@ -90,6 +93,7 @@ while [[ $# -gt 0 ]]; do
     --upload) DESTINATION="upload"; DO_EXPORT=1; shift ;;
     --check) CHECK_ONLY=1; shift ;;
     --clean) CLEAN=1; shift ;;
+    --reuse-existing) REUSE_EXISTING=1; shift ;;
     --verbose) VERBOSE=1; shift ;;
     --help|-h) usage; exit 0 ;;
     *)
@@ -139,6 +143,13 @@ fail() {
   echo "ERROR: $*" >&2
   exit 1
 }
+
+if [[ "$CLEAN" == 1 && "$REUSE_EXISTING" == 1 ]]; then
+  fail "--clean and --reuse-existing cannot be used together."
+fi
+if [[ "$DO_ARCHIVE" == 0 && "$REUSE_EXISTING" == 1 ]]; then
+  fail "--reuse-existing requires an archive operation."
+fi
 
 detail() {
   printf '  %-12s %s\n' "$1" "$2"
@@ -303,6 +314,21 @@ run_xcodebuild() {
 
 if [[ "$DO_ARCHIVE" == 1 ]]; then
   quotadog_build_identity_assert_release "$ROOT_DIR" || exit 1
+  if [[ "$REUSE_EXISTING" == 1 && -e "$ARCHIVE_PATH" ]]; then
+    if ! quotadog_ios_archive_identity_resolve \
+      "$ARCHIVE_PATH" \
+      "$BUNDLE_ID" \
+      "$TEAM_ID" \
+      "$QUOTADOG_BUILD_COMMIT" \
+      "$MARKETING_VERSION" \
+      "$BUILD_NUMBER"; then
+      printf '%s\n' \
+        "ERROR: Existing archive could not be safely reused." \
+        "Use --clean, or publish-tracks --rebuild, only after confirming this build did not reach App Store Connect." >&2
+      exit 1
+    fi
+    ARCHIVE_REUSED=1
+  fi
 else
   [[ -d "$ARCHIVE_PATH" ]] || fail "Archive not found: $ARCHIVE_PATH"
   quotadog_ios_archive_identity_resolve \
@@ -368,25 +394,29 @@ if [[ -n "$PROFILE" ]]; then
 fi
 
 if [[ "$DO_ARCHIVE" == 1 ]]; then
-  prepare_archive
-  run_xcodebuild \
-    -project "$PROJECT" \
-    -scheme "$SCHEME" \
-    -configuration "$CONFIGURATION" \
-    -destination "generic/platform=iOS" \
-    -archivePath "$ARCHIVE_PATH" \
-    archive \
-    "${automatic_provisioning_args[@]}" \
-    "${xcode_auth_args[@]}" \
-    "${signing_overrides[@]}"
-  quotadog_ios_archive_identity_resolve \
-    "$ARCHIVE_PATH" \
-    "$BUNDLE_ID" \
-    "$TEAM_ID" \
-    "$QUOTADOG_BUILD_COMMIT" \
-    "$MARKETING_VERSION" \
-    "$BUILD_NUMBER" || exit 1
-  detail "Archived" "$ARCHIVE_PATH"
+  if [[ "$ARCHIVE_REUSED" == 1 ]]; then
+    detail "Reused" "$ARCHIVE_PATH"
+  else
+    prepare_archive
+    run_xcodebuild \
+      -project "$PROJECT" \
+      -scheme "$SCHEME" \
+      -configuration "$CONFIGURATION" \
+      -destination "generic/platform=iOS" \
+      -archivePath "$ARCHIVE_PATH" \
+      archive \
+      "${automatic_provisioning_args[@]}" \
+      "${xcode_auth_args[@]}" \
+      "${signing_overrides[@]}"
+    quotadog_ios_archive_identity_resolve \
+      "$ARCHIVE_PATH" \
+      "$BUNDLE_ID" \
+      "$TEAM_ID" \
+      "$QUOTADOG_BUILD_COMMIT" \
+      "$MARKETING_VERSION" \
+      "$BUILD_NUMBER" || exit 1
+    detail "Archived" "$ARCHIVE_PATH"
+  fi
 elif [[ ! -d "$ARCHIVE_PATH" ]]; then
   fail "Archive not found: $ARCHIVE_PATH"
 fi

@@ -31,6 +31,7 @@ IOS_ARCHIVE_PATH ?=
 IOS_EXPORT_PATH ?=
 IOS_BUILD_NUMBER ?=
 IOS_CLEAN ?=
+IOS_REUSE_EXISTING ?=
 IOS_VERBOSE ?=
 APP_STORE_CONNECT_API_KEY_PATH ?=
 APP_STORE_CONNECT_API_KEY_ID ?=
@@ -60,6 +61,7 @@ IOS_RELEASE_ARGS += $(if $(IOS_ASC_KEY_PATH),--auth-key-path "$(abspath $(IOS_AS
 IOS_RELEASE_ARGS += $(if $(IOS_ASC_KEY_ID),--auth-key-id "$(IOS_ASC_KEY_ID)",)
 IOS_RELEASE_ARGS += $(if $(IOS_ASC_ISSUER_ID),--auth-key-issuer-id "$(IOS_ASC_ISSUER_ID)",)
 IOS_RELEASE_ARGS += $(if $(filter yes y true 1,$(IOS_CLEAN)),--clean,)
+IOS_RELEASE_ARGS += $(if $(filter yes y true 1,$(IOS_REUSE_EXISTING)),--reuse-existing,)
 IOS_RELEASE_ARGS += $(if $(filter yes y true 1,$(IOS_VERBOSE)),--verbose,)
 
 ANDROID_UPLOAD_ENABLED := $(if $(filter yes y true 1,$(UPLOAD)),yes,)

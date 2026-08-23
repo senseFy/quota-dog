@@ -172,6 +172,7 @@ directory="$(create_case help)"
 run_publish "$directory" "" --help
 assert_contains "--prepare-only" "$directory/output"
 assert_contains "--no-tui" "$directory/output"
+assert_contains "--rebuild" "$directory/output"
 [[ ! -s "$directory/calls" ]] || fail "Help invoked a release phase."
 
 directory="$(create_case preflight-failure)"
@@ -232,6 +233,18 @@ run_publish "$directory" "" --prepare-only --no-tui
 assert_called android-release-play done "$directory/calls"
 assert_called ios-archive done "$directory/calls"
 assert_no_uploads "$directory/calls"
+assert_call_argument ios-archive "IOS_REUSE_EXISTING=yes" "$directory/calls"
+assert_call_argument ios-archive "IOS_CLEAN=" "$directory/calls"
+
+directory="$(create_case rebuild-ios)"
+run_publish "$directory" "" --prepare-only --no-tui --rebuild
+assert_called android-release-play done "$directory/calls"
+assert_called ios-archive done "$directory/calls"
+assert_no_uploads "$directory/calls"
+assert_call_argument ios-upload-check "IOS_CLEAN=yes" "$directory/calls"
+assert_call_argument ios-upload-check "IOS_REUSE_EXISTING=" "$directory/calls"
+assert_call_argument ios-archive "IOS_CLEAN=yes" "$directory/calls"
+assert_call_argument ios-archive "IOS_REUSE_EXISTING=" "$directory/calls"
 
 directory="$(create_case unsafe-make-flags)"
 MAKEFLAGS=-i MFLAGS=-i MAKEOVERRIDES=unsafe GNUMAKEFLAGS=-i \
@@ -252,6 +265,9 @@ assert_before android-release-play:done android-upload-play:start "$directory/ca
 assert_before ios-archive:done ios-upload-archive:start "$directory/calls"
 assert_call_argument android-release-play "UPLOAD=" "$directory/calls"
 assert_call_argument ios-archive "IOS_CLEAN=" "$directory/calls"
+assert_call_argument ios-archive "IOS_REUSE_EXISTING=yes" "$directory/calls"
+assert_call_argument ios-upload-check "IOS_REUSE_EXISTING=yes" "$directory/calls"
+assert_call_argument ios-upload-archive "IOS_REUSE_EXISTING=" "$directory/calls"
 assert_call_argument android-upload-check "ANDROID_PLAY_TRACK=internal" "$directory/calls"
 assert_call_argument android-upload-play "ANDROID_PLAY_TRACK=internal" "$directory/calls"
 assert_call_argument android-upload-play "ANDROID_PLAY_RELEASE_STATUS=completed" "$directory/calls"
@@ -409,5 +425,14 @@ make --no-print-directory -C "$ROOT_DIR" -n publish-tracks \
   MOBILE_RELEASE_ARGS=--help > "$make_dry_run_output"
 assert_contains "scripts/publish-tracks.sh --help" "$make_dry_run_output"
 assert_not_contains "Prepare and publish QuotaDog to" "$make_dry_run_output"
+
+ios_make_dry_run_output="$FIXTURES/ios-make-dry-run-output"
+make --no-print-directory -C "$ROOT_DIR" -n ios-archive \
+  IOS_REUSE_EXISTING=yes \
+  APP_STORE_CONNECT_API_KEY_PATH= \
+  APP_STORE_CONNECT_API_KEY_ID= \
+  APP_STORE_CONNECT_API_ISSUER_ID= \
+  > "$ios_make_dry_run_output"
+assert_contains "--reuse-existing" "$ios_make_dry_run_output"
 
 echo "QuotaDog publish-tracks contract tests passed."
