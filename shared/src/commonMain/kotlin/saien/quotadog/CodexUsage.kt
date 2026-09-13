@@ -2,6 +2,8 @@ package saien.quotadog
 
 import kotlinx.datetime.Clock
 import kotlinx.datetime.Instant
+import kotlinx.datetime.TimeZone
+import kotlinx.datetime.toLocalDateTime
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
@@ -16,6 +18,7 @@ import kotlinx.serialization.json.longOrNull
 
 data class CodexResetSummary(
     val availableCount: Int,
+    val applicableCount: Int?,
     val credits: List<CodexResetCredit>,
     val nearestExpiresAt: Instant?,
     val expiringSoon: Boolean,
@@ -27,6 +30,17 @@ data class CodexResetSummary(
         val count = if (availableCount == 1) "1 reset" else "$availableCount resets"
         val expiresAt = nearestExpiresAt ?: return count
         return "$count · ${expiresAt.codexRemainingLabel(now)}"
+    }
+
+    /** "2 available", or "3 available · 2 usable now" when the applicable count differs. */
+    fun availabilityLabel(): String {
+        val base = "$availableCount available"
+        val applicable = applicableCount
+        return if (applicable != null && applicable != availableCount) {
+            "$base · $applicable usable now"
+        } else {
+            base
+        }
     }
 }
 
@@ -42,25 +56,49 @@ fun ProviderUsageSnapshot.codexResetSummary(
     val remainingMillis = nearestExpiresAt?.let { it.toEpochMilliseconds() - now.toEpochMilliseconds() }
     return CodexResetSummary(
         availableCount = count,
+        applicableCount = resetCreditsApplicable,
         credits = availableCredits,
         nearestExpiresAt = nearestExpiresAt,
         expiringSoon = remainingMillis != null && remainingMillis <= EXPIRING_SOON_MILLIS,
     )
 }
 
-fun CodexResetCredit.remainingLabel(now: Instant = Clock.System.now()): String {
-    val expiresAt = expiresAt ?: return "—"
-    return expiresAt.codexRemainingLabel(now)
+/** "Jul 12, 17:30 · 12d18h" — absolute local expiry plus relative countdown. */
+fun CodexResetCredit.expiryLabel(now: Instant = Clock.System.now()): String {
+    val expiresAt = expiresAt ?: return "No expiry"
+    if (expiresAt.toEpochMilliseconds() <= now.toEpochMilliseconds()) return "Expired"
+    return "${expiresAt.localDateTimeLabel()} · ${expiresAt.codexRemainingLabel(now)}"
+}
+
+fun CodexResetCredit.isExpiringSoon(now: Instant = Clock.System.now()): Boolean {
+    val expiresAt = expiresAt ?: return false
+    return expiresAt.toEpochMilliseconds() - now.toEpochMilliseconds() <= EXPIRING_SOON_MILLIS
+}
+
+internal fun Instant.localDateTimeLabel(): String {
+    val local = toLocalDateTime(TimeZone.currentSystemDefault())
+    val month = SHORT_MONTHS[local.month.ordinal]
+    val hour = local.hour.toString().padStart(2, '0')
+    val minute = local.minute.toString().padStart(2, '0')
+    return "$month ${local.dayOfMonth}, $hour:$minute"
 }
 
 internal data class CodexUsageParseResult(
     val windows: List<UsageWindow>,
     val planType: String?,
     val resetCreditsAvailable: Int?,
+    val resetCreditsApplicable: Int?,
 )
 
 internal data class CodexResetCreditsDetails(
     val availableCount: Int,
+    val applicableCount: Int?,
+    val credits: List<CodexResetCredit>,
+)
+
+internal data class CodexResetCreditsMerge(
+    val availableCount: Int?,
+    val applicableCount: Int?,
     val credits: List<CodexResetCredit>,
 )
 
@@ -77,12 +115,12 @@ internal object CodexUsageParser {
             parseWindow("primary", rateLimit["primary_window"]),
             parseWindow("secondary", rateLimit["secondary_window"]),
         ).sortedBy { it.resetsAt?.toEpochMilliseconds() ?: Long.MAX_VALUE }
+        val resetCredits = root["rate_limit_reset_credits"]?.jsonObject
         return CodexUsageParseResult(
             windows = windows,
             planType = root["plan_type"]?.jsonPrimitive?.contentOrNull,
-            resetCreditsAvailable = root["rate_limit_reset_credits"]?.jsonObject
-                ?.get("available_count")
-                .intCountOrNull(),
+            resetCreditsAvailable = resetCredits?.get("available_count").intCountOrNull(),
+            resetCreditsApplicable = resetCredits?.get("applicable_available_count").intCountOrNull(),
         )
     }
 
@@ -98,18 +136,24 @@ internal object CodexUsageParser {
         val availableCount = root["available_count"].intCountOrNull() ?: availableFromCredits
         return CodexResetCreditsDetails(
             availableCount = availableCount.coerceAtLeast(0),
+            applicableCount = root["applicable_available_count"].intCountOrNull(),
             credits = credits,
         )
     }
 
     fun mergeResetCredits(
         usageAvailableCount: Int?,
+        usageApplicableCount: Int?,
         details: CodexResetCreditsDetails?,
-    ): Pair<Int?, List<CodexResetCredit>> {
+    ): CodexResetCreditsMerge {
         if (details == null) {
-            return usageAvailableCount to emptyList()
+            return CodexResetCreditsMerge(usageAvailableCount, usageApplicableCount, emptyList())
         }
-        return details.availableCount to details.credits.filter { it.isAvailable }
+        return CodexResetCreditsMerge(
+            availableCount = details.availableCount,
+            applicableCount = details.applicableCount ?: usageApplicableCount,
+            credits = details.credits.filter { it.isAvailable },
+        )
     }
 
     private fun parseWindow(id: String, element: JsonElement?): UsageWindow? {
@@ -143,8 +187,11 @@ internal object CodexUsageParser {
             status = status,
             title = obj["title"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() },
             description = obj["description"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() },
+            resetType = obj["reset_type"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() },
+            source = obj["source"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() },
             grantedAt = parseInstant(obj["granted_at"]),
             expiresAt = parseInstant(obj["expires_at"]),
+            redeemedAt = parseInstant(obj["redeemed_at"]),
         )
     }
 
@@ -160,6 +207,11 @@ internal object CodexUsageParser {
 }
 
 private const val EXPIRING_SOON_MILLIS = 3L * 24L * 60L * 60L * 1_000L
+
+private val SHORT_MONTHS = arrayOf(
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+)
 
 private fun JsonElement?.intCountOrNull(): Int? {
     if (this == null || this is JsonNull) return null

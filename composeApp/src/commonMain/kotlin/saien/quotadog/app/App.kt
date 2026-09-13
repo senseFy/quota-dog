@@ -69,7 +69,8 @@ import saien.quotadog.grokAuthFileHint
 import saien.quotadog.grokCliImportAvailable
 import saien.quotadog.QuotaDogClient
 import saien.quotadog.QuotaDogStore
-import saien.quotadog.remainingLabel
+import saien.quotadog.expiryLabel
+import saien.quotadog.isExpiringSoon
 import saien.quotadog.SettingsUsageSnapshotStore
 import saien.quotadog.ThemeMode
 import saien.quotadog.TokenStore
@@ -954,7 +955,7 @@ private fun CodexResetCreditsBlock(summary: CodexResetSummary) {
                 overflow = TextOverflow.Ellipsis,
             )
             Text(
-                if (summary.credits.isEmpty()) summary.compactLabel() else "${summary.availableCount} available",
+                if (summary.credits.isEmpty()) summary.compactLabel() else summary.availabilityLabel(),
                 style = typo.numeric.copy(fontWeight = FontWeight.SemiBold),
                 color = accent,
                 maxLines = 1,
@@ -975,14 +976,15 @@ private fun CodexResetCreditsBlock(summary: CodexResetSummary) {
                     overflow = TextOverflow.Ellipsis,
                 )
                 Text(
-                    credit.remainingLabel(),
+                    credit.expiryLabel(),
                     style = typo.numeric,
-                    color = if (summary.expiringSoon) colors.warning else colors.textTertiary,
+                    color = if (credit.isExpiringSoon()) colors.warning else colors.textTertiary,
                     maxLines = 1,
                 )
             }
         }
-        val extra = summary.availableCount - summary.credits.size
+        val shown = minOf(4, summary.credits.size)
+        val extra = summary.availableCount - shown
         if (extra > 0) {
             Text(
                 "+$extra more",

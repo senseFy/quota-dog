@@ -693,24 +693,47 @@ private fun TrayResetCreditsRow(summary: CodexResetSummary) {
     val colors = QdTheme.colors
     val typo = QdTheme.typography
     val fill = if (summary.expiringSoon) colors.warning else colors.success
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(
-            text = "Reset",
-            style = typo.caption,
-            color = colors.textSecondary,
-            modifier = Modifier.weight(1f),
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-        Text(
-            text = summary.compactLabel(),
-            style = typo.numeric.copy(fontWeight = FontWeight.SemiBold),
-            color = fill,
-            maxLines = 1,
-        )
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "Reset",
+                style = typo.caption,
+                color = colors.textSecondary,
+                modifier = Modifier.weight(1f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = summary.compactLabel(),
+                style = typo.numeric.copy(fontWeight = FontWeight.SemiBold),
+                color = fill,
+                maxLines = 1,
+            )
+        }
+        summary.credits.take(4).forEach { credit ->
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = credit.title ?: "Banked reset",
+                    style = typo.caption,
+                    color = colors.textTertiary,
+                    modifier = Modifier.weight(1f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = credit.expiryLabel(),
+                    style = typo.numeric,
+                    color = if (credit.isExpiringSoon()) colors.warning else colors.textTertiary,
+                    maxLines = 1,
+                )
+            }
+        }
     }
 }
 
@@ -816,6 +839,13 @@ private fun List<AccountUiState>.toDesktopStatusBarState(
                 resetAvailable = resetSummary?.availableCount ?: 0,
                 resetLabel = resetSummary?.compactLabel(),
                 resetUrgent = resetSummary?.expiringSoon == true,
+                resetCredits = resetSummary?.credits.orEmpty().take(4).map { credit ->
+                    DesktopStatusBarResetCredit(
+                        title = credit.title ?: "Banked reset",
+                        label = credit.expiryLabel(),
+                        urgent = credit.isExpiringSoon(),
+                    )
+                },
             )
         },
         moreAccounts = (size - visibleAccounts.size).coerceAtLeast(0),

@@ -116,8 +116,11 @@ data class CodexResetCredit(
     val status: String,
     val title: String? = null,
     val description: String? = null,
+    val resetType: String? = null,
+    val source: String? = null,
     val grantedAt: Instant? = null,
     val expiresAt: Instant? = null,
+    val redeemedAt: Instant? = null,
 ) {
     val isAvailable: Boolean
         get() = status.equals("available", ignoreCase = true)
@@ -133,6 +136,7 @@ data class ProviderUsageSnapshot(
     val accountEmail: String? = null,
     val message: String? = null,
     val resetCreditsAvailable: Int? = null,
+    val resetCreditsApplicable: Int? = null,
     val resetCredits: List<CodexResetCredit> = emptyList(),
 )
 
@@ -646,8 +650,9 @@ class QuotaDogClient(
         } else {
             null
         }
-        val (available, credits) = CodexUsageParser.mergeResetCredits(
+        val merged = CodexUsageParser.mergeResetCredits(
             parsed.resetCreditsAvailable,
+            parsed.resetCreditsApplicable,
             details,
         )
         return ProviderUsageSnapshot(
@@ -657,8 +662,9 @@ class QuotaDogClient(
             collectedAt = Clock.System.now(),
             accountEmail = token.email,
             message = parsed.planType?.let { "Plan: $it" },
-            resetCreditsAvailable = available,
-            resetCredits = credits,
+            resetCreditsAvailable = merged.availableCount,
+            resetCreditsApplicable = merged.applicableCount,
+            resetCredits = merged.credits,
         )
     }
 

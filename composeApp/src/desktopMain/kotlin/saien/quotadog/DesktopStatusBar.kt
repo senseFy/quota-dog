@@ -67,6 +67,13 @@ internal data class DesktopStatusBarAccount(
     val resetAvailable: Int = 0,
     val resetLabel: String? = null,
     val resetUrgent: Boolean = false,
+    val resetCredits: List<DesktopStatusBarResetCredit> = emptyList(),
+)
+
+internal data class DesktopStatusBarResetCredit(
+    val title: String,
+    val label: String,
+    val urgent: Boolean = false,
 )
 
 internal data class DesktopStatusBarUsageWindow(
@@ -410,6 +417,19 @@ private fun DesktopStatusBarState.toJson(): String {
             appendJsonField("resetLabel", account.resetLabel.orEmpty())
             append(',')
             append("\"resetUrgent\":").append(account.resetUrgent)
+            append(',')
+            append("\"resetCredits\":[")
+            account.resetCredits.forEachIndexed { creditIndex, credit ->
+                if (creditIndex > 0) append(',')
+                append('{')
+                appendJsonField("title", credit.title)
+                append(',')
+                appendJsonField("label", credit.label)
+                append(',')
+                append("\"urgent\":").append(credit.urgent)
+                append('}')
+            }
+            append(']')
             append('}')
         }
         append(']')

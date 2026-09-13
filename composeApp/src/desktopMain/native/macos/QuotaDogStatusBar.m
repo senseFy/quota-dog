@@ -39,6 +39,7 @@ static const CGFloat QDFooterBottomPad = 10.0;
 static const CGFloat QDEmptyContentHeight = 96.0;
 static const NSUInteger QDMaxAccounts = 4;
 static const NSUInteger QDMaxWindows = 3;
+static const NSUInteger QDMaxResetCredits = 4;
 static const CGFloat QDAccountRefreshSize = 18.0;
 static const CGFloat QDAccountRefreshGap = 4.0;
 
@@ -1100,6 +1101,7 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
 
 - (CGFloat)heightForAccount:(NSDictionary *)account {
     NSArray *windows = [account[@"windows"] isKindOfClass:[NSArray class]] ? account[@"windows"] : @[];
+    NSArray *credits = [account[@"resetCredits"] isKindOfClass:[NSArray class]] ? account[@"resetCredits"] : @[];
     NSInteger resetAvailable = [self integerIn:account key:@"resetAvailable" fallback:0];
     CGFloat height = QDCardPad + QDAvatarSize + 12.0; // header + gap
     if (windows.count == 0) {
@@ -1116,6 +1118,10 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
     }
     if (resetAvailable > 0) {
         height += QDResetRowHeight;
+        NSUInteger creditRows = MIN(credits.count, QDMaxResetCredits);
+        if (creditRows > 0) {
+            height += 4.0 + creditRows * QDResetRowHeight + (creditRows - 1) * 2.0;
+        }
     }
     height += QDCardPad;
     return height;
@@ -1301,6 +1307,37 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
     return row;
 }
 
+- (NSView *)buildResetCreditRow:(NSDictionary *)credit
+                          width:(CGFloat)width
+                        palette:(QDPalette)palette {
+    BOOL urgent = [self boolIn:credit key:@"urgent"];
+    NSString *titleText = [self stringIn:credit key:@"title" fallback:@"Banked reset"];
+    NSString *labelText = [self stringIn:credit key:@"label" fallback:@""];
+    QDFlippedView *row = [[QDFlippedView alloc] initWithFrame:NSMakeRect(0, 0, width, QDResetRowHeight)];
+
+    NSTextField *meta = [self label:labelText
+                           fontSize:11.0
+                             weight:NSFontWeightRegular
+                              color:urgent ? palette.warning : palette.textTertiary];
+    meta.font = [NSFont monospacedDigitSystemFontOfSize:11.0 weight:NSFontWeightRegular];
+    meta.alignment = NSTextAlignmentRight;
+    meta.lineBreakMode = NSLineBreakByClipping;
+    CGFloat metaWidth = ceil(meta.fittingSize.width);
+    metaWidth = MIN(MAX(metaWidth, 1.0), MAX(48.0, width - 56.0));
+    CGFloat nameWidth = MAX(48.0, width - metaWidth - 8.0);
+
+    NSTextField *name = [self label:titleText
+                           fontSize:11.0
+                             weight:NSFontWeightRegular
+                              color:palette.textTertiary];
+    name.frame = NSMakeRect(0, 1, nameWidth, 14);
+    [row addSubview:name];
+
+    meta.frame = NSMakeRect(width - metaWidth, 1, metaWidth, 14);
+    [row addSubview:meta];
+    return row;
+}
+
 - (NSView *)buildAccountCard:(NSDictionary *)account
                        width:(CGFloat)width
                      palette:(QDPalette)palette
@@ -1400,6 +1437,18 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
         NSView *resetRow = [self buildResetCreditsRow:account width:contentWidth palette:palette];
         resetRow.frame = NSMakeRect(QDCardPad, y, contentWidth, QDResetRowHeight);
         [card addSubview:resetRow];
+        y += QDResetRowHeight;
+
+        NSArray *credits = [account[@"resetCredits"] isKindOfClass:[NSArray class]] ? account[@"resetCredits"] : @[];
+        NSUInteger creditRows = MIN(credits.count, QDMaxResetCredits);
+        for (NSUInteger i = 0; i < creditRows; i++) {
+            NSDictionary *credit = [credits[i] isKindOfClass:[NSDictionary class]] ? credits[i] : @{};
+            NSView *creditRow = [self buildResetCreditRow:credit width:contentWidth palette:palette];
+            y += (i == 0) ? 4.0 : 2.0;
+            creditRow.frame = NSMakeRect(QDCardPad, y, contentWidth, QDResetRowHeight);
+            [card addSubview:creditRow];
+            y += QDResetRowHeight;
+        }
     }
 
     return card;

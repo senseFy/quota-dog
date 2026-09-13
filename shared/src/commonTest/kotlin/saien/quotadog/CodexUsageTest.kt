@@ -7,6 +7,8 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.days
+import kotlin.time.Duration.Companion.hours
 
 class CodexUsageTest {
     private val json = Json { ignoreUnknownKeys = true }
@@ -30,7 +32,8 @@ class CodexUsageTest {
                 }
               },
               "rate_limit_reset_credits": {
-                "available_count": 2
+                "available_count": 2,
+                "applicable_available_count": 1
               }
             }
             """.trimIndent(),
@@ -38,6 +41,7 @@ class CodexUsageTest {
 
         assertEquals("plus", parsed.planType)
         assertEquals(2, parsed.resetCreditsAvailable)
+        assertEquals(1, parsed.resetCreditsApplicable)
         assertEquals(listOf("primary", "secondary"), parsed.windows.map { it.id })
         assertEquals(0.27, parsed.windows[0].usedRatio, 0.000001)
         assertEquals(18_000L, parsed.windows[0].durationSeconds)
@@ -78,13 +82,15 @@ class CodexUsageTest {
                   "granted_at": "2026-06-17T00:00:00Z",
                   "expires_at": "2026-07-17T00:00:00Z",
                   "title": "Full reset (Weekly + 5 hr)",
-                  "description": "Ready to redeem"
+                  "description": "Ready to redeem",
+                  "source": "Codex Team"
                 },
                 {
                   "id": "RateLimitResetCredit_b",
                   "status": "redeemed",
                   "granted_at": "2026-05-01T00:00:00Z",
                   "expires_at": "2026-06-01T00:00:00Z",
+                  "redeemed_at": "2026-05-20T00:00:00Z",
                   "title": "Used reset"
                 },
                 {
@@ -101,32 +107,69 @@ class CodexUsageTest {
 
         assertEquals(2, details.availableCount)
         assertEquals(3, details.credits.size)
-        val merged = CodexUsageParser.mergeResetCredits(2, details)
-        assertEquals(2, merged.first)
+        val merged = CodexUsageParser.mergeResetCredits(2, null, details)
+        assertEquals(2, merged.availableCount)
         assertEquals(
             listOf("RateLimitResetCredit_a", "RateLimitResetCredit_c"),
-            merged.second.map { it.id },
+            merged.credits.map { it.id },
         )
-        assertEquals("Full reset (Weekly + 5 hr)", merged.second[0].title)
-        assertEquals(Instant.parse("2026-07-17T00:00:00Z"), merged.second[0].expiresAt)
+        assertEquals("Full reset (Weekly + 5 hr)", merged.credits[0].title)
+        assertEquals("codex_rate_limits", merged.credits[0].resetType)
+        assertEquals("Codex Team", merged.credits[0].source)
+        assertEquals(Instant.parse("2026-07-17T00:00:00Z"), merged.credits[0].expiresAt)
+        assertEquals(Instant.parse("2026-05-20T00:00:00Z"), details.credits[1].redeemedAt)
     }
 
     @Test
     fun prefersDetailCountOverUsageCount() {
         val details = CodexResetCreditsDetails(
             availableCount = 0,
+            applicableCount = 0,
             credits = emptyList(),
         )
-        val merged = CodexUsageParser.mergeResetCredits(2, details)
-        assertEquals(0, merged.first)
-        assertEquals(emptyList(), merged.second)
+        val merged = CodexUsageParser.mergeResetCredits(2, 2, details)
+        assertEquals(0, merged.availableCount)
+        assertEquals(0, merged.applicableCount)
+        assertEquals(emptyList(), merged.credits)
     }
 
     @Test
     fun keepsUsageCountWhenDetailsAreMissing() {
-        val merged = CodexUsageParser.mergeResetCredits(3, null)
-        assertEquals(3, merged.first)
-        assertEquals(emptyList(), merged.second)
+        val merged = CodexUsageParser.mergeResetCredits(3, 1, null)
+        assertEquals(3, merged.availableCount)
+        assertEquals(1, merged.applicableCount)
+        assertEquals(emptyList(), merged.credits)
+    }
+
+    @Test
+    fun rendersAbsoluteAndRelativeExpiry() {
+        val now = Instant.parse("2026-07-01T00:00:00Z")
+        val credit = CodexResetCredit(
+            id = "a",
+            status = "available",
+            expiresAt = now.plus(2.days + 12.hours),
+        )
+        val label = credit.expiryLabel(now)
+        assertTrue(label.contains("·"), label)
+        assertTrue(label.endsWith("2d12h"), label)
+        assertFalse(label.contains("expired", ignoreCase = true))
+    }
+
+    @Test
+    fun labelsNeverExpiringAndExpiredCredits() {
+        val now = Instant.parse("2026-07-01T00:00:00Z")
+        assertEquals(
+            "No expiry",
+            CodexResetCredit(id = "a", status = "available").expiryLabel(now),
+        )
+        assertEquals(
+            "Expired",
+            CodexResetCredit(
+                id = "b",
+                status = "available",
+                expiresAt = Instant.parse("2026-06-01T00:00:00Z"),
+            ).expiryLabel(now),
+        )
     }
 
     @Test
