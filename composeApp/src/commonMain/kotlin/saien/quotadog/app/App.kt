@@ -326,6 +326,7 @@ private fun QuotaDogScreen(
                                 ProviderId.GROK -> "Opening xAI sign-in..."
                                 ProviderId.CURSOR -> "Importing Cursor app or CLI credentials..."
                                 ProviderId.ANTIGRAVITY -> "Importing Antigravity CLI credentials..."
+                                ProviderId.DEVIN -> "Importing Devin CLI credentials..."
                                 else -> "Opening browser for ${provider.displayName}..."
                             },
                             tone = QdSnackbarTone.Info,
@@ -1128,10 +1129,10 @@ private fun ProviderPickerContent(onSelect: (ProviderId) -> Unit) {
     val spacing = QdTheme.spacing
     val providers = availableProviders()
     val description = when {
-        (ProviderId.CURSOR in providers || ProviderId.ANTIGRAVITY in providers) && grokCliImportAvailable() ->
-            "Choose a provider. Codex, Claude, and Grok sign in through a browser. Grok can also import the local CLI; Cursor imports the desktop app or `cursor-agent` CLI; Antigravity imports local CLI credentials."
-        ProviderId.ANTIGRAVITY in providers ->
-            "Choose a provider. Codex, Claude, and Grok sign in through a browser. Antigravity imports local CLI credentials on desktop."
+        (ProviderId.CURSOR in providers || ProviderId.ANTIGRAVITY in providers || ProviderId.DEVIN in providers) && grokCliImportAvailable() ->
+            "Choose a provider. Codex, Claude, and Grok sign in through a browser. Grok can also import the local CLI; Cursor imports the desktop app or `cursor-agent` CLI; Antigravity and Devin import local CLI credentials."
+        ProviderId.ANTIGRAVITY in providers || ProviderId.DEVIN in providers ->
+            "Choose a provider. Codex, Claude, and Grok sign in through a browser. Antigravity and Devin import local CLI credentials on desktop."
         ProviderId.GROK in providers ->
             "Choose a provider. Codex, Claude, and Grok open a browser to sign in."
         else ->
@@ -1315,6 +1316,7 @@ private fun ProviderId.subtitle(): String = when (this) {
     ProviderId.GROK -> "Grok Build / SuperGrok credits"
     ProviderId.CURSOR -> "Cursor plan / on-demand usage (app or CLI)"
     ProviderId.ANTIGRAVITY -> "Antigravity CLI quota windows (desktop)"
+    ProviderId.DEVIN -> "Devin daily / weekly quota (CLI import)"
 }
 
 private fun UsageWindow.displayRatio(mode: UsageDisplayMode): Double = when (mode) {

@@ -46,6 +46,7 @@ enum class ProviderId(val displayName: String) {
     GROK("Grok"),
     CURSOR("Cursor"),
     ANTIGRAVITY("Antigravity"),
+    DEVIN("Devin"),
 }
 
 enum class AuthState {
@@ -89,7 +90,8 @@ data class OAuthTokenBundle(
     val accountId: String? = null,
     val email: String? = null,
     val expiresAtEpochMillis: Long,
-    val lastRefreshEpochMillis: Long = Clock.System.now().toEpochMilliseconds()
+    val lastRefreshEpochMillis: Long = Clock.System.now().toEpochMilliseconds(),
+    val apiServerUrl: String? = null
 ) {
     fun isExpired(bufferMillis: Long = 60_000): Boolean {
         return Clock.System.now().toEpochMilliseconds() + bufferMillis >= expiresAtEpochMillis
@@ -225,6 +227,10 @@ private object ProviderSpecs {
             AuthState.NotConfigured,
             "Antigravity imports credentials from the Antigravity CLI keyring instead of browser OAuth."
         )
+        ProviderId.DEVIN -> throw ProviderException(
+            AuthState.NotConfigured,
+            "Devin imports credentials from the Devin CLI credentials file instead of browser OAuth."
+        )
     }
 }
 
@@ -270,7 +276,7 @@ class QuotaDogClient(
                     parameters.append("codex_cli_simplified_flow", "true")
                 }
                 ProviderId.CLAUDE_CODE -> Unit
-                ProviderId.GROK, ProviderId.CURSOR, ProviderId.ANTIGRAVITY -> Unit
+                ProviderId.GROK, ProviderId.CURSOR, ProviderId.ANTIGRAVITY, ProviderId.DEVIN -> Unit
             }
         }.buildString()
         if (openBrowser) browserLauncher.open(url)
@@ -360,6 +366,19 @@ class QuotaDogClient(
         return tokenStore.save(ProviderId.ANTIGRAVITY, token)
     }
 
+    suspend fun importDevinAccount(): AccountKey {
+        var token = loadDevinCredentialsFromCli()
+        if (token.email.isNullOrBlank()) {
+            val identified = runCatching {
+                DevinUsageFetcher.fetch(httpClient, token.accessToken, token.apiServerUrl)
+            }.getOrNull()
+            if (!identified?.email.isNullOrBlank()) {
+                token = token.copy(email = identified.email)
+            }
+        }
+        return tokenStore.save(ProviderId.DEVIN, token)
+    }
+
     suspend fun refreshUsage(accountKey: AccountKey): ProviderUsageSnapshot {
         val token = ensureFreshToken(accountKey)
         return when (accountKey.providerId) {
@@ -368,6 +387,7 @@ class QuotaDogClient(
             ProviderId.GROK -> fetchGrokUsage(token)
             ProviderId.CURSOR -> fetchCursorUsage(token)
             ProviderId.ANTIGRAVITY -> fetchAntigravityUsage(token)
+            ProviderId.DEVIN -> fetchDevinUsage(token)
         }
     }
 
@@ -376,6 +396,7 @@ class QuotaDogClient(
             ProviderId.GROK -> ensureFreshGrokToken(accountKey)
             ProviderId.CURSOR -> ensureFreshCursorToken(accountKey)
             ProviderId.ANTIGRAVITY -> ensureFreshAntigravityToken(accountKey)
+            ProviderId.DEVIN -> ensureFreshDevinToken(accountKey)
             ProviderId.CODEX, ProviderId.CLAUDE_CODE -> {
                 val token = tokenStore.load(accountKey)
                     ?: throw ProviderException(AuthState.NotConfigured, "Not signed in to ${accountKey.providerId.displayName}")
@@ -487,6 +508,27 @@ class QuotaDogClient(
         return refreshed
     }
 
+    private suspend fun ensureFreshDevinToken(accountKey: AccountKey): OAuthTokenBundle {
+        val stored = tokenStore.load(accountKey)
+            ?: throw ProviderException(AuthState.NotConfigured, "Not signed in to ${accountKey.providerId.displayName}")
+        // Devin API keys never expire; re-reading credentials.toml picks up a re-login or a
+        // moved api_server_url, and keeps working off the stored key when the file is gone
+        // (e.g. an account synced to a device without the Devin CLI installed).
+        val reloaded = runCatching { loadDevinCredentialsFromCli() }.getOrNull() ?: return stored
+        if (reloaded.accessToken != stored.accessToken) {
+            throw ProviderException(
+                AuthState.RequiresRelogin,
+                "Devin CLI is signed in as a different account. Remove this account and import again.",
+            )
+        }
+        val merged = reloaded.withIdentityFrom(stored)
+            .copy(lastRefreshEpochMillis = stored.lastRefreshEpochMillis)
+        if (merged != stored) {
+            tokenStore.save(accountKey, merged)
+        }
+        return merged
+    }
+
     private suspend fun exchangeCode(
         providerId: ProviderId,
         code: String,
@@ -541,6 +583,10 @@ class QuotaDogClient(
                 AuthState.NotConfigured,
                 "Antigravity does not use browser OAuth. Import credentials from the Antigravity CLI instead."
             )
+            ProviderId.DEVIN -> throw ProviderException(
+                AuthState.NotConfigured,
+                "Devin does not use browser OAuth. Import credentials from the Devin CLI instead."
+            )
         }
     }
 
@@ -578,6 +624,10 @@ class QuotaDogClient(
                 "Cursor credentials are refreshed by the Cursor app or CLI. Sign in again, then re-import."
             )
             ProviderId.ANTIGRAVITY -> AntigravityUsageFetcher.refreshAccessToken(httpClient, refreshToken)
+            ProviderId.DEVIN -> throw ProviderException(
+                AuthState.RequiresRelogin,
+                "Devin API keys do not expire. Run `devin auth login`, then re-import."
+            )
         }
     }
 
@@ -703,6 +753,26 @@ class QuotaDogClient(
                 usage.planLabel?.let { append("Plan: $it") }
                 if (isNotEmpty()) append(" · ")
                 append("Source: Antigravity CLI (${antigravityAuthHint()})")
+            },
+        )
+    }
+
+    private suspend fun fetchDevinUsage(token: OAuthTokenBundle): ProviderUsageSnapshot {
+        val usage = DevinUsageFetcher.fetch(httpClient, token.accessToken, token.apiServerUrl)
+        return ProviderUsageSnapshot(
+            providerId = ProviderId.DEVIN,
+            authState = AuthState.LoggedIn,
+            windows = usage.windows,
+            collectedAt = Clock.System.now(),
+            accountEmail = usage.email ?: token.email,
+            message = buildString {
+                usage.planName?.let { append("Plan: $it") }
+                usage.overageBalanceDollars?.let { dollars ->
+                    if (isNotEmpty()) append(" · ")
+                    append("Extra balance: ${formatDevinDollars(dollars)}")
+                }
+                if (isNotEmpty()) append(" · ")
+                append("Source: Devin CLI (${devinAuthFileHint()})")
             },
         )
     }
@@ -841,6 +911,7 @@ class QuotaDogStore(
                 ProviderId.CURSOR -> launchSafely("importCursor") { importCursorAccountAndRefresh() }
                 ProviderId.GROK -> launchSafely("importGrok") { importGrokAccountAndRefresh() }
                 ProviderId.ANTIGRAVITY -> launchSafely("importAntigravity") { importAntigravityAccountAndRefresh() }
+                ProviderId.DEVIN -> launchSafely("importDevin") { importDevinAccountAndRefresh() }
                 ProviderId.CODEX, ProviderId.CLAUDE_CODE -> launchSafely("refresh:${accountKey.providerId.name}") {
                     refresh(accountKey)
                 }
@@ -905,6 +976,10 @@ class QuotaDogStore(
             }
             ProviderId.ANTIGRAVITY -> {
                 importAntigravityAccountAndRefresh()
+                return
+            }
+            ProviderId.DEVIN -> {
+                importDevinAccountAndRefresh()
                 return
             }
             ProviderId.CODEX, ProviderId.CLAUDE_CODE -> Unit
@@ -1205,6 +1280,48 @@ class QuotaDogStore(
         }
     }
 
+    private suspend fun importDevinAccountAndRefresh() {
+        val pendingKey = AccountKey.pending(ProviderId.DEVIN, "import")
+        update(pendingKey) {
+            it.copy(
+                added = true,
+                authState = AuthState.Unknown,
+                busy = true,
+                message = "Reading Devin CLI credentials from ${devinAuthFileHint()}...",
+            )
+        }
+        try {
+            val accountKey = client.importDevinAccount()
+            replacePendingWithAccount(
+                pendingKey = pendingKey,
+                accountKey = accountKey,
+                message = "Imported Devin credentials, refreshing usage...",
+            )
+            onLocalDataChanged?.invoke()
+            refresh(accountKey)
+        } catch (error: ProviderException) {
+            platformDebugLog("store importDevin provider error state=${error.state} status=${error.statusCode}")
+            update(pendingKey) {
+                it.copy(
+                    added = true,
+                    authState = error.state,
+                    busy = false,
+                    message = safeUserMessage(error, "Could not import Devin credentials."),
+                )
+            }
+        } catch (error: Throwable) {
+            platformDebugLog("store importDevin unexpected error")
+            update(pendingKey) {
+                it.copy(
+                    added = true,
+                    authState = AuthState.Error,
+                    busy = false,
+                    message = safeUserMessage(error, "Could not import Devin credentials."),
+                )
+            }
+        }
+    }
+
     suspend fun completeLogin(accountKey: AccountKey, callbackUri: String) {
         val start = state.value.accounts[accountKey]?.loginStart
             ?: throw ProviderException(AuthState.Error, "No pending sign-in flow to complete")
@@ -1415,6 +1532,13 @@ private fun formatCursorSpend(usedCents: Int?, limitCents: Int?): String? {
     return "${formatCursorCents(usedCents)} / ${formatCursorCents(limitCents)} included"
 }
 
+private fun formatDevinDollars(dollars: Double): String {
+    val cents = kotlin.math.round(dollars * 100).toLong()
+    val whole = cents / 100
+    val remainder = cents % 100
+    return "$$whole.${remainder.toString().padStart(2, '0')}"
+}
+
 private fun formatCursorCents(cents: Int): String {
     val sign = if (cents < 0) "-" else ""
     val abs = kotlin.math.abs(cents)
@@ -1514,7 +1638,8 @@ private fun OAuthTokenBundle.withIdentityFrom(previous: OAuthTokenBundle): OAuth
     return copy(
         idToken = idToken ?: previous.idToken,
         accountId = accountId ?: previous.accountId,
-        email = email ?: previous.email
+        email = email ?: previous.email,
+        apiServerUrl = apiServerUrl ?: previous.apiServerUrl
     )
 }
 

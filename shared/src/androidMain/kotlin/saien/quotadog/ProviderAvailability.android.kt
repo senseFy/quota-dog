@@ -35,3 +35,12 @@ actual fun loadAntigravityCredentialsFromCli(): OAuthTokenBundle {
 }
 
 actual fun antigravityAuthHint(): String = "macOS Keychain (service=gemini, account=antigravity)"
+
+actual fun loadDevinCredentialsFromCli(): OAuthTokenBundle {
+    throw ProviderException(
+        AuthState.NotConfigured,
+        "Devin CLI import is only available on the desktop app."
+    )
+}
+
+actual fun devinAuthFileHint(): String = "~/.local/share/devin/credentials.toml"

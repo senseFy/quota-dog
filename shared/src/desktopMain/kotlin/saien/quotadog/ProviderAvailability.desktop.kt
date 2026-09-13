@@ -77,6 +77,44 @@ actual fun loadAntigravityCredentialsFromCli(): OAuthTokenBundle {
 
 actual fun antigravityAuthHint(): String = "macOS Keychain (service=gemini, account=antigravity)"
 
+actual fun loadDevinCredentialsFromCli(): OAuthTokenBundle {
+    val file = devinCredentialsFile()
+    if (!file.exists()) {
+        throw ProviderException(
+            AuthState.NotConfigured,
+            "Devin credentials not found at ${file.absolutePath}. Run `devin auth login` first."
+        )
+    }
+    return runCatching {
+        DevinAuthParser.parseCredentialsToml(file.readText())
+    }.getOrElse { error ->
+        when (error) {
+            is ProviderException -> throw error
+            else -> throw ProviderException(
+                AuthState.Error,
+                "Failed to read Devin credentials from ${file.absolutePath}."
+            )
+        }
+    }
+}
+
+actual fun devinAuthFileHint(): String = devinCredentialsFile().absolutePath
+
+private fun devinCredentialsFile(): File {
+    System.getenv("DEVIN_CREDENTIALS_TOML")?.takeIf { it.isNotBlank() }?.let { return File(it) }
+    val home = System.getProperty("user.home")
+    val os = System.getProperty("os.name").orEmpty().lowercase()
+    return if (os.contains("win")) {
+        val appData = System.getenv("APPDATA")?.takeIf { it.isNotBlank() }
+            ?: File(home, "AppData/Roaming").absolutePath
+        File(appData, "devin/credentials.toml")
+    } else {
+        val dataHome = System.getenv("XDG_DATA_HOME")?.takeIf { it.isNotBlank() }
+            ?: File(home, ".local/share").absolutePath
+        File(dataHome, "devin/credentials.toml")
+    }
+}
+
 private fun grokAuthFile(): File {
     val home = System.getenv("GROK_HOME")?.takeIf { it.isNotBlank() }
         ?: File(System.getProperty("user.home"), ".grok").absolutePath

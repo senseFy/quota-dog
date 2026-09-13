@@ -15,3 +15,7 @@ expect fun cursorAuthFileHint(): String
 expect fun loadAntigravityCredentialsFromCli(): OAuthTokenBundle
 
 expect fun antigravityAuthHint(): String
+
+expect fun loadDevinCredentialsFromCli(): OAuthTokenBundle
+
+expect fun devinAuthFileHint(): String

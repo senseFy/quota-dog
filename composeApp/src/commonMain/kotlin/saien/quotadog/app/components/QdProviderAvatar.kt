@@ -17,6 +17,7 @@ import quotadog.composeapp.generated.resources.provider_antigravity
 import quotadog.composeapp.generated.resources.provider_claudecode
 import quotadog.composeapp.generated.resources.provider_codex
 import quotadog.composeapp.generated.resources.provider_cursor
+import quotadog.composeapp.generated.resources.provider_devin
 import quotadog.composeapp.generated.resources.provider_grok
 
 /**
@@ -35,6 +36,7 @@ fun QdProviderAvatar(
         ProviderId.GROK -> colors.grokAccent
         ProviderId.CURSOR -> colors.cursorAccent
         ProviderId.ANTIGRAVITY -> colors.antigravityAccent
+        ProviderId.DEVIN -> colors.devinAccent
     }
     val icon = when (provider) {
         ProviderId.CODEX -> Res.drawable.provider_codex
@@ -42,6 +44,7 @@ fun QdProviderAvatar(
         ProviderId.GROK -> Res.drawable.provider_grok
         ProviderId.CURSOR -> Res.drawable.provider_cursor
         ProviderId.ANTIGRAVITY -> Res.drawable.provider_antigravity
+        ProviderId.DEVIN -> Res.drawable.provider_devin
     }
     val iconScale = when (provider) {
         ProviderId.CODEX -> 0.7f
@@ -49,6 +52,7 @@ fun QdProviderAvatar(
         ProviderId.GROK -> 0.76f
         ProviderId.CURSOR -> 0.72f
         ProviderId.ANTIGRAVITY -> 0.74f
+        ProviderId.DEVIN -> 0.74f
     }
     Box(
         modifier = modifier.size(size),
