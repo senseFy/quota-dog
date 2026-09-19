@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
@@ -24,6 +25,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -48,7 +50,9 @@ import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 import kotlinx.datetime.Clock
@@ -64,11 +68,13 @@ import saien.quotadog.EmailPrivacyMode
 import saien.quotadog.PlatformTokenStore
 import saien.quotadog.ProviderId
 import saien.quotadog.availableProviders
+import saien.quotadog.cliImportAvailable
 import saien.quotadog.codexResetSummary
 import saien.quotadog.droidAuthFileHint
 import saien.quotadog.droidCliImportAvailable
 import saien.quotadog.grokAuthFileHint
 import saien.quotadog.grokCliImportAvailable
+import saien.quotadog.oauthAvailable
 import saien.quotadog.QuotaDogClient
 import saien.quotadog.QuotaDogStore
 import saien.quotadog.expiryLabel
@@ -85,11 +91,13 @@ import saien.quotadog.app.components.QdButton
 import saien.quotadog.app.components.QdButtonSize
 import saien.quotadog.app.components.QdButtonVariant
 import saien.quotadog.app.components.QdCard
+import saien.quotadog.app.components.QdCheckIcon
 import saien.quotadog.app.components.QdChevronRightIcon
 import saien.quotadog.app.components.QdConfirmDialog
 import saien.quotadog.app.components.QdEmptyState
 import saien.quotadog.app.components.QdGlassIconButton
 import saien.quotadog.app.components.QdIconButton
+import saien.quotadog.app.components.QdMinusIcon
 import saien.quotadog.app.components.QdMoreIcon
 import saien.quotadog.app.components.QdPlusIcon
 import saien.quotadog.app.components.QdProgressBar
@@ -1173,18 +1181,7 @@ private fun ProviderPickerContent(onSelect: (ProviderId) -> Unit) {
     val typo = QdTheme.typography
     val spacing = QdTheme.spacing
     val providers = availableProviders()
-    val description = when {
-        grokCliImportAvailable() || droidCliImportAvailable() ->
-            "Choose a provider. Codex, Claude, Grok, and Droid sign in through a browser. Grok and Droid can also import the local CLI; Cursor imports the desktop app or `cursor-agent` CLI; Antigravity and Devin import local CLI credentials."
-        ProviderId.CURSOR in providers || ProviderId.ANTIGRAVITY in providers || ProviderId.DEVIN in providers ->
-            "Choose a provider. Codex, Claude, Grok, and Droid sign in through a browser. Cursor, Antigravity, and Devin import local credentials on desktop."
-        ProviderId.DROID in providers ->
-            "Choose a provider. Codex, Claude, Grok, and Droid open a browser to sign in."
-        ProviderId.GROK in providers ->
-            "Choose a provider. Codex, Claude, and Grok open a browser to sign in."
-        else ->
-            "Choose a provider - we'll open the browser for OAuth and finish sign-in here."
-    }
+    val description = "Choose a provider. The columns show which sign-in methods work on this device."
     Column(verticalArrangement = Arrangement.spacedBy(spacing.md)) {
         Column(verticalArrangement = Arrangement.spacedBy(spacing.xxs)) {
             Text("Add account", style = typo.titleLarge, color = colors.textPrimary)
@@ -1195,9 +1192,76 @@ private fun ProviderPickerContent(onSelect: (ProviderId) -> Unit) {
             )
         }
         Column(verticalArrangement = Arrangement.spacedBy(spacing.xs)) {
+            SignInSupportHeaderRow()
             providers.forEach { provider ->
-                ProviderOptionRow(provider = provider, onClick = { onSelect(provider) })
+                ProviderOptionRow(
+                    provider = provider,
+                    oauthAvailable = provider.oauthAvailable(),
+                    cliImportAvailable = provider.cliImportAvailable(),
+                    onClick = { onSelect(provider) },
+                )
             }
+        }
+    }
+}
+
+/** Column header for the picker rows: labels the two sign-in support cells on the right. */
+@Composable
+private fun SignInSupportHeaderRow() {
+    val colors = QdTheme.colors
+    val typo = QdTheme.typography
+    val spacing = QdTheme.spacing
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = spacing.md),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(spacing.sm),
+    ) {
+        // Spacer matches the provider avatar in each row so "Provider" lines up with names.
+        Spacer(modifier = Modifier.size(ProviderPickerAvatarSize))
+        Text(
+            text = "Provider",
+            style = typo.caption,
+            color = colors.textTertiary,
+            modifier = Modifier.weight(1f),
+        )
+        SignInSupportColumnLabel(text = "OAuth", width = SignInSupportColumnWidth)
+        SignInSupportColumnLabel(text = "Import from CLI", width = SignInSupportColumnWidth)
+    }
+}
+
+/** Centered header label sized to its support column so cells stay aligned with the rows below. */
+@Composable
+private fun SignInSupportColumnLabel(text: String, width: Dp) {
+    val colors = QdTheme.colors
+    val typo = QdTheme.typography
+    Text(
+        text = text,
+        style = typo.caption,
+        color = colors.textTertiary,
+        textAlign = TextAlign.Center,
+        maxLines = 2,
+        overflow = TextOverflow.Ellipsis,
+        modifier = Modifier.width(width),
+    )
+}
+
+/** One support cell: check when the sign-in method works on this device, dash when it does not. */
+@Composable
+private fun SignInSupportCell(supported: Boolean, width: Dp) {
+    val colors = QdTheme.colors
+    Box(
+        modifier = Modifier.width(width),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (supported) {
+            QdCheckIcon(tint = colors.success, size = SignInSupportIconSize)
+        } else {
+            QdMinusIcon(
+                tint = colors.textTertiary.copy(alpha = 0.65f),
+                size = SignInSupportIconSize,
+            )
         }
     }
 }
@@ -1276,7 +1340,12 @@ private fun AuthMethodOptionRow(
 }
 
 @Composable
-private fun ProviderOptionRow(provider: ProviderId, onClick: () -> Unit) {
+private fun ProviderOptionRow(
+    provider: ProviderId,
+    oauthAvailable: Boolean,
+    cliImportAvailable: Boolean,
+    onClick: () -> Unit,
+) {
     val colors = QdTheme.colors
     val typo = QdTheme.typography
     val spacing = QdTheme.spacing
@@ -1298,14 +1367,23 @@ private fun ProviderOptionRow(provider: ProviderId, onClick: () -> Unit) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(spacing.sm),
     ) {
-        QdProviderAvatar(provider, size = 28.dp)
+        QdProviderAvatar(provider, size = ProviderPickerAvatarSize)
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
             Text(provider.displayName, style = typo.titleMedium, color = colors.textPrimary)
             Text(provider.subtitle(), style = typo.caption, color = colors.textTertiary)
         }
-        QdChevronRightIcon(tint = colors.textTertiary, size = 14.dp)
+        SignInSupportCell(supported = oauthAvailable, width = SignInSupportColumnWidth)
+        SignInSupportCell(supported = cliImportAvailable, width = SignInSupportColumnWidth)
     }
 }
+
+/** Avatar size in the picker rows; the header spacer matches it to keep columns aligned. */
+private val ProviderPickerAvatarSize = 28.dp
+
+/** Width of each sign-in support column, shared by the header labels and the row cells. */
+private val SignInSupportColumnWidth = 54.dp
+
+private val SignInSupportIconSize = 15.dp
 
 private fun AccountUiState.shouldShowAccount(): Boolean {
     return added ||

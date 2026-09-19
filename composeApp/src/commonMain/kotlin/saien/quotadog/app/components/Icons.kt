@@ -8,11 +8,13 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import com.composables.icons.lucide.Check
 import com.composables.icons.lucide.ChevronRight
 import com.composables.icons.lucide.CircleAlert
 import com.composables.icons.lucide.Ellipsis
 import com.composables.icons.lucide.Gauge
 import com.composables.icons.lucide.Lucide
+import com.composables.icons.lucide.Minus
 import com.composables.icons.lucide.Plus
 import com.composables.icons.lucide.RefreshCw
 import com.composables.icons.lucide.X
@@ -70,4 +72,14 @@ fun QdAlertIcon(modifier: Modifier = Modifier, size: Dp = 18.dp, tint: Color = C
 @Composable
 fun QdGaugeIcon(modifier: Modifier = Modifier, size: Dp = 28.dp, tint: Color = Color.Black) {
     QdLucideIcon(Lucide.Gauge, modifier, size, tint)
+}
+
+@Composable
+fun QdCheckIcon(modifier: Modifier = Modifier, size: Dp = 16.dp, tint: Color = Color.Black) {
+    QdLucideIcon(Lucide.Check, modifier, size, tint)
+}
+
+@Composable
+fun QdMinusIcon(modifier: Modifier = Modifier, size: Dp = 16.dp, tint: Color = Color.Black) {
+    QdLucideIcon(Lucide.Minus, modifier, size, tint)
 }
