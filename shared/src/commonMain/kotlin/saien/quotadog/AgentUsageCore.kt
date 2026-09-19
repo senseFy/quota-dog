@@ -47,6 +47,7 @@ enum class ProviderId(val displayName: String) {
     CURSOR("Cursor"),
     ANTIGRAVITY("Antigravity"),
     DEVIN("Devin"),
+    DROID("Droid"),
 }
 
 enum class AuthState {
@@ -235,6 +236,10 @@ private object ProviderSpecs {
             AuthState.NotConfigured,
             "Devin imports credentials from the Devin CLI credentials file instead of browser OAuth."
         )
+        ProviderId.DROID -> throw ProviderException(
+            AuthState.NotConfigured,
+            "Droid uses device-code sign-in or droid CLI import instead of browser OAuth."
+        )
     }
 }
 
@@ -280,7 +285,7 @@ class QuotaDogClient(
                     parameters.append("codex_cli_simplified_flow", "true")
                 }
                 ProviderId.CLAUDE_CODE -> Unit
-                ProviderId.GROK, ProviderId.CURSOR, ProviderId.ANTIGRAVITY, ProviderId.DEVIN -> Unit
+                ProviderId.GROK, ProviderId.CURSOR, ProviderId.ANTIGRAVITY, ProviderId.DEVIN, ProviderId.DROID -> Unit
             }
         }.buildString()
         if (openBrowser) browserLauncher.open(url)
@@ -302,6 +307,15 @@ class QuotaDogClient(
     internal suspend fun completeGrokDeviceLogin(device: GrokDeviceCode): AccountKey {
         val token = GrokOAuth.waitForAuthorization(httpClient, device)
         return tokenStore.save(ProviderId.GROK, token)
+    }
+
+    internal suspend fun startDroidDeviceLogin(): DroidDeviceCode {
+        return DroidOAuth.requestDeviceCode(httpClient)
+    }
+
+    internal suspend fun completeDroidDeviceLogin(device: DroidDeviceCode): AccountKey {
+        val token = DroidOAuth.waitForAuthorization(httpClient, device)
+        return tokenStore.save(ProviderId.DROID, token)
     }
 
     suspend fun waitForLocalCallback(providerId: ProviderId, timeoutMillis: Long = 300_000): String? {
@@ -383,6 +397,19 @@ class QuotaDogClient(
         return tokenStore.save(ProviderId.DEVIN, token)
     }
 
+    suspend fun importDroidAccount(): AccountKey {
+        var token = loadDroidCredentialsFromCli()
+        if (token.email.isNullOrBlank()) {
+            val identified = runCatching {
+                DroidUsageFetcher.fetch(httpClient, token.accessToken)
+            }.getOrNull()
+            if (!identified?.email.isNullOrBlank()) {
+                token = token.copy(email = identified.email)
+            }
+        }
+        return tokenStore.save(ProviderId.DROID, token)
+    }
+
     suspend fun refreshUsage(accountKey: AccountKey): ProviderUsageSnapshot {
         val token = ensureFreshToken(accountKey)
         return when (accountKey.providerId) {
@@ -392,6 +419,7 @@ class QuotaDogClient(
             ProviderId.CURSOR -> fetchCursorUsage(token)
             ProviderId.ANTIGRAVITY -> fetchAntigravityUsage(token)
             ProviderId.DEVIN -> fetchDevinUsage(token)
+            ProviderId.DROID -> fetchDroidUsage(token)
         }
     }
 
@@ -401,6 +429,7 @@ class QuotaDogClient(
             ProviderId.CURSOR -> ensureFreshCursorToken(accountKey)
             ProviderId.ANTIGRAVITY -> ensureFreshAntigravityToken(accountKey)
             ProviderId.DEVIN -> ensureFreshDevinToken(accountKey)
+            ProviderId.DROID -> ensureFreshDroidToken(accountKey)
             ProviderId.CODEX, ProviderId.CLAUDE_CODE -> {
                 val token = tokenStore.load(accountKey)
                     ?: throw ProviderException(AuthState.NotConfigured, "Not signed in to ${accountKey.providerId.displayName}")
@@ -533,6 +562,60 @@ class QuotaDogClient(
         return merged
     }
 
+    private suspend fun ensureFreshDroidToken(accountKey: AccountKey): OAuthTokenBundle {
+        val stored = tokenStore.load(accountKey)
+            ?: throw ProviderException(AuthState.NotConfigured, "Not signed in to ${accountKey.providerId.displayName}")
+        if (!stored.isExpired()) return stored
+        // Prefer the WorkOS refresh grant so accounts synced to devices without the
+        // droid CLI keep working; the CLI also rotates tokens on its own.
+        if (stored.refreshToken.isNotBlank()) {
+            val refreshed = runCatching {
+                DroidOAuth.refresh(httpClient, stored.refreshToken).withIdentityFrom(stored)
+            }.getOrNull()
+            if (refreshed != null) {
+                tokenStore.save(accountKey, refreshed)
+                return refreshed
+            }
+        }
+        val reloaded = runCatching { loadDroidCredentialsFromCli() }.getOrNull()
+        if (reloaded != null) {
+            // The CLI rotates WorkOS tokens on its own, so the file's refresh token
+            // can be newer than the stored one — refresh with it when the file's
+            // access token is already expired.
+            val fresh = if (reloaded.isExpired() &&
+                reloaded.refreshToken.isNotBlank() &&
+                reloaded.refreshToken != stored.refreshToken
+            ) {
+                runCatching {
+                    DroidOAuth.refresh(httpClient, reloaded.refreshToken).withIdentityFrom(reloaded)
+                }.getOrNull() ?: reloaded
+            } else {
+                reloaded
+            }
+            if (!fresh.isExpired()) {
+                val freshWithEmail = if (fresh.email.isNullOrBlank() && !stored.email.isNullOrBlank()) {
+                    fresh.copy(email = stored.email)
+                } else {
+                    fresh
+                }
+                val reloadedKey = accountKeyForToken(ProviderId.DROID, freshWithEmail)
+                if (reloadedKey != accountKey) {
+                    throw ProviderException(
+                        AuthState.RequiresRelogin,
+                        "droid CLI is signed in as a different account. Remove this account and import again.",
+                    )
+                }
+                val merged = freshWithEmail.withIdentityFrom(stored)
+                tokenStore.save(accountKey, merged)
+                return merged
+            }
+        }
+        throw ProviderException(
+            AuthState.RequiresRelogin,
+            "Droid credentials expired. Run `droid`, sign in, then re-import.",
+        )
+    }
+
     private suspend fun exchangeCode(
         providerId: ProviderId,
         code: String,
@@ -591,6 +674,10 @@ class QuotaDogClient(
                 AuthState.NotConfigured,
                 "Devin does not use browser OAuth. Import credentials from the Devin CLI instead."
             )
+            ProviderId.DROID -> throw ProviderException(
+                AuthState.NotConfigured,
+                "Droid does not use browser OAuth. Sign in with Factory or import droid CLI credentials instead."
+            )
         }
     }
 
@@ -632,6 +719,7 @@ class QuotaDogClient(
                 AuthState.RequiresRelogin,
                 "Devin API keys do not expire. Run `devin auth login`, then re-import."
             )
+            ProviderId.DROID -> DroidOAuth.refresh(httpClient, refreshToken)
         }
     }
 
@@ -783,6 +871,26 @@ class QuotaDogClient(
         )
     }
 
+    private suspend fun fetchDroidUsage(token: OAuthTokenBundle): ProviderUsageSnapshot {
+        val usage = DroidUsageFetcher.fetch(httpClient, token.accessToken)
+        return ProviderUsageSnapshot(
+            providerId = ProviderId.DROID,
+            authState = AuthState.LoggedIn,
+            windows = usage.windows,
+            collectedAt = Clock.System.now(),
+            accountEmail = usage.email ?: token.email,
+            message = buildString {
+                usage.planLabel?.let { append("Plan: $it") }
+                usage.extraUsageBalanceCents?.takeIf { it > 0 }?.let { cents ->
+                    if (isNotEmpty()) append(" · ")
+                    append("Extra usage balance: ${formatDroidCents(cents)}")
+                }
+                if (isNotEmpty()) append(" · ")
+                append("Source: droid CLI (${droidAuthFileHint()})")
+            },
+        )
+    }
+
     private suspend fun fetchClaudeUsage(token: OAuthTokenBundle): ProviderUsageSnapshot {
         val text = httpClient.get("https://api.anthropic.com/api/oauth/usage") {
             header("Authorization", "Bearer ${token.accessToken}")
@@ -836,6 +944,7 @@ class QuotaDogStore(
     private val activeRefreshes = mutableSetOf<AccountKey>()
     private var detectStarted = false
     private var grokDeviceLoginJob: Job? = null
+    private var droidDeviceLoginJob: Job? = null
     private val _state = MutableStateFlow(DashboardState())
     val state: StateFlow<DashboardState> = _state
 
@@ -850,9 +959,16 @@ class QuotaDogStore(
     }
 
     fun startLogin(providerId: ProviderId) {
-        if (providerId == ProviderId.GROK) {
-            startGrokDeviceLogin()
-            return
+        when (providerId) {
+            ProviderId.GROK -> {
+                startGrokDeviceLogin()
+                return
+            }
+            ProviderId.DROID -> {
+                startDroidDeviceLogin()
+                return
+            }
+            else -> Unit
         }
         launchSafely("beginLogin:${providerId.name}") { beginLoginAndWait(providerId) }
     }
@@ -870,8 +986,25 @@ class QuotaDogStore(
         }
     }
 
+    fun startDroidDeviceLogin() {
+        droidDeviceLoginJob?.cancel()
+        droidDeviceLoginJob = storeScope.launch {
+            try {
+                beginDroidDeviceLoginAndWait()
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Throwable) {
+                platformDebugLog("store action failed label=droidDeviceLogin")
+            }
+        }
+    }
+
     fun startImportGrok() {
         launchSafely("importGrok") { importGrokAccountAndRefresh() }
+    }
+
+    fun startImportDroid() {
+        launchSafely("importDroid") { importDroidAccountAndRefresh() }
     }
 
     fun startCompleteLogin(accountKey: AccountKey, callbackUri: String) {
@@ -918,6 +1051,7 @@ class QuotaDogStore(
                 ProviderId.GROK -> launchSafely("importGrok") { importGrokAccountAndRefresh() }
                 ProviderId.ANTIGRAVITY -> launchSafely("importAntigravity") { importAntigravityAccountAndRefresh() }
                 ProviderId.DEVIN -> launchSafely("importDevin") { importDevinAccountAndRefresh() }
+                ProviderId.DROID -> launchSafely("importDroid") { importDroidAccountAndRefresh() }
                 ProviderId.CODEX, ProviderId.CLAUDE_CODE -> launchSafely("refresh:${accountKey.providerId.name}") {
                     refresh(accountKey)
                 }
@@ -986,6 +1120,10 @@ class QuotaDogStore(
             }
             ProviderId.DEVIN -> {
                 importDevinAccountAndRefresh()
+                return
+            }
+            ProviderId.DROID -> {
+                beginDroidDeviceLoginAndWait()
                 return
             }
             ProviderId.CODEX, ProviderId.CLAUDE_CODE -> Unit
@@ -1160,6 +1298,81 @@ class QuotaDogStore(
         }
     }
 
+    private suspend fun beginDroidDeviceLoginAndWait() {
+        val pendingKey = AccountKey.pending(ProviderId.DROID, "device")
+        var deviceUi: DeviceCodeLoginStart? = null
+        try {
+            update(pendingKey) {
+                it.copy(
+                    added = true,
+                    authState = AuthState.Unknown,
+                    busy = true,
+                    loginStart = null,
+                    deviceLogin = null,
+                    message = "Starting Factory sign-in...",
+                )
+            }
+            val device = client.startDroidDeviceLogin()
+            deviceUi = DeviceCodeLoginStart(
+                userCode = device.userCode,
+                verificationUri = device.verificationUri,
+                verificationUriComplete = device.verificationUriComplete,
+            )
+            update(pendingKey) {
+                it.copy(
+                    added = true,
+                    busy = true,
+                    deviceLogin = deviceUi,
+                    message = "Approve access in the browser. If asked, enter ${device.userCode}.",
+                )
+            }
+            val opened = client.openUrl(device.authorizationUrl)
+            if (!opened) {
+                update(pendingKey) {
+                    it.copy(
+                        added = true,
+                        busy = true,
+                        deviceLogin = deviceUi,
+                        message = "Could not open the browser. Visit ${device.authorizationUrl} and enter ${device.userCode}.",
+                    )
+                }
+            }
+            val accountKey = client.completeDroidDeviceLogin(device)
+            if (state.value.accounts[pendingKey] == null) return
+            replacePendingWithAccount(
+                pendingKey = pendingKey,
+                accountKey = accountKey,
+                message = "Sign-in successful, refreshing usage...",
+            )
+            onLocalDataChanged?.invoke()
+            refresh(accountKey)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: ProviderException) {
+            platformDebugLog("store droidDeviceLogin provider error state=${error.state} status=${error.statusCode}")
+            update(pendingKey) {
+                it.copy(
+                    added = true,
+                    authState = error.state,
+                    busy = false,
+                    deviceLogin = deviceUi,
+                    message = safeUserMessage(error, "Factory sign-in failed. Please try again."),
+                )
+            }
+        } catch (error: Throwable) {
+            platformDebugLog("store droidDeviceLogin unexpected error")
+            update(pendingKey) {
+                it.copy(
+                    added = true,
+                    authState = AuthState.Error,
+                    busy = false,
+                    deviceLogin = deviceUi,
+                    message = safeUserMessage(error, "Factory sign-in failed. Please try again."),
+                )
+            }
+        }
+    }
+
     private suspend fun importGrokAccountAndRefresh() {
         val pendingKey = AccountKey.pending(ProviderId.GROK, "import")
         update(pendingKey) {
@@ -1323,6 +1536,48 @@ class QuotaDogStore(
                     authState = AuthState.Error,
                     busy = false,
                     message = safeUserMessage(error, "Could not import Devin credentials."),
+                )
+            }
+        }
+    }
+
+    private suspend fun importDroidAccountAndRefresh() {
+        val pendingKey = AccountKey.pending(ProviderId.DROID, "import")
+        update(pendingKey) {
+            it.copy(
+                added = true,
+                authState = AuthState.Unknown,
+                busy = true,
+                message = "Reading droid CLI credentials from ${droidAuthFileHint()}...",
+            )
+        }
+        try {
+            val accountKey = client.importDroidAccount()
+            replacePendingWithAccount(
+                pendingKey = pendingKey,
+                accountKey = accountKey,
+                message = "Imported droid credentials, refreshing usage...",
+            )
+            onLocalDataChanged?.invoke()
+            refresh(accountKey)
+        } catch (error: ProviderException) {
+            platformDebugLog("store importDroid provider error state=${error.state} status=${error.statusCode}")
+            update(pendingKey) {
+                it.copy(
+                    added = true,
+                    authState = error.state,
+                    busy = false,
+                    message = safeUserMessage(error, "Could not import droid credentials."),
+                )
+            }
+        } catch (error: Throwable) {
+            platformDebugLog("store importDroid unexpected error")
+            update(pendingKey) {
+                it.copy(
+                    added = true,
+                    authState = AuthState.Error,
+                    busy = false,
+                    message = safeUserMessage(error, "Could not import droid credentials."),
                 )
             }
         }
@@ -1543,6 +1798,18 @@ private fun formatDevinDollars(dollars: Double): String {
     val whole = cents / 100
     val remainder = cents % 100
     return "$$whole.${remainder.toString().padStart(2, '0')}"
+}
+
+private fun formatDroidCents(cents: Long): String {
+    val sign = if (cents < 0) "-" else ""
+    val abs = kotlin.math.abs(cents)
+    val dollars = abs / 100
+    val remainder = abs % 100
+    return if (remainder == 0L) {
+        "$sign$$dollars"
+    } else {
+        "$sign$$dollars.${remainder.toString().padStart(2, '0')}"
+    }
 }
 
 private fun formatCursorCents(cents: Int): String {

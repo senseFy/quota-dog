@@ -4,6 +4,7 @@ actual fun availableProviders(): List<ProviderId> = listOf(
     ProviderId.CODEX,
     ProviderId.CLAUDE_CODE,
     ProviderId.GROK,
+    ProviderId.DROID,
 )
 
 actual fun loadGrokCredentialsFromCli(): OAuthTokenBundle {
@@ -44,3 +45,14 @@ actual fun loadDevinCredentialsFromCli(): OAuthTokenBundle {
 }
 
 actual fun devinAuthFileHint(): String = "~/.local/share/devin/credentials.toml"
+
+actual fun loadDroidCredentialsFromCli(): OAuthTokenBundle {
+    throw ProviderException(
+        AuthState.NotConfigured,
+        "droid CLI import is only available on the desktop app. Sign in with Factory instead."
+    )
+}
+
+actual fun droidAuthFileHint(): String = "~/.factory"
+
+actual fun droidCliImportAvailable(): Boolean = false

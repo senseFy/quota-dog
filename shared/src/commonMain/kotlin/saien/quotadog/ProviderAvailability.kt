@@ -19,3 +19,9 @@ expect fun antigravityAuthHint(): String
 expect fun loadDevinCredentialsFromCli(): OAuthTokenBundle
 
 expect fun devinAuthFileHint(): String
+
+expect fun loadDroidCredentialsFromCli(): OAuthTokenBundle
+
+expect fun droidAuthFileHint(): String
+
+expect fun droidCliImportAvailable(): Boolean

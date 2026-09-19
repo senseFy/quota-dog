@@ -1,6 +1,10 @@
 package saien.quotadog
 
 import java.io.File
+import java.util.Base64
+import javax.crypto.Cipher
+import javax.crypto.spec.GCMParameterSpec
+import javax.crypto.spec.SecretKeySpec
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
@@ -99,6 +103,151 @@ actual fun loadDevinCredentialsFromCli(): OAuthTokenBundle {
 }
 
 actual fun devinAuthFileHint(): String = devinCredentialsFile().absolutePath
+
+actual fun loadDroidCredentialsFromCli(): OAuthTokenBundle {
+    val dir = droidHomeDir()
+    if (!dir.isDirectory) {
+        throw ProviderException(
+            AuthState.NotConfigured,
+            "droid CLI data not found at ${dir.absolutePath}. Install droid, run `droid`, and sign in first.",
+        )
+    }
+    val candidates = droidCredentialCandidates(dir)
+    if (candidates.isEmpty()) {
+        throw ProviderException(
+            AuthState.NotConfigured,
+            "droid credentials not found in ${dir.absolutePath}. Run `droid` and sign in, then import again.",
+        )
+    }
+    val errors = mutableListOf<ProviderException>()
+    for (candidate in candidates) {
+        val token = runCatching { candidate.read() }.getOrElse { error ->
+            errors += when (error) {
+                is ProviderException -> error
+                else -> ProviderException(
+                    AuthState.Error,
+                    "Failed to read droid credentials (${candidate.label}).",
+                )
+            }
+            null
+        } ?: continue
+        return token
+    }
+    val hardError = errors.firstOrNull { it.state != AuthState.NotConfigured }
+    throw hardError ?: ProviderException(
+        AuthState.NotConfigured,
+        "droid credentials not found in ${dir.absolutePath}. Run `droid` and sign in, then import again.",
+    )
+}
+
+actual fun droidAuthFileHint(): String = "${droidHomeDir().absolutePath} (droid CLI auth store)"
+
+actual fun droidCliImportAvailable(): Boolean = true
+
+private class DroidCredentialCandidate(
+    val label: String,
+    val read: () -> OAuthTokenBundle,
+)
+
+/**
+ * Candidate droid credential stores, freshest file first. `droid` rotates its WorkOS
+ * session regularly, so the newest store wins; each is tried until one parses.
+ */
+private fun droidCredentialCandidates(dir: File): List<DroidCredentialCandidate> {
+    val candidates = mutableListOf<Pair<Long, DroidCredentialCandidate>>()
+
+    // Current store: AES-256-GCM payload, key held in the OS keychain/keyring.
+    for (name in listOf("auth.v2.loginkeychain", "auth.v2.keyring")) {
+        val file = File(dir, name)
+        if (!file.isFile) continue
+        candidates += file.lastModified() to DroidCredentialCandidate(label = "$name + system keyring") {
+            DroidAuthParser.parseAuthJson(decryptDroidAuthV2(file.readText(), droidKeychainEncryptionKey()))
+        }
+    }
+
+    // Portable store: same encryption, base64 key kept in auth.v2.key.
+    val fileStore = File(dir, "auth.v2.file")
+    val keyFile = File(dir, "auth.v2.key")
+    if (fileStore.isFile && keyFile.isFile) {
+        val mtime = maxOf(fileStore.lastModified(), keyFile.lastModified())
+        candidates += mtime to DroidCredentialCandidate(label = "auth.v2.file + auth.v2.key") {
+            DroidAuthParser.parseAuthJson(decryptDroidAuthV2(fileStore.readText(), keyFile.readText().trim()))
+        }
+    }
+
+    // Legacy stores: plaintext JSON despite the `auth.encrypted` name.
+    for (name in listOf("auth.encrypted", "auth.json")) {
+        val file = File(dir, name)
+        if (!file.isFile) continue
+        candidates += file.lastModified() to DroidCredentialCandidate(label = name) {
+            DroidAuthParser.parseAuthJson(file.readText())
+        }
+    }
+
+    return candidates.sortedByDescending { it.first }.map { it.second }
+}
+
+/** `droid` auth.v2 payload: `base64(nonce16):base64(tag16):base64(ciphertext)`, AES-256-GCM. */
+private fun decryptDroidAuthV2(text: String, keyBase64: String): String {
+    val parts = text.trim().split(":")
+    val decoder = Base64.getDecoder()
+    val nonce = parts.getOrNull(0)?.let { runCatching { decoder.decode(it) }.getOrNull() }
+    val tag = parts.getOrNull(1)?.let { runCatching { decoder.decode(it) }.getOrNull() }
+    val ciphertext = parts.getOrNull(2)?.let { runCatching { decoder.decode(it) }.getOrNull() }
+    val keyBytes = runCatching { decoder.decode(keyBase64) }.getOrNull()
+    if (parts.size != 3 || nonce == null || tag == null || ciphertext == null || keyBytes == null || keyBytes.size != 32) {
+        throw ProviderException(AuthState.Error, "Unexpected droid auth file format.")
+    }
+    return runCatching {
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(keyBytes, "AES"), GCMParameterSpec(128, nonce))
+        String(cipher.doFinal(ciphertext + tag), Charsets.UTF_8)
+    }.getOrElse {
+        throw ProviderException(
+            AuthState.Error,
+            "Could not decrypt droid credentials. Run `droid` and sign in again, then re-import.",
+        )
+    }
+}
+
+private fun droidKeychainEncryptionKey(): String {
+    if (!isMacOs()) {
+        throw ProviderException(
+            AuthState.NotConfigured,
+            "droid keychain credentials are only readable on macOS.",
+        )
+    }
+    val service = System.getenv("DROID_KEYRING_SERVICE")?.takeIf { it.isNotBlank() } ?: "Factory CLI"
+    val accounts = listOfNotNull(
+        System.getenv("DROID_KEYRING_ACCOUNT")?.takeIf { it.isNotBlank() },
+        "auth-encryption-key-security-cli",
+        "auth-encryption-key",
+    ).distinct()
+    var lastError: ProviderException? = null
+    for (account in accounts) {
+        val key = runCatching {
+            readMacKeychainSecret(
+                service = service,
+                account = account,
+                notFoundMessage = "droid encryption key not found in Keychain ($service / $account). Run `droid`, sign in, then re-import.",
+            )
+        }.getOrElse { error ->
+            lastError = error as? ProviderException
+                ?: ProviderException(AuthState.Error, "Failed to read Keychain item ($service / $account).")
+            null
+        } ?: continue
+        return key
+    }
+    throw lastError ?: ProviderException(
+        AuthState.NotConfigured,
+        "droid encryption key not found in Keychain. Run `droid`, sign in, then re-import.",
+    )
+}
+
+private fun droidHomeDir(): File {
+    System.getenv("DROID_HOME")?.takeIf { it.isNotBlank() }?.let { return File(it) }
+    return File(System.getProperty("user.home"), ".factory")
+}
 
 private fun devinCredentialsFile(): File {
     System.getenv("DEVIN_CREDENTIALS_TOML")?.takeIf { it.isNotBlank() }?.let { return File(it) }

@@ -65,6 +65,8 @@ import saien.quotadog.PlatformTokenStore
 import saien.quotadog.ProviderId
 import saien.quotadog.availableProviders
 import saien.quotadog.codexResetSummary
+import saien.quotadog.droidAuthFileHint
+import saien.quotadog.droidCliImportAvailable
 import saien.quotadog.grokAuthFileHint
 import saien.quotadog.grokCliImportAvailable
 import saien.quotadog.QuotaDogClient
@@ -187,6 +189,7 @@ private fun QuotaDogScreen(
     val callbackInputs = remember { mutableStateMapOf<AccountKey, String>() }
     var showProviderPicker by remember { mutableStateOf(false) }
     var showGrokMethodPicker by remember { mutableStateOf(false) }
+    var showDroidMethodPicker by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
     var selectedProvider by remember { mutableStateOf<ProviderId?>(null) }
     var pendingDelete by remember { mutableStateOf<AccountKey?>(null) }
@@ -319,12 +322,16 @@ private fun QuotaDogScreen(
                     if (provider == ProviderId.GROK && grokCliImportAvailable()) {
                         showProviderPicker = false
                         showGrokMethodPicker = true
+                    } else if (provider == ProviderId.DROID && droidCliImportAvailable()) {
+                        showProviderPicker = false
+                        showDroidMethodPicker = true
                     } else {
                         showProviderPicker = false
                         store.startLogin(provider)
                         snackbar.show(
                             text = when (provider) {
                                 ProviderId.GROK -> "Opening xAI sign-in..."
+                                ProviderId.DROID -> "Opening Factory sign-in..."
                                 ProviderId.CURSOR -> "Importing Cursor app or CLI credentials..."
                                 ProviderId.ANTIGRAVITY -> "Importing Antigravity CLI credentials..."
                                 ProviderId.DEVIN -> "Importing Devin CLI credentials..."
@@ -341,7 +348,13 @@ private fun QuotaDogScreen(
             visible = showGrokMethodPicker,
             onDismiss = { showGrokMethodPicker = false },
         ) {
-            GrokMethodPickerContent(
+            AuthMethodPickerContent(
+                title = "Add Grok",
+                description = "Sign in with xAI, or import credentials from the Grok CLI on this computer.",
+                oauthTitle = "Sign in with xAI",
+                oauthSubtitle = "Same device-code login as Grok CLI and CLI Proxy API",
+                importTitle = "Import from Grok CLI",
+                importSubtitle = "Read credentials from ${grokAuthFileHint()}",
                 onSelectOauth = {
                     showGrokMethodPicker = false
                     store.startGrokDeviceLogin()
@@ -355,6 +368,36 @@ private fun QuotaDogScreen(
                     store.startImportGrok()
                     snackbar.show(
                         text = "Importing Grok CLI credentials...",
+                        tone = QdSnackbarTone.Info,
+                    )
+                },
+            )
+        }
+
+        QdBottomSheet(
+            visible = showDroidMethodPicker,
+            onDismiss = { showDroidMethodPicker = false },
+        ) {
+            AuthMethodPickerContent(
+                title = "Add Droid",
+                description = "Sign in with Factory, or import credentials from the droid CLI on this computer.",
+                oauthTitle = "Sign in with Factory",
+                oauthSubtitle = "Same device-code login as the droid CLI",
+                importTitle = "Import from droid CLI",
+                importSubtitle = "Read credentials from ${droidAuthFileHint()}",
+                onSelectOauth = {
+                    showDroidMethodPicker = false
+                    store.startDroidDeviceLogin()
+                    snackbar.show(
+                        text = "Opening Factory sign-in...",
+                        tone = QdSnackbarTone.Info,
+                    )
+                },
+                onSelectCliImport = {
+                    showDroidMethodPicker = false
+                    store.startImportDroid()
+                    snackbar.show(
+                        text = "Importing droid CLI credentials...",
                         tone = QdSnackbarTone.Info,
                     )
                 },
@@ -1131,10 +1174,12 @@ private fun ProviderPickerContent(onSelect: (ProviderId) -> Unit) {
     val spacing = QdTheme.spacing
     val providers = availableProviders()
     val description = when {
-        (ProviderId.CURSOR in providers || ProviderId.ANTIGRAVITY in providers || ProviderId.DEVIN in providers) && grokCliImportAvailable() ->
-            "Choose a provider. Codex, Claude, and Grok sign in through a browser. Grok can also import the local CLI; Cursor imports the desktop app or `cursor-agent` CLI; Antigravity and Devin import local CLI credentials."
-        ProviderId.ANTIGRAVITY in providers || ProviderId.DEVIN in providers ->
-            "Choose a provider. Codex, Claude, and Grok sign in through a browser. Antigravity and Devin import local CLI credentials on desktop."
+        grokCliImportAvailable() || droidCliImportAvailable() ->
+            "Choose a provider. Codex, Claude, Grok, and Droid sign in through a browser. Grok and Droid can also import the local CLI; Cursor imports the desktop app or `cursor-agent` CLI; Antigravity and Devin import local CLI credentials."
+        ProviderId.CURSOR in providers || ProviderId.ANTIGRAVITY in providers || ProviderId.DEVIN in providers ->
+            "Choose a provider. Codex, Claude, Grok, and Droid sign in through a browser. Cursor, Antigravity, and Devin import local credentials on desktop."
+        ProviderId.DROID in providers ->
+            "Choose a provider. Codex, Claude, Grok, and Droid open a browser to sign in."
         ProviderId.GROK in providers ->
             "Choose a provider. Codex, Claude, and Grok open a browser to sign in."
         else ->
@@ -1158,7 +1203,13 @@ private fun ProviderPickerContent(onSelect: (ProviderId) -> Unit) {
 }
 
 @Composable
-private fun GrokMethodPickerContent(
+private fun AuthMethodPickerContent(
+    title: String,
+    description: String,
+    oauthTitle: String,
+    oauthSubtitle: String,
+    importTitle: String,
+    importSubtitle: String,
     onSelectOauth: () -> Unit,
     onSelectCliImport: () -> Unit,
 ) {
@@ -1167,22 +1218,22 @@ private fun GrokMethodPickerContent(
     val spacing = QdTheme.spacing
     Column(verticalArrangement = Arrangement.spacedBy(spacing.lg)) {
         Column(verticalArrangement = Arrangement.spacedBy(spacing.xs)) {
-            Text("Add Grok", style = typo.titleLarge, color = colors.textPrimary)
+            Text(title, style = typo.titleLarge, color = colors.textPrimary)
             Text(
-                "Sign in with xAI, or import credentials from the Grok CLI on this computer.",
+                description,
                 style = typo.bodyMedium,
                 color = colors.textSecondary,
             )
         }
         Column(verticalArrangement = Arrangement.spacedBy(spacing.sm)) {
-            GrokMethodOptionRow(
-                title = "Sign in with xAI",
-                subtitle = "Same device-code login as Grok CLI and CLI Proxy API",
+            AuthMethodOptionRow(
+                title = oauthTitle,
+                subtitle = oauthSubtitle,
                 onClick = onSelectOauth,
             )
-            GrokMethodOptionRow(
-                title = "Import from Grok CLI",
-                subtitle = "Read credentials from ${grokAuthFileHint()}",
+            AuthMethodOptionRow(
+                title = importTitle,
+                subtitle = importSubtitle,
                 onClick = onSelectCliImport,
             )
         }
@@ -1190,7 +1241,7 @@ private fun GrokMethodPickerContent(
 }
 
 @Composable
-private fun GrokMethodOptionRow(
+private fun AuthMethodOptionRow(
     title: String,
     subtitle: String,
     onClick: () -> Unit,
@@ -1319,6 +1370,7 @@ private fun ProviderId.subtitle(): String = when (this) {
     ProviderId.CURSOR -> "Cursor plan / on-demand usage (app or CLI)"
     ProviderId.ANTIGRAVITY -> "Antigravity CLI quota windows (desktop)"
     ProviderId.DEVIN -> "Devin daily / weekly quota (CLI import)"
+    ProviderId.DROID -> "Factory Droid quota windows"
 }
 
 private fun UsageWindow.displayRatio(mode: UsageDisplayMode): Double = when (mode) {

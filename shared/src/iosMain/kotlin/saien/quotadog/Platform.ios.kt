@@ -170,6 +170,7 @@ actual class PlatformOAuthCallbackServer actual constructor() : OAuthCallbackSer
             ProviderId.CURSOR -> throw IllegalArgumentException("Cursor does not use browser OAuth callbacks.")
             ProviderId.ANTIGRAVITY -> throw IllegalArgumentException("Antigravity does not use browser OAuth callbacks.")
             ProviderId.DEVIN -> throw IllegalArgumentException("Devin does not use browser OAuth callbacks.")
+            ProviderId.DROID -> throw IllegalArgumentException("Droid does not use browser OAuth callbacks.")
         }
         waitForCallback(config.port, config.path, timeoutMillis)
     }
