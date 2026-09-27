@@ -91,6 +91,9 @@ kotlin {
             implementation(libs.lucide.icons.cmp)
             api(projects.shared)
         }
+        commonTest.dependencies {
+            implementation(libs.kotlin.test)
+        }
         androidMain.dependencies {
             implementation(libs.androidx.activity.compose)
         }

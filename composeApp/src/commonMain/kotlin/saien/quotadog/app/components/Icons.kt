@@ -8,11 +8,16 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import com.composables.icons.lucide.ArrowDownWideNarrow
+import com.composables.icons.lucide.ArrowUpNarrowWide
 import com.composables.icons.lucide.Check
+import com.composables.icons.lucide.ChevronDown
 import com.composables.icons.lucide.ChevronRight
+import com.composables.icons.lucide.ChevronUp
 import com.composables.icons.lucide.CircleAlert
 import com.composables.icons.lucide.Ellipsis
 import com.composables.icons.lucide.Gauge
+import com.composables.icons.lucide.GripVertical
 import com.composables.icons.lucide.Lucide
 import com.composables.icons.lucide.Minus
 import com.composables.icons.lucide.Plus
@@ -82,4 +87,29 @@ fun QdCheckIcon(modifier: Modifier = Modifier, size: Dp = 16.dp, tint: Color = C
 @Composable
 fun QdMinusIcon(modifier: Modifier = Modifier, size: Dp = 16.dp, tint: Color = Color.Black) {
     QdLucideIcon(Lucide.Minus, modifier, size, tint)
+}
+
+@Composable
+fun QdChevronUpIcon(modifier: Modifier = Modifier, size: Dp = 16.dp, tint: Color = Color.Black) {
+    QdLucideIcon(Lucide.ChevronUp, modifier, size, tint)
+}
+
+@Composable
+fun QdChevronDownIcon(modifier: Modifier = Modifier, size: Dp = 16.dp, tint: Color = Color.Black) {
+    QdLucideIcon(Lucide.ChevronDown, modifier, size, tint)
+}
+
+@Composable
+fun QdGripVerticalIcon(modifier: Modifier = Modifier, size: Dp = 16.dp, tint: Color = Color.Black) {
+    QdLucideIcon(Lucide.GripVertical, modifier, size, tint)
+}
+
+@Composable
+fun QdSortAscendingIcon(modifier: Modifier = Modifier, size: Dp = 16.dp, tint: Color = Color.Black) {
+    QdLucideIcon(Lucide.ArrowUpNarrowWide, modifier, size, tint)
+}
+
+@Composable
+fun QdSortDescendingIcon(modifier: Modifier = Modifier, size: Dp = 16.dp, tint: Color = Color.Black) {
+    QdLucideIcon(Lucide.ArrowDownWideNarrow, modifier, size, tint)
 }

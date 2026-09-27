@@ -58,7 +58,10 @@ data class CloudSyncPreferencesRecord(
     val autoRefreshMinutes: CloudSyncIntPreference? = null,
     val usageDisplayMode: CloudSyncStringPreference? = null,
     val showProjectedUsage: CloudSyncBooleanPreference? = null,
-    val emailPrivacyMode: CloudSyncStringPreference? = null
+    val emailPrivacyMode: CloudSyncStringPreference? = null,
+    val accountSortMode: CloudSyncStringPreference? = null,
+    val accountManualOrder: CloudSyncStringPreference? = null,
+    val accountSortReversed: CloudSyncBooleanPreference? = null
 )
 
 @Serializable
@@ -123,7 +126,7 @@ private fun mergeAccountRecords(
     )
 }
 
-private fun mergePreferences(
+internal fun mergePreferences(
     local: CloudSyncPreferencesRecord,
     remote: CloudSyncPreferencesRecord
 ): CloudSyncPreferencesRecord {
@@ -132,7 +135,10 @@ private fun mergePreferences(
         autoRefreshMinutes = newest(local.autoRefreshMinutes, remote.autoRefreshMinutes) { it.updatedAtEpochMillis },
         usageDisplayMode = newest(local.usageDisplayMode, remote.usageDisplayMode) { it.updatedAtEpochMillis },
         showProjectedUsage = newest(local.showProjectedUsage, remote.showProjectedUsage) { it.updatedAtEpochMillis },
-        emailPrivacyMode = newest(local.emailPrivacyMode, remote.emailPrivacyMode) { it.updatedAtEpochMillis }
+        emailPrivacyMode = newest(local.emailPrivacyMode, remote.emailPrivacyMode) { it.updatedAtEpochMillis },
+        accountSortMode = newest(local.accountSortMode, remote.accountSortMode) { it.updatedAtEpochMillis },
+        accountManualOrder = newest(local.accountManualOrder, remote.accountManualOrder) { it.updatedAtEpochMillis },
+        accountSortReversed = newest(local.accountSortReversed, remote.accountSortReversed) { it.updatedAtEpochMillis }
     )
 }
 

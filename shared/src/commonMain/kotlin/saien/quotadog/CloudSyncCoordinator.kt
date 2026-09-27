@@ -1,7 +1,7 @@
 package saien.quotadog
 
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -185,14 +185,18 @@ class CloudSyncCoordinator(
                 message = "Syncing with Dropbox..."
             )
             try {
-                val local = localRepository.exportDocument()
                 val remote = remoteBackend.pull()
-                val merged = if (remote == null) {
+                val remoteDocument = remote?.let {
+                    CloudSyncCrypto.decryptDocument(it.content, activePassphrase)
+                }
+                // Pulling and decrypting can take time; include edits made while they ran.
+                val local = localRepository.exportDocument()
+                val merged = if (remoteDocument == null) {
                     local
                 } else {
                     mergeCloudSyncDocuments(
                         local = local,
-                        remote = CloudSyncCrypto.decryptDocument(remote.content, activePassphrase)
+                        remote = remoteDocument
                     )
                 }
                 localRepository.applyDocument(merged)
@@ -232,15 +236,21 @@ class CloudSyncCoordinator(
             remoteBackend.push(encrypted, rev)
         } catch (_: DropboxSyncConflictException) {
             val latest = remoteBackend.pull()
-                ?: return remoteBackend.push(encrypted, null).let { Unit }
-            val latestDocument = CloudSyncCrypto.decryptDocument(latest.content, activePassphrase)
-            val retryMerged = mergeCloudSyncDocuments(toUpload, latestDocument)
+            val latestDocument = latest?.let {
+                CloudSyncCrypto.decryptDocument(it.content, activePassphrase)
+            }
+            val local = localRepository.exportDocument()
+            val retryMerged = if (latestDocument == null) {
+                local
+            } else {
+                mergeCloudSyncDocuments(local, latestDocument)
+            }
             localRepository.applyDocument(retryMerged)
             val retryEncrypted = CloudSyncCrypto.encryptDocument(
                 retryMerged.copy(updatedAtEpochMillis = Clock.System.now().toEpochMilliseconds()),
                 activePassphrase
             )
-            remoteBackend.push(retryEncrypted, latest.rev)
+            remoteBackend.push(retryEncrypted, latest?.rev)
         }
     }
 

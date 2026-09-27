@@ -94,6 +94,36 @@ class CloudSyncMergeTest {
         assertEquals(30, merged.preferences.autoRefreshMinutes?.value)
     }
 
+    @Test
+    fun mergesAccountOrderPreferencesPerField() {
+        val localOrder = """{"accounts":[{"providerId":"CODEX","accountId":"local"}]}"""
+        val remoteOrder = """{"accounts":[{"providerId":"GROK","accountId":"remote"}]}"""
+        val local = CloudSyncDocumentV1(
+            deviceId = "local",
+            updatedAtEpochMillis = 100,
+            preferences = CloudSyncPreferencesRecord(
+                accountSortMode = CloudSyncStringPreference("Manual", updatedAtEpochMillis = 400),
+                accountManualOrder = CloudSyncStringPreference(localOrder, updatedAtEpochMillis = 100),
+                accountSortReversed = CloudSyncBooleanPreference(false, updatedAtEpochMillis = 100)
+            )
+        )
+        val remote = CloudSyncDocumentV1(
+            deviceId = "remote",
+            updatedAtEpochMillis = 100,
+            preferences = CloudSyncPreferencesRecord(
+                accountSortMode = CloudSyncStringPreference("Name", updatedAtEpochMillis = 150),
+                accountManualOrder = CloudSyncStringPreference(remoteOrder, updatedAtEpochMillis = 300),
+                accountSortReversed = CloudSyncBooleanPreference(true, updatedAtEpochMillis = 250)
+            )
+        )
+
+        val merged = mergeCloudSyncDocuments(local, remote, nowEpochMillis = 500)
+
+        assertEquals("Manual", merged.preferences.accountSortMode?.value)
+        assertEquals(remoteOrder, merged.preferences.accountManualOrder?.value)
+        assertEquals(true, merged.preferences.accountSortReversed?.value)
+    }
+
     private fun token(accessToken: String): OAuthTokenBundle {
         return OAuthTokenBundle(
             accessToken = accessToken,

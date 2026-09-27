@@ -207,6 +207,9 @@ private fun QuotaDogTray(
     onStatusBarAvailabilityChanged: (Boolean) -> Unit,
 ) {
     val state by store.state.collectAsState()
+    val accountSortMode by preferences.accountSortMode.collectAsState()
+    val accountSortReversed by preferences.accountSortReversed.collectAsState()
+    val accountManualOrder by preferences.accountManualOrder.collectAsState()
     val emailPrivacyMode by preferences.emailPrivacyMode.collectAsState()
     val usageDisplayMode by preferences.usageDisplayMode.collectAsState()
     val themeMode by preferences.themeMode.collectAsState()
@@ -225,8 +228,8 @@ private fun QuotaDogTray(
     )
     val accounts = state.accounts.values
         .filter { it.shouldShowInTray() }
-        .sortedWith(compareBy<AccountUiState> { it.providerId.ordinal }.thenBy { it.traySortLabel() })
-    val availableProviders = accounts.map { it.providerId }.distinct()
+        .sortedAccounts(accountSortMode, accountManualOrder, accountSortReversed)
+    val availableProviders = accounts.map { it.providerId }.distinct().sortedBy { it.ordinal }
     val activeStatusBarProvider =
         selectedStatusBarProvider?.takeIf { it in availableProviders }
     val statusBarAccounts = activeStatusBarProvider?.let { selected ->
@@ -776,12 +779,6 @@ private fun AccountUiState.shouldShowInTray(): Boolean {
 
 private fun AccountUiState.canRefreshFromTray(): Boolean {
     return added && (authState == AuthState.LoggedIn || authState == AuthState.TokenExpired)
-}
-
-private fun AccountUiState.traySortLabel(): String {
-    return snapshot?.accountEmail?.takeIf { it.isNotBlank() }
-        ?: accountKey.accountId.takeUnless { accountKey.isPending || it == "default" }
-        ?: providerId.displayName
 }
 
 private fun AccountUiState.trayAccountTitle(emailPrivacyMode: EmailPrivacyMode): String {

@@ -1,13 +1,35 @@
 package saien.quotadog
 
 import com.russhwolf.settings.MapSettings
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
 class CloudSyncCoordinatorTest {
+    @Test
+    fun manualOrderChangedDuringPullIsPreservedAndUploaded() = runBlocking {
+        assertManualOrderSurvivesPendingPull(conflict = false, remoteMissing = false)
+    }
+
+    @Test
+    fun manualOrderChangedWhileCreatingRemoteFileIsUploaded() = runBlocking {
+        assertManualOrderSurvivesPendingPull(conflict = false, remoteMissing = true)
+    }
+
+    @Test
+    fun conflictRetryIncludesManualOrderChangedDuringPull() = runBlocking {
+        assertManualOrderSurvivesPendingPull(conflict = true, remoteMissing = false)
+    }
+
+    @Test
+    fun conflictRetryWithDeletedRemoteIncludesLatestManualOrder() = runBlocking {
+        assertManualOrderSurvivesPendingPull(conflict = true, remoteMissing = true)
+    }
+
     @Test
     fun revConflictPullsLatestAndMergesBeforeRetry() = runBlocking {
         val passphrase = "correct horse battery staple"
@@ -43,6 +65,46 @@ class CloudSyncCoordinatorTest {
 
         assertEquals("remote-new", tokenStore.load(accountKey)?.accessToken)
         assertEquals(2, backend.pushAttempts)
+    }
+
+    private suspend fun assertManualOrderSurvivesPendingPull(conflict: Boolean, remoteMissing: Boolean) {
+        withTimeout(10_000) {
+            val passphrase = "review-test-passphrase"
+            val preferences = AppPreferences(MapSettings())
+            val backend = PausedPullBackend(conflict, remoteMissing)
+            val coordinator = CloudSyncCoordinator(
+                CloudSyncLocalRepository(
+                    tokenStore = SettingsTokenStore(MapSettings()),
+                    usageSnapshotStore = SettingsUsageSnapshotStore(MapSettings()),
+                    preferences = preferences,
+                    settings = MapSettings(),
+                ),
+                backend,
+            )
+            try {
+                coordinator.startUnlock(passphrase)
+                coordinator.state.first { it.status == CloudSyncStatus.Connected }
+                val original = listOf(
+                    AccountKey(ProviderId.CODEX, "a@example.com"),
+                    AccountKey(ProviderId.GROK, "b@example.com"),
+                )
+                preferences.setAccountManualOrder(original)
+                preferences.setAccountSortMode(AccountSortMode.Manual)
+                coordinator.startPushLocalChanges()
+                backend.pendingPull.await()
+
+                // The drag saves locally; its next push waits until the pointer is released.
+                preferences.setAccountManualOrder(original.reversed())
+                backend.releasePull.complete(Unit)
+                coordinator.state.first { it.status == CloudSyncStatus.Connected }
+
+                assertEquals(original.reversed(), preferences.accountManualOrder.value)
+                val uploaded = CloudSyncCrypto.decryptDocument(backend.remote!!.content, passphrase)
+                assertEquals(original.reversed(), decodeAccountOrder(uploaded.preferences.accountManualOrder?.value))
+            } finally {
+                coordinator.cancelCurrentOperation()
+            }
+        }
     }
 
     private fun encryptedDocument(
@@ -83,6 +145,40 @@ class CloudSyncCoordinatorTest {
                 delay(20)
             }
         }
+    }
+
+    private class PausedPullBackend(
+        private val conflict: Boolean,
+        private val remoteMissing: Boolean,
+    ) : CloudSyncRemoteBackend {
+        val pendingPull = CompletableDeferred<Unit>()
+        val releasePull = CompletableDeferred<Unit>()
+        var remote: DropboxRemoteFile? = null
+            private set
+        private var pulls = 0
+        private var pushes = 0
+
+        override fun hasConnection(): Boolean = true
+        override fun storedRev(): String? = remote?.rev
+        override suspend fun connect(): String = "test-account"
+
+        override suspend fun pull(): DropboxRemoteFile? {
+            pulls++
+            if (pulls == if (conflict) 3 else 2) {
+                pendingPull.complete(Unit)
+                releasePull.await()
+                if (remoteMissing) return null
+            }
+            return remote
+        }
+
+        override suspend fun push(content: String, rev: String?): DropboxRemoteFile {
+            pushes++
+            if (conflict && pushes == 2) throw DropboxSyncConflictException()
+            return DropboxRemoteFile(content, "rev-$pushes").also { remote = it }
+        }
+
+        override fun disconnect() = Unit
     }
 
     private class FakeConflictBackend(

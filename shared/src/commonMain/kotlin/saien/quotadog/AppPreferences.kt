@@ -38,6 +38,15 @@ class AppPreferences(
     private val _emailPrivacyMode = MutableStateFlow(loadEmailPrivacyMode())
     val emailPrivacyMode: StateFlow<EmailPrivacyMode> = _emailPrivacyMode
 
+    private val _accountSortMode = MutableStateFlow(loadAccountSortMode())
+    val accountSortMode: StateFlow<AccountSortMode> = _accountSortMode
+
+    private val _accountManualOrder = MutableStateFlow(loadAccountManualOrder())
+    val accountManualOrder: StateFlow<List<AccountKey>> = _accountManualOrder
+
+    private val _accountSortReversed = MutableStateFlow(loadAccountSortReversed())
+    val accountSortReversed: StateFlow<Boolean> = _accountSortReversed
+
     fun setThemeMode(mode: ThemeMode) {
         settings.putString(KEY_THEME, mode.name)
         settings.putLong(updatedAtKey(KEY_THEME), nowMillis())
@@ -69,6 +78,28 @@ class AppPreferences(
         _emailPrivacyMode.value = mode
     }
 
+    fun setAccountSortMode(mode: AccountSortMode) {
+        if (_accountSortMode.value == mode) return
+        settings.putString(KEY_ACCOUNT_SORT_MODE, mode.name)
+        settings.putLong(updatedAtKey(KEY_ACCOUNT_SORT_MODE), nowMillis())
+        _accountSortMode.value = mode
+    }
+
+    fun setAccountManualOrder(keys: List<AccountKey>) {
+        val distinct = keys.distinct()
+        if (_accountManualOrder.value == distinct) return
+        settings.putString(KEY_ACCOUNT_MANUAL_ORDER, encodeAccountOrder(distinct))
+        settings.putLong(updatedAtKey(KEY_ACCOUNT_MANUAL_ORDER), nowMillis())
+        _accountManualOrder.value = distinct
+    }
+
+    fun setAccountSortReversed(reversed: Boolean) {
+        if (_accountSortReversed.value == reversed) return
+        settings.putBoolean(KEY_ACCOUNT_SORT_REVERSED, reversed)
+        settings.putLong(updatedAtKey(KEY_ACCOUNT_SORT_REVERSED), nowMillis())
+        _accountSortReversed.value = reversed
+    }
+
     fun exportForSync(): CloudSyncPreferencesRecord {
         return CloudSyncPreferencesRecord(
             themeMode = CloudSyncStringPreference(
@@ -90,34 +121,63 @@ class AppPreferences(
             emailPrivacyMode = CloudSyncStringPreference(
                 value = _emailPrivacyMode.value.name,
                 updatedAtEpochMillis = preferenceUpdatedAt(KEY_EMAIL_PRIVACY_MODE)
+            ),
+            accountSortMode = CloudSyncStringPreference(
+                value = _accountSortMode.value.name,
+                updatedAtEpochMillis = preferenceUpdatedAt(KEY_ACCOUNT_SORT_MODE)
+            ),
+            accountManualOrder = CloudSyncStringPreference(
+                value = encodeAccountOrder(_accountManualOrder.value),
+                updatedAtEpochMillis = preferenceUpdatedAt(KEY_ACCOUNT_MANUAL_ORDER)
+            ),
+            accountSortReversed = CloudSyncBooleanPreference(
+                value = _accountSortReversed.value,
+                updatedAtEpochMillis = preferenceUpdatedAt(KEY_ACCOUNT_SORT_REVERSED)
             )
         )
     }
 
     fun importForSync(preferences: CloudSyncPreferencesRecord) {
-        preferences.themeMode?.let {
+        // Account imports can suspend before preferences are applied. Preserve newer local edits.
+        val merged = mergePreferences(exportForSync(), preferences)
+        merged.themeMode?.let {
             val value = runCatching { ThemeMode.valueOf(it.value) }.getOrNull() ?: return@let
             importString(KEY_THEME, value.name, it.updatedAtEpochMillis)
             _themeMode.value = value
         }
-        preferences.autoRefreshMinutes?.let {
+        merged.autoRefreshMinutes?.let {
             importInt(KEY_AUTO_REFRESH, it.value.coerceAtLeast(0), it.updatedAtEpochMillis)
             _autoRefreshMinutes.value = it.value.coerceAtLeast(0)
         }
-        preferences.usageDisplayMode?.let {
+        merged.usageDisplayMode?.let {
             val value = runCatching { UsageDisplayMode.valueOf(it.value) }.getOrNull() ?: return@let
             importString(KEY_USAGE_DISPLAY_MODE, value.name, it.updatedAtEpochMillis)
             _usageDisplayMode.value = value
         }
-        preferences.showProjectedUsage?.let {
+        merged.showProjectedUsage?.let {
             settings.putBoolean(KEY_SHOW_PROJECTED_USAGE, it.value)
             settings.putLong(updatedAtKey(KEY_SHOW_PROJECTED_USAGE), it.updatedAtEpochMillis)
             _showProjectedUsage.value = it.value
         }
-        preferences.emailPrivacyMode?.let {
+        merged.emailPrivacyMode?.let {
             val value = runCatching { EmailPrivacyMode.valueOf(it.value) }.getOrNull() ?: return@let
             importString(KEY_EMAIL_PRIVACY_MODE, value.name, it.updatedAtEpochMillis)
             _emailPrivacyMode.value = value
+        }
+        merged.accountSortMode?.let {
+            val value = runCatching { AccountSortMode.valueOf(it.value) }.getOrNull() ?: return@let
+            importString(KEY_ACCOUNT_SORT_MODE, value.name, it.updatedAtEpochMillis)
+            _accountSortMode.value = value
+        }
+        merged.accountManualOrder?.let {
+            val value = decodeAccountOrder(it.value) ?: return@let
+            importString(KEY_ACCOUNT_MANUAL_ORDER, encodeAccountOrder(value), it.updatedAtEpochMillis)
+            _accountManualOrder.value = value
+        }
+        merged.accountSortReversed?.let {
+            settings.putBoolean(KEY_ACCOUNT_SORT_REVERSED, it.value)
+            settings.putLong(updatedAtKey(KEY_ACCOUNT_SORT_REVERSED), it.updatedAtEpochMillis)
+            _accountSortReversed.value = it.value
         }
     }
 
@@ -144,6 +204,19 @@ class AppPreferences(
         return runCatching { EmailPrivacyMode.valueOf(raw) }.getOrDefault(EmailPrivacyMode.Visible)
     }
 
+    private fun loadAccountSortMode(): AccountSortMode {
+        val raw = settings.getStringOrNull(KEY_ACCOUNT_SORT_MODE) ?: return AccountSortMode.Name
+        return runCatching { AccountSortMode.valueOf(raw) }.getOrDefault(AccountSortMode.Name)
+    }
+
+    private fun loadAccountManualOrder(): List<AccountKey> {
+        return decodeAccountOrder(settings.getStringOrNull(KEY_ACCOUNT_MANUAL_ORDER)).orEmpty()
+    }
+
+    private fun loadAccountSortReversed(): Boolean {
+        return settings.getBooleanOrNull(KEY_ACCOUNT_SORT_REVERSED) ?: false
+    }
+
     private fun importString(key: String, value: String, updatedAtEpochMillis: Long) {
         settings.putString(key, value)
         settings.putLong(updatedAtKey(key), updatedAtEpochMillis)
@@ -168,5 +241,8 @@ class AppPreferences(
         const val KEY_USAGE_DISPLAY_MODE = "pref_usage_display_mode"
         const val KEY_SHOW_PROJECTED_USAGE = "pref_show_projected_usage"
         const val KEY_EMAIL_PRIVACY_MODE = "pref_email_privacy_mode"
+        const val KEY_ACCOUNT_SORT_MODE = "pref_account_sort_mode"
+        const val KEY_ACCOUNT_MANUAL_ORDER = "pref_account_manual_order"
+        const val KEY_ACCOUNT_SORT_REVERSED = "pref_account_sort_reversed"
     }
 }

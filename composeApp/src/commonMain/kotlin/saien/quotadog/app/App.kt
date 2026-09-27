@@ -1,5 +1,6 @@
 package saien.quotadog.app
 
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -11,17 +12,21 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
@@ -38,14 +43,15 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -57,6 +63,7 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 import kotlinx.datetime.Clock
 import saien.quotadog.AccountKey
+import saien.quotadog.AccountSortMode
 import saien.quotadog.AccountUiState
 import saien.quotadog.AppPreferences
 import saien.quotadog.AuthState
@@ -67,24 +74,13 @@ import saien.quotadog.DashboardState
 import saien.quotadog.EmailPrivacyMode
 import saien.quotadog.PlatformTokenStore
 import saien.quotadog.ProviderId
-import saien.quotadog.availableProviders
-import saien.quotadog.cliImportAvailable
-import saien.quotadog.codexResetSummary
-import saien.quotadog.droidAuthFileHint
-import saien.quotadog.droidCliImportAvailable
-import saien.quotadog.grokAuthFileHint
-import saien.quotadog.grokCliImportAvailable
-import saien.quotadog.oauthAvailable
 import saien.quotadog.QuotaDogClient
 import saien.quotadog.QuotaDogStore
-import saien.quotadog.expiryLabel
-import saien.quotadog.isExpiringSoon
 import saien.quotadog.SettingsUsageSnapshotStore
 import saien.quotadog.ThemeMode
 import saien.quotadog.TokenStore
 import saien.quotadog.UsageDisplayMode
 import saien.quotadog.UsageWindow
-import saien.quotadog.projectedUsedRatio
 import saien.quotadog.app.components.QdAlertIcon
 import saien.quotadog.app.components.QdBottomSheet
 import saien.quotadog.app.components.QdButton
@@ -92,7 +88,9 @@ import saien.quotadog.app.components.QdButtonSize
 import saien.quotadog.app.components.QdButtonVariant
 import saien.quotadog.app.components.QdCard
 import saien.quotadog.app.components.QdCheckIcon
+import saien.quotadog.app.components.QdChevronDownIcon
 import saien.quotadog.app.components.QdChevronRightIcon
+import saien.quotadog.app.components.QdChevronUpIcon
 import saien.quotadog.app.components.QdConfirmDialog
 import saien.quotadog.app.components.QdEmptyState
 import saien.quotadog.app.components.QdGlassIconButton
@@ -108,10 +106,26 @@ import saien.quotadog.app.components.QdSettingsGearIcon
 import saien.quotadog.app.components.QdSettingsSheet
 import saien.quotadog.app.components.QdSnackbarHost
 import saien.quotadog.app.components.QdSnackbarTone
+import saien.quotadog.app.components.QdSortAscendingIcon
+import saien.quotadog.app.components.QdSortDescendingIcon
 import saien.quotadog.app.components.rememberQdSnackbarController
 import saien.quotadog.app.theme.QdTheme
 import saien.quotadog.app.theme.QuotaDogTheme
 import saien.quotadog.app.theme.rememberSystemDarkTheme
+import saien.quotadog.availableProviders
+import saien.quotadog.canonicalManualOrder
+import saien.quotadog.cliImportAvailable
+import saien.quotadog.codexResetSummary
+import saien.quotadog.droidAuthFileHint
+import saien.quotadog.droidCliImportAvailable
+import saien.quotadog.expiryLabel
+import saien.quotadog.grokAuthFileHint
+import saien.quotadog.grokCliImportAvailable
+import saien.quotadog.isExpiringSoon
+import saien.quotadog.oauthAvailable
+import saien.quotadog.projectedUsedRatio
+import saien.quotadog.reorderDisplayedManualOrder
+import saien.quotadog.sortedAccounts
 
 @Composable
 fun App(
@@ -193,12 +207,16 @@ private fun QuotaDogScreen(
     val usageDisplayMode by preferences.usageDisplayMode.collectAsState()
     val showProjectedUsage by preferences.showProjectedUsage.collectAsState()
     val emailPrivacyMode by preferences.emailPrivacyMode.collectAsState()
+    val accountSortMode by preferences.accountSortMode.collectAsState()
+    val accountSortReversed by preferences.accountSortReversed.collectAsState()
+    val accountManualOrder by preferences.accountManualOrder.collectAsState()
     val cloudSyncState by cloudSync.state.collectAsState()
     val callbackInputs = remember { mutableStateMapOf<AccountKey, String>() }
     var showProviderPicker by remember { mutableStateOf(false) }
     var showGrokMethodPicker by remember { mutableStateOf(false) }
     var showDroidMethodPicker by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
+    var manualReorderEditing by remember { mutableStateOf(false) }
     var selectedProvider by remember { mutableStateOf<ProviderId?>(null) }
     var pendingDelete by remember { mutableStateOf<AccountKey?>(null) }
     var showResetCloudSyncConfirm by remember { mutableStateOf(false) }
@@ -210,8 +228,8 @@ private fun QuotaDogScreen(
 
     val accounts = state.accounts.values
         .filter { it.shouldShowAccount() }
-        .sortedWith(compareBy<AccountUiState> { it.providerId.ordinal }.thenBy { it.accountSortLabel() })
-    val availableProviders = accounts.map { it.providerId }.distinct()
+        .sortedAccounts(accountSortMode, accountManualOrder, accountSortReversed)
+    val availableProviders = accounts.map { it.providerId }.distinct().sortedBy { it.ordinal }
     val refreshableAccounts = accounts.filter { it.canRefreshUsage() }
     val refreshAllBusy = refreshableAccounts.any { it.busy }
     val refreshAllEnabled = refreshableAccounts.any { !it.busy }
@@ -233,6 +251,37 @@ private fun QuotaDogScreen(
             text = if (refreshAllBusy) "Refreshing remaining accounts..." else "Refreshing all accounts...",
             tone = QdSnackbarTone.Info,
         )
+    }
+    val selectSortMode = { mode: AccountSortMode ->
+        if (mode == AccountSortMode.Manual && accountManualOrder.isEmpty()) {
+            val displayed = accounts.map { it.accountKey }
+            val seed = if (accountSortReversed) displayed.reversed() else displayed
+            preferences.setAccountManualOrder(
+                canonicalManualOrder(
+                    state.accounts.values.filter { it.shouldShowAccount() },
+                    seed,
+                ),
+            )
+        }
+        if (mode != accountSortMode) {
+            preferences.setAccountSortMode(mode)
+            cloudSync.startPushLocalChanges()
+            snackbar.show(
+                text = sortChangeLabel(mode, accountSortReversed),
+                tone = QdSnackbarTone.Success,
+            )
+        }
+        manualReorderEditing = mode == AccountSortMode.Manual
+    }
+    val selectSortReversed = { reversed: Boolean ->
+        if (reversed != accountSortReversed) {
+            preferences.setAccountSortReversed(reversed)
+            cloudSync.startPushLocalChanges()
+            snackbar.show(
+                text = sortChangeLabel(accountSortMode, reversed),
+                tone = QdSnackbarTone.Success,
+            )
+        }
     }
 
     BoxWithConstraints(
@@ -263,6 +312,11 @@ private fun QuotaDogScreen(
                 refreshAllEnabled = refreshAllEnabled,
                 onRefreshAll = refreshAllAction,
                 onAddAccount = { showProviderPicker = true },
+                sortMode = accountSortMode,
+                sortReversed = accountSortReversed,
+                showSort = accounts.isNotEmpty(),
+                onSelectSort = selectSortMode,
+                onSelectSortReversed = selectSortReversed,
                 onOpenSettings = { showSettings = true },
             )
 
@@ -277,12 +331,39 @@ private fun QuotaDogScreen(
                         onSelect = { selectedProvider = it },
                     )
                 }
+                if (manualReorderEditing) {
+                    ManualReorderBar(
+                        onDone = {
+                            manualReorderEditing = false
+                            cloudSync.startPushLocalChanges()
+                        },
+                    )
+                }
                 val visibleAccounts = activeProvider?.let { selected ->
                     accounts.filter { it.providerId == selected }
                 } ?: accounts
+                val moveVisibleAccount = { key: AccountKey, delta: Int, pushSync: Boolean ->
+                    val pool = store.state.value.accounts.values.filter { it.shouldShowAccount() }
+                    val active = selectedProvider?.takeIf { chosen ->
+                        isDesktop && pool.any { it.providerId == chosen }
+                    }
+                    val updated = reorderDisplayedManualOrder(
+                        accounts = pool,
+                        stored = preferences.accountManualOrder.value,
+                        reversed = preferences.accountSortReversed.value,
+                        provider = active,
+                        key = key,
+                        delta = delta,
+                    )
+                    if (updated != preferences.accountManualOrder.value) {
+                        preferences.setAccountManualOrder(updated)
+                        if (pushSync) cloudSync.startPushLocalChanges()
+                    }
+                }
                 AccountCards(
                     accounts = visibleAccounts,
                     isDesktop = isDesktop,
+                    manualReorder = manualReorderEditing,
                     usageDisplayMode = usageDisplayMode,
                     showProjectedUsage = showProjectedUsage,
                     emailPrivacyMode = emailPrivacyMode,
@@ -299,6 +380,8 @@ private fun QuotaDogScreen(
                         snackbar.show("Refreshing ${providerState.accountTitle(emailPrivacyMode)}...")
                     },
                     onRequestDelete = { accountKey -> pendingDelete = accountKey },
+                    onMove = { key, delta, pushSync -> moveVisibleAccount(key, delta, pushSync) },
+                    onMoveFinished = { cloudSync.startPushLocalChanges() },
                 )
             }
         }
@@ -536,6 +619,11 @@ private fun DashboardHeader(
     refreshAllEnabled: Boolean,
     onRefreshAll: () -> Unit,
     onAddAccount: () -> Unit,
+    sortMode: AccountSortMode,
+    sortReversed: Boolean,
+    showSort: Boolean,
+    onSelectSort: (AccountSortMode) -> Unit,
+    onSelectSortReversed: (Boolean) -> Unit,
     onOpenSettings: () -> Unit,
 ) {
     val colors = QdTheme.colors
@@ -585,8 +673,208 @@ private fun DashboardHeader(
                 leading = { QdPlusIcon(tint = colors.textPrimary, size = 14.dp) },
             )
         }
+        if (showSort) {
+            AccountSortButton(
+                mode = sortMode,
+                reversed = sortReversed,
+                onSelect = onSelectSort,
+                onSelectReversed = onSelectSortReversed,
+            )
+        }
         QdGlassIconButton(onClick = onOpenSettings, diameter = 32.dp) {
             QdSettingsGearIcon(tint = colors.textSecondary, size = 18.dp)
+        }
+    }
+}
+
+@Composable
+private fun AccountSortButton(
+    mode: AccountSortMode,
+    reversed: Boolean,
+    onSelect: (AccountSortMode) -> Unit,
+    onSelectReversed: (Boolean) -> Unit,
+) {
+    val colors = QdTheme.colors
+    val typo = QdTheme.typography
+    val spacing = QdTheme.spacing
+    val shape = QdTheme.shapes.pill
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    val hovered by interaction.collectIsHoveredAsState()
+    var expanded by remember { mutableStateOf(false) }
+    val background by animateColorAsState(
+        targetValue = when {
+            pressed -> colors.surfaceMuted
+            hovered -> colors.surfaceHover.copy(alpha = 0.45f)
+            else -> colors.surface
+        },
+        animationSpec = tween(120),
+    )
+
+    Box {
+        Row(
+            modifier = Modifier
+                .height(32.dp)
+                .clip(shape)
+                .background(background)
+                .border(1.dp, colors.border, shape)
+                .clickable(
+                    interactionSource = interaction,
+                    indication = null,
+                    onClick = { expanded = true },
+                )
+                .padding(horizontal = spacing.md),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(spacing.xs),
+        ) {
+            if (reversed) {
+                QdSortDescendingIcon(tint = colors.textSecondary, size = 14.dp)
+            } else {
+                QdSortAscendingIcon(tint = colors.textSecondary, size = 14.dp)
+            }
+            Text(mode.shortLabel(), style = typo.labelLarge, color = colors.textPrimary)
+        }
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+            modifier = Modifier.widthIn(min = 240.dp),
+        ) {
+            AccountSortMode.entries.forEach { option ->
+                SortMenuRow(
+                    title = option.shortLabel(),
+                    hint = option.hint(),
+                    selected = option == mode,
+                    onClick = {
+                        onSelect(option)
+                        if (option == AccountSortMode.Manual) expanded = false
+                    },
+                )
+                if (option == mode) {
+                    SortDirectionGroup(
+                        mode = option,
+                        reversed = reversed,
+                        onSelectReversed = onSelectReversed,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SortDirectionGroup(
+    mode: AccountSortMode,
+    reversed: Boolean,
+    onSelectReversed: (Boolean) -> Unit,
+) {
+    val colors = QdTheme.colors
+    val spacing = QdTheme.spacing
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = spacing.sm)
+            .padding(bottom = spacing.xs)
+            .clip(QdTheme.shapes.sm)
+            .background(colors.primaryMuted),
+    ) {
+        SortDirectionRow(
+            title = "Order",
+            hint = mode.directionHint(reversed = false),
+            selected = !reversed,
+            onClick = { onSelectReversed(false) },
+        )
+        SortDirectionRow(
+            title = "Reverse",
+            hint = mode.directionHint(reversed = true),
+            selected = reversed,
+            onClick = { onSelectReversed(true) },
+        )
+    }
+}
+
+@Composable
+private fun SortDirectionRow(
+    title: String,
+    hint: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    val colors = QdTheme.colors
+    val typo = QdTheme.typography
+    val spacing = QdTheme.spacing
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = onClick,
+            )
+            .padding(horizontal = spacing.md, vertical = spacing.sm),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(spacing.sm),
+    ) {
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            Text(title, style = typo.bodyMedium, color = colors.textPrimary)
+            Text(hint, style = typo.caption, color = colors.textSecondary)
+        }
+        if (selected) {
+            QdCheckIcon(tint = colors.primary, size = 16.dp)
+        } else {
+            Spacer(modifier = Modifier.width(16.dp))
+        }
+    }
+}
+
+@Composable
+private fun ManualReorderBar(onDone: () -> Unit) {
+    val colors = QdTheme.colors
+    val typo = QdTheme.typography
+    val spacing = QdTheme.spacing
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(spacing.md),
+    ) {
+        Text(
+            "Drag the handle to reorder.",
+            style = typo.bodyMedium,
+            color = colors.textSecondary,
+            modifier = Modifier.weight(1f),
+        )
+        QdButton(
+            text = "Done",
+            onClick = onDone,
+            variant = QdButtonVariant.Primary,
+            size = QdButtonSize.Small,
+        )
+    }
+}
+
+@Composable
+private fun SortMenuRow(
+    title: String,
+    hint: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    val colors = QdTheme.colors
+    val typo = QdTheme.typography
+    DropdownMenuItem(onClick = onClick) {
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            Text(title, style = typo.bodyMedium, color = colors.textPrimary)
+            Text(hint, style = typo.caption, color = colors.textTertiary)
+        }
+        if (selected) {
+            QdCheckIcon(tint = colors.primary, size = 16.dp)
+        } else {
+            Spacer(modifier = Modifier.width(16.dp))
         }
     }
 }
@@ -631,10 +919,35 @@ private fun DesktopProviderSwitcher(
     )
 }
 
+private fun AccountSortMode.shortLabel(): String = when (this) {
+    AccountSortMode.Name -> "Name"
+    AccountSortMode.RefreshTime -> "Refresh"
+    AccountSortMode.Manual -> "Manual"
+}
+
+private fun AccountSortMode.hint(): String = when (this) {
+    AccountSortMode.Name -> "Account name."
+    AccountSortMode.RefreshTime -> "Last refresh time."
+    AccountSortMode.Manual -> "Rearrange, then tap Done."
+}
+
+private fun AccountSortMode.directionHint(reversed: Boolean): String = when (this) {
+    AccountSortMode.Name -> if (reversed) "Z to A." else "A to Z."
+    AccountSortMode.RefreshTime -> if (reversed) "Oldest refresh first." else "Newest refresh first."
+    AccountSortMode.Manual -> if (reversed) "Saved order, bottom to top." else "Saved order, top to bottom."
+}
+
+private fun sortChangeLabel(mode: AccountSortMode, reversed: Boolean): String = when (mode) {
+    AccountSortMode.Name -> if (reversed) "Sorted by name, Z to A" else "Sorted by name, A to Z"
+    AccountSortMode.RefreshTime -> if (reversed) "Sorted by oldest refresh" else "Sorted by newest refresh"
+    AccountSortMode.Manual -> if (reversed) "Manual order reversed" else "Manual order"
+}
+
 @Composable
 private fun AccountCards(
     accounts: List<AccountUiState>,
     isDesktop: Boolean,
+    manualReorder: Boolean,
     usageDisplayMode: UsageDisplayMode,
     showProjectedUsage: Boolean,
     emailPrivacyMode: EmailPrivacyMode,
@@ -645,9 +958,40 @@ private fun AccountCards(
     onSignInAgain: (ProviderId) -> Unit,
     onRefresh: (AccountUiState) -> Unit,
     onRequestDelete: (AccountKey) -> Unit,
+    onMove: (AccountKey, Int, Boolean) -> Unit,
+    onMoveFinished: () -> Unit,
 ) {
     val spacing = QdTheme.spacing
-    val accountCard: @Composable (AccountUiState, Modifier) -> Unit = { providerState, modifier ->
+    val dragState = rememberAccountReorderDragState()
+    val visibleKeys = accounts.map { it.accountKey }
+
+    @Composable
+    fun cardAt(index: Int, providerState: AccountUiState, modifier: Modifier) {
+        val reorder = if (manualReorder) {
+            AccountReorderControls(
+                canMoveUp = index > 0,
+                canMoveDown = index < accounts.lastIndex,
+                handleModifier = Modifier.accountDragHandle(
+                    accountKey = providerState.accountKey,
+                    dragState = dragState,
+                    visibleKeys = visibleKeys,
+                    itemSpacing = spacing.md,
+                    onMove = { key, delta -> onMove(key, delta, false) },
+                    onDragFinished = onMoveFinished,
+                ),
+                onMoveUp = { onMove(providerState.accountKey, -1, true) },
+                onMoveDown = { onMove(providerState.accountKey, 1, true) },
+            )
+        } else {
+            null
+        }
+        val cardModifier = if (manualReorder) {
+            modifier
+                .reportAccountReorderHeight(providerState.accountKey, dragState)
+                .accountReorderVisual(providerState.accountKey, dragState)
+        } else {
+            modifier
+        }
         AccountCard(
             state = providerState,
             usageDisplayMode = usageDisplayMode,
@@ -660,27 +1004,39 @@ private fun AccountCards(
             onSignInAgain = { onSignInAgain(providerState.providerId) },
             onRefresh = { onRefresh(providerState) },
             onRequestDelete = { onRequestDelete(providerState.accountKey) },
-            modifier = modifier,
+            reorder = reorder,
+            modifier = cardModifier,
         )
     }
 
-    if (!isDesktop) {
+    // Manual order is a single column so up, down, and drag all move along one axis.
+    if (!isDesktop || manualReorder) {
         Column(verticalArrangement = Arrangement.spacedBy(spacing.md)) {
-            accounts.forEach { providerState ->
-                accountCard(providerState, Modifier.fillMaxWidth())
+            accounts.forEachIndexed { index, providerState ->
+                key(providerState.accountKey) {
+                    cardAt(index, providerState, Modifier.fillMaxWidth())
+                }
             }
         }
         return
     }
 
     Column(verticalArrangement = Arrangement.spacedBy(spacing.md)) {
-        accounts.chunked(2).forEach { rowAccounts ->
+        accounts.chunked(2).forEachIndexed { rowIndex, rowAccounts ->
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(IntrinsicSize.Min),
                 horizontalArrangement = Arrangement.spacedBy(spacing.md),
             ) {
-                rowAccounts.forEach { providerState ->
-                    accountCard(providerState, Modifier.weight(1f))
+                rowAccounts.forEachIndexed { columnIndex, providerState ->
+                    key(providerState.accountKey) {
+                        cardAt(
+                            rowIndex * 2 + columnIndex,
+                            providerState,
+                            Modifier.weight(1f).fillMaxHeight(),
+                        )
+                    }
                 }
                 if (rowAccounts.size == 1) {
                     Box(modifier = Modifier.weight(1f))
@@ -689,6 +1045,14 @@ private fun AccountCards(
         }
     }
 }
+
+private data class AccountReorderControls(
+    val canMoveUp: Boolean,
+    val canMoveDown: Boolean,
+    val handleModifier: Modifier,
+    val onMoveUp: () -> Unit,
+    val onMoveDown: () -> Unit,
+)
 
 @Composable
 private fun AccountCard(
@@ -703,6 +1067,7 @@ private fun AccountCard(
     onSignInAgain: () -> Unit,
     onRefresh: () -> Unit,
     onRequestDelete: () -> Unit,
+    reorder: AccountReorderControls? = null,
     modifier: Modifier = Modifier,
 ) {
     val colors = QdTheme.colors
@@ -767,6 +1132,29 @@ private fun AccountCard(
                             Text("Remove account", color = colors.danger, style = typo.bodyMedium)
                         }
                     }
+                }
+                if (reorder != null) {
+                    QdIconButton(
+                        onClick = reorder.onMoveUp,
+                        enabled = reorder.canMoveUp,
+                        diameter = 28.dp,
+                    ) {
+                        QdChevronUpIcon(
+                            tint = if (reorder.canMoveUp) colors.textSecondary else colors.textTertiary.copy(alpha = 0.35f),
+                            size = 16.dp,
+                        )
+                    }
+                    QdIconButton(
+                        onClick = reorder.onMoveDown,
+                        enabled = reorder.canMoveDown,
+                        diameter = 28.dp,
+                    ) {
+                        QdChevronDownIcon(
+                            tint = if (reorder.canMoveDown) colors.textSecondary else colors.textTertiary.copy(alpha = 0.35f),
+                            size = 16.dp,
+                        )
+                    }
+                    QdReorderHandle(modifier = reorder.handleModifier)
                 }
             }
 
@@ -1408,10 +1796,6 @@ private fun AccountUiState.accountSubtitle(): String {
     return snapshot?.accountEmail?.takeIf { it.isNotBlank() }
         ?: accountKey.accountId.takeUnless { accountKey.isPending || it == "default" }
         ?: "Account email pending"
-}
-
-private fun AccountUiState.accountSortLabel(): String {
-    return accountSubtitle().lowercase()
 }
 
 private fun providerNamesLabel(): String {
