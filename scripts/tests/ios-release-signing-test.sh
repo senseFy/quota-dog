@@ -15,6 +15,12 @@ assert_argument() {
     fail "xcodebuild did not receive $1."
 }
 
+assert_absent() {
+  if grep -Fx -- "$1" "$FIXTURE/xcodebuild-arguments" >/dev/null; then
+    fail "xcodebuild unexpectedly received $1."
+  fi
+}
+
 mkdir -p \
   "$FIXTURE/scripts/lib" \
   "$FIXTURE/iosApp/Configuration" \
@@ -91,10 +97,11 @@ EOF
 
 chmod +x "$FIXTURE/bin/"*
 
+# Exercise the system Bash even when Homebrew Bash is first on PATH.
 PATH="$FIXTURE/bin:$PATH" \
   XCODEBUILD_ARGUMENTS="$FIXTURE/xcodebuild-arguments" \
   XCODEBUILD_OPTIONS="$FIXTURE/export-options.plist" \
-  "$FIXTURE/scripts/release-ios.sh" \
+  /bin/bash "$FIXTURE/scripts/release-ios.sh" \
     --team TEAM123 \
     --bundle-id saien.quotadog \
     --archive-path "$FIXTURE/QuotaDog.xcarchive" \
@@ -106,70 +113,39 @@ PATH="$FIXTURE/bin:$PATH" \
     >/dev/null
 
 assert_argument -exportArchive
-assert_argument -allowProvisioningUpdates
+assert_absent -allowProvisioningUpdates
+assert_absent -authenticationKeyPath
+assert_absent -authenticationKeyID
+assert_absent -authenticationKeyIssuerID
+plutil -extract destination raw -o - "$FIXTURE/export-options.plist" |
+  grep -Fx export >/dev/null || fail "Local IPA export did not use destination=export."
+[[ -f "$FIXTURE/export/QuotaDog.ipa" ]] || fail "IPA was not exported."
+
+rm -f "$FIXTURE/xcodebuild-arguments" "$FIXTURE/export-options.plist"
+PATH="$FIXTURE/bin:$PATH" \
+  XCODEBUILD_ARGUMENTS="$FIXTURE/xcodebuild-arguments" \
+  XCODEBUILD_OPTIONS="$FIXTURE/export-options.plist" \
+  /bin/bash "$FIXTURE/scripts/release-ios.sh" \
+    --team TEAM123 \
+    --bundle-id saien.quotadog \
+    --archive-path "$FIXTURE/QuotaDog.xcarchive" \
+    --export-path "$FIXTURE/upload" \
+    --export-only \
+    --upload \
+    --auth-key-path "$FIXTURE/AuthKey_TEST.p8" \
+    --auth-key-id TESTKEY \
+    --auth-key-issuer-id TESTISSUER \
+    >/dev/null
+
+assert_argument -exportArchive
 assert_argument -authenticationKeyPath
 assert_argument "$FIXTURE/AuthKey_TEST.p8"
 assert_argument -authenticationKeyID
 assert_argument TESTKEY
 assert_argument -authenticationKeyIssuerID
 assert_argument TESTISSUER
+assert_absent -allowProvisioningUpdates
 plutil -extract destination raw -o - "$FIXTURE/export-options.plist" |
-  grep -Fx export >/dev/null || fail "Local IPA export did not use destination=export."
-[[ -f "$FIXTURE/export/QuotaDog.ipa" ]] || fail "IPA was not exported."
-
-REUSE_OUTPUT="$FIXTURE/reuse-output"
-rm -f "$FIXTURE/xcodebuild-arguments"
-PATH="$FIXTURE/bin:$PATH" \
-  QUOTADOG_SOURCE_COMMIT=1234567890abcdef1234567890abcdef12345678 \
-  QUOTADOG_SOURCE_DIRTY=false \
-  XCODEBUILD_ARGUMENTS="$FIXTURE/xcodebuild-arguments" \
-  XCODEBUILD_OPTIONS="$FIXTURE/export-options.plist" \
-  "$FIXTURE/scripts/release-ios.sh" \
-    --team TEAM123 \
-    --bundle-id saien.quotadog \
-    --archive-path "$FIXTURE/QuotaDog.xcarchive" \
-    --archive-only \
-    --reuse-existing \
-    >"$REUSE_OUTPUT"
-grep -F "Reused" "$REUSE_OUTPUT" >/dev/null ||
-  fail "A matching archive was not reported as reused."
-[[ ! -e "$FIXTURE/xcodebuild-arguments" ]] ||
-  fail "Reusing an archive unexpectedly invoked xcodebuild."
-
-MISMATCH_OUTPUT="$FIXTURE/reuse-mismatch-output"
-if PATH="$FIXTURE/bin:$PATH" \
-  QUOTADOG_SOURCE_COMMIT=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
-  QUOTADOG_SOURCE_DIRTY=false \
-  XCODEBUILD_ARGUMENTS="$FIXTURE/xcodebuild-arguments" \
-  XCODEBUILD_OPTIONS="$FIXTURE/export-options.plist" \
-  "$FIXTURE/scripts/release-ios.sh" \
-    --team TEAM123 \
-    --bundle-id saien.quotadog \
-    --archive-path "$FIXTURE/QuotaDog.xcarchive" \
-    --archive-only \
-    --reuse-existing \
-    >"$MISMATCH_OUTPUT" 2>&1; then
-  fail "A source-mismatched archive was reused."
-fi
-grep -F "source commit does not match" "$MISMATCH_OUTPUT" >/dev/null ||
-  fail "A source-mismatched archive did not explain the rejection."
-grep -F "publish-tracks --rebuild" "$MISMATCH_OUTPUT" >/dev/null ||
-  fail "A rejected archive did not explain the safe rebuild escape hatch."
-[[ ! -e "$FIXTURE/xcodebuild-arguments" ]] ||
-  fail "Rejecting an archive unexpectedly invoked xcodebuild."
-
-CONFLICT_OUTPUT="$FIXTURE/reuse-clean-conflict-output"
-if "$FIXTURE/scripts/release-ios.sh" \
-  --team TEAM123 \
-  --bundle-id saien.quotadog \
-  --archive-path "$FIXTURE/QuotaDog.xcarchive" \
-  --archive-only \
-  --clean \
-  --reuse-existing \
-  >"$CONFLICT_OUTPUT" 2>&1; then
-  fail "Conflicting clean and reuse modes were accepted."
-fi
-grep -F "cannot be used together" "$CONFLICT_OUTPUT" >/dev/null ||
-  fail "Conflicting clean and reuse modes did not explain the rejection."
+  grep -Fx upload >/dev/null || fail "TestFlight upload did not use destination=upload."
 
 printf 'iOS release signing contract tests passed.\n'

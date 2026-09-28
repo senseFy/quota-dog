@@ -15,7 +15,6 @@ MAKE_COMMAND="${QUOTADOG_MAKE_COMMAND:-}"
 ASSUME_YES=0
 PREPARE_ONLY=0
 FORCE_PLAIN=0
-REBUILD_IOS=0
 USE_TUI=0
 TUI_ACTIVE=0
 UPLOADS_STARTED=0
@@ -44,7 +43,6 @@ Options:
   --yes           Confirm both uploads without prompting
   --no-tui        Use prefixed line-oriented output
   --prepare-only  Build and verify both artifacts without uploading
-  --rebuild       Replace the current iOS archive instead of reusing it
   --help          Show this help
 
 The command always targets Google Play internal and TestFlight. Full logs are
@@ -62,7 +60,6 @@ while [[ $# -gt 0 ]]; do
     --yes) ASSUME_YES=1; shift ;;
     --no-tui) FORCE_PLAIN=1; shift ;;
     --prepare-only) PREPARE_ONLY=1; shift ;;
-    --rebuild) REBUILD_IOS=1; shift ;;
     --help|-h) usage; exit 0 ;;
     *)
       printf 'Unknown option: %s\n' "$1" >&2
@@ -71,11 +68,6 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
-
-ios_prepare_arguments=(IOS_CLEAN= IOS_REUSE_EXISTING=yes)
-if [[ "$REBUILD_IOS" == 1 ]]; then
-  ios_prepare_arguments=(IOS_CLEAN=yes IOS_REUSE_EXISTING=)
-fi
 
 [[ "$ANDROID_TRACK" == "internal" ]] ||
   die "Combined publishing only supports the Google Play internal track."
@@ -547,11 +539,6 @@ acquire_release_lock
 
 log_event "Release session started for version $PRODUCT_VERSION"
 log_event "Android=$ANDROID_VERSION iOS=$IOS_VERSION source=$SOURCE_REVISION"
-if [[ "$REBUILD_IOS" == 1 ]]; then
-  log_event "iOS archive mode: rebuild"
-else
-  log_event "iOS archive mode: reuse matching archive or build"
-fi
 log_event "Log directory: $LOG_DIR"
 plain_status Release "Version $PRODUCT_VERSION"
 plain_status Release "Android $ANDROID_VERSION · iOS $IOS_VERSION · source $SOURCE_REVISION"
@@ -574,7 +561,7 @@ run_android_step \
 IOS_STATUS="Checking"
 run_ios_step \
   "Checking upload prerequisites" "Ready" ios-upload-check \
-  "${ios_prepare_arguments[@]}" || ios_preflight=$?
+  IOS_CLEAN= || ios_preflight=$?
 
 if [[ "$android_preflight" != 0 || "$ios_preflight" != 0 ]]; then
   OVERALL_STATUS="Preflight failed; no artifacts were built"
@@ -605,8 +592,8 @@ if ! run_android_step \
 fi
 
 if ! run_ios_step \
-  "Archiving or reusing verified app" "Prepared" ios-archive \
-  "${ios_prepare_arguments[@]}"; then
+  "Archiving and verifying app" "Prepared" ios-archive \
+  IOS_CLEAN=; then
   OVERALL_STATUS="iOS preparation failed; no upload was started"
   render_tui
   finish_tui
@@ -665,8 +652,7 @@ run_make_to_log \
 ANDROID_PID="$LAST_STARTED_PID"
 run_make_to_log \
   "$IOS_RESULT" "$IOS_LOG" ios-upload-archive \
-  IOS_CLEAN= \
-  IOS_REUSE_EXISTING=
+  IOS_CLEAN=
 IOS_PID="$LAST_STARTED_PID"
 
 android_result=""

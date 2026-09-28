@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Bump or print QuotaDog version stored in version.properties.
+# Low-level editor for version.properties.
+# Store releases use scripts/bump-version.sh (make bump-version), which bumps
+# the patch version and the shared build number, then commits that change.
 # Env overrides (RELEASE_VERSION / RELEASE_VERSION_CODE) still win in CI builds.
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

@@ -79,25 +79,35 @@ export RELEASE_VERSION=1.2.0       # versionName + Compose Desktop packageVersio
 export RELEASE_VERSION_CODE=42     # Android versionCode (monotonically increasing int)
 ```
 
-Manage the checked-in version file:
+[`version.properties`](version.properties) is the single source for the product
+version and the shared store build. Android `versionCode` and the iOS build
+number are both `VERSION_CODE`, so a release cannot drift across stores.
 
 ```bash
 make version-current
-make version-bump                              # 1.0.0 (12) -> 1.0.1 (13)
-make version-bump ARGS='--set-version 1.2.0'   # also bumps VERSION_CODE unless --set-code is set
-make version-bump ARGS='--bump-code'           # bump VERSION_CODE only
+make bump-version                  # 1.0.7 (19) -> 1.0.8 (20), then commit
+make bump-version COMMIT=no        # same bump, without a commit
+make set-version VERSION=1.2.0     # product version only; build number unchanged
+make bump-build                    # shared store build only, without a commit
 make git-build-info
 ```
 
-Compose Desktop's installer formats reject `MAJOR=0`, so `0.x.y` cannot be used.
+`make bump-version` is the routine store bump. It increments the patch version
+and the shared build number, then records one commit titled
+`Bump version to x.y.z(build)`. `make version-bump` is the same command.
+`COMMIT=no` can be repeated from the current local values. `make set-version`
+changes only the product version and does not commit. Compose Desktop's
+installer formats reject `MAJOR=0`, so `0.x.y` cannot be used.
 
 ### Mobile store publishing
 
-The store release commands mirror the guarded workflow used by Enjoy. Android
-and iOS both use [`version.properties`](version.properties); every promoted
-artifact also embeds the clean Git commit that produced it. Release preparation
-fails for a dirty checkout, a mismatched signature, or inconsistent artifact
-metadata.
+After that version commit, `make publish-tracks` prepares and verifies both
+signed artifacts, asks once, then uploads Android to Google Play `internal` and
+iOS to TestFlight. The terminal shows both platform states. Full logs stay in
+`build/release/test-tracks/`. The command does not bump, commit, push, clean,
+or target Play production. Every promoted artifact embeds the clean Git commit
+that produced it. Preparation fails for a dirty checkout, a mismatched
+signature, or inconsistent artifact metadata.
 
 #### Android / Google Play
 
@@ -134,16 +144,18 @@ make android-upload-play \
 
 #### iOS / App Store Connect
 
-The checked-in Xcode configuration uses Team `45V6QJP3A2`, bundle identifier
-`saien.quotadog`, and the shared product version/build number. Override the
-Make variables when a different signing setup is needed. TestFlight upload uses
-an App Store Connect API key:
+The release defaults are Team `45V6QJP3A2`, bundle identifier `saien.quotadog`,
+the installed App Store profile
+`iOS Team Store Provisioning Profile: saien.quotadog`, and App Store Connect
+app `6804401157`. The archive is signed with that local profile. The API key
+is used only when uploading, and the TestFlight URL is printed at the end.
+Override `IOS_RELEASE_PROFILE` or `IOS_APP_STORE_CONNECT_APP_ID` when a
+different signing setup is needed.
+
+App Store Connect auth uses `APP_STORE_CONNECT_*`, `ASC_*`, or `EXPO_ASC_*`
+variables. These single-platform targets remain available for a retry:
 
 ```bash
-export APP_STORE_CONNECT_API_KEY_PATH=/absolute/path/to/AuthKey_ABC123.p8
-export APP_STORE_CONNECT_API_KEY_ID=ABC123
-export APP_STORE_CONNECT_API_ISSUER_ID=00000000-0000-0000-0000-000000000000
-
 make ios-release-check         # signing/archive preflight
 make ios-upload-check          # signing + App Store Connect preflight
 make ios-archive               # create and verify an xcarchive
@@ -152,33 +164,21 @@ make ios-upload-testflight     # archive and upload a new build
 make ios-upload-archive        # upload the already verified archive
 ```
 
-For manual signing, also set `IOS_RELEASE_PROFILE` to the installed App Store
-provisioning profile name. `IOS_APP_STORE_CONNECT_APP_ID` is optional and only
-used to print the direct TestFlight URL.
-
 #### Combined test-track release
 
-`publish-tracks` prepares and verifies both artifacts before asking once for
-confirmation, then uploads Android to Play `internal` and iOS to TestFlight in
-parallel. It never targets Play production.
-
 ```bash
+make publish-tracks
 make publish-tracks MOBILE_RELEASE_ARGS="--prepare-only"  # build/verify only
-make publish-tracks                                        # interactive upload
 make publish-tracks MOBILE_RELEASE_ARGS="--yes --no-tui"  # explicit non-TTY confirmation
-make publish-tracks MOBILE_RELEASE_ARGS="--rebuild"       # replace the current iOS archive
 ```
 
-The command is safe to retry before upload. If the iOS archive for the current
-version and build already exists, it is reused only after its signature, bundle
-identifier, team, version, build number, clean-source marker, and source commit
-all match the release checkout. A mismatch stops the release without deleting
-the archive. Use `--rebuild` only when the local archive must be replaced and
-you have verified that the build did not already reach App Store Connect.
-
-Logs are kept under `build/release/test-tracks/`. If only one store accepts an
-upload, the command exits unsuccessfully and prints the safe single-platform
-recovery command. Run `make test-mobile-release` to verify the release contracts.
+If an archive for the current version and build already exists, preparation
+stops and leaves it in place. Bump the version, or upload that archive with
+`make ios-upload-archive`. Replace the local archive with `make ios-archive
+IOS_CLEAN=yes` only after confirming that build did not reach App Store
+Connect. If only one store accepts an upload, the command exits unsuccessfully,
+keeps both logs and artifacts, and prints that platform's recovery command.
+Run `make test-mobile-release` to verify the release contracts.
 
 ### Dropbox Sync Setup
 

@@ -19,19 +19,22 @@ ANDROID_PLAY_USER_FRACTION ?=
 ANDROID_PLAY_CONFIRM_PRODUCTION ?=
 ANDROID_PLAY_DRY_RUN ?=
 UPLOAD ?=
+VERSION ?=
+COMMIT ?= yes
 
 IOS_RELEASE_SCRIPT ?= ./scripts/release-ios.sh
 IOS_VERSION_SCRIPT ?= ./scripts/ios-version.sh
+BUMP_VERSION_SCRIPT ?= ./scripts/bump-version.sh
+PRODUCT_VERSION_SCRIPT ?= ./scripts/lib/product-version.sh
 IOS_BUNDLE_ID ?= saien.quotadog
 IOS_TEAM_ID ?= $(shell sed -n 's/^TEAM_ID=//p' iosApp/Configuration/Config.xcconfig)
-IOS_RELEASE_PROFILE ?=
+IOS_RELEASE_PROFILE ?= iOS Team Store Provisioning Profile: saien.quotadog
 IOS_SIGNING_CERTIFICATE ?= Apple Distribution
-IOS_APP_STORE_CONNECT_APP_ID ?=
+IOS_APP_STORE_CONNECT_APP_ID ?= 6804401157
 IOS_ARCHIVE_PATH ?=
 IOS_EXPORT_PATH ?=
 IOS_BUILD_NUMBER ?=
 IOS_CLEAN ?=
-IOS_REUSE_EXISTING ?=
 IOS_VERBOSE ?=
 APP_STORE_CONNECT_API_KEY_PATH ?=
 APP_STORE_CONNECT_API_KEY_ID ?=
@@ -61,7 +64,6 @@ IOS_RELEASE_ARGS += $(if $(IOS_ASC_KEY_PATH),--auth-key-path "$(abspath $(IOS_AS
 IOS_RELEASE_ARGS += $(if $(IOS_ASC_KEY_ID),--auth-key-id "$(IOS_ASC_KEY_ID)",)
 IOS_RELEASE_ARGS += $(if $(IOS_ASC_ISSUER_ID),--auth-key-issuer-id "$(IOS_ASC_ISSUER_ID)",)
 IOS_RELEASE_ARGS += $(if $(filter yes y true 1,$(IOS_CLEAN)),--clean,)
-IOS_RELEASE_ARGS += $(if $(filter yes y true 1,$(IOS_REUSE_EXISTING)),--reuse-existing,)
 IOS_RELEASE_ARGS += $(if $(filter yes y true 1,$(IOS_VERBOSE)),--verbose,)
 
 ANDROID_UPLOAD_ENABLED := $(if $(filter yes y true 1,$(UPLOAD)),yes,)
@@ -78,7 +80,7 @@ ANDROID_RELEASE_ENVIRONMENT = \
 	ANDROID_PLAY_CONFIRM_PRODUCTION="$(ANDROID_PLAY_CONFIRM_PRODUCTION)" \
 	ANDROID_PLAY_DRY_RUN="$(ANDROID_PLAY_DRY_RUN)"
 
-.PHONY: help tasks clean test test-shared test-desktop run desktop-run desktop-package android-debug android-install release-apk release-aab release-app release-dmg release-dmg-local release-dmg-unsigned version-current version-bump git-build-info build-identity android-version android-release-check android-upload-check android-release-play android-upload-play android-play-dry-run ios-version ios-release-check ios-upload-check ios-archive ios-release ios-upload-testflight ios-upload-archive ios-export publish-tracks test-mobile-release
+.PHONY: help tasks clean test test-shared test-desktop run desktop-run desktop-package android-debug android-install release-apk release-aab release-app release-dmg release-dmg-local release-dmg-unsigned version-current version-bump bump-version set-version bump-build git-build-info build-identity android-version android-release-check android-upload-check android-release-play android-upload-play android-play-dry-run ios-version ios-release-check ios-upload-check ios-archive ios-release ios-upload-testflight ios-upload-archive ios-export publish-tracks test-mobile-release
 
 help: ## Show this help.
 	@printf "QuotaDog commands:\n\n"
@@ -133,8 +135,24 @@ release-dmg-unsigned: ## Build an unsigned macOS DMG for local testing.
 version-current: ## Print VERSION_NAME and VERSION_CODE from version.properties.
 	@./scripts/bump_version.sh --print-current
 
-version-bump: ## Bump patch + code; pass ARGS='--bump-code' for code only.
-	@./scripts/bump_version.sh $(ARGS)
+bump-version: ## Bump the patch version and shared store build; COMMIT=no skips the commit.
+ifeq ($(COMMIT),yes)
+	@$(BUMP_VERSION_SCRIPT) "$(CURDIR)"
+else ifeq ($(COMMIT),no)
+	@$(BUMP_VERSION_SCRIPT) --no-commit "$(CURDIR)"
+else
+	@echo "COMMIT must be yes or no." >&2; exit 2
+endif
+
+set-version: ## Set the product version (VERSION=x.y.z) without changing the store build.
+	@test -n "$(VERSION)" || { echo "VERSION is required. Example: make set-version VERSION=1.2.0" >&2; exit 1; }
+	@printf '%s\n' "$(VERSION)" | grep -Eq '^[1-9][0-9]*\.[0-9]+\.[0-9]+$$' || { echo "VERSION must be x.y.z with major >= 1." >&2; exit 1; }
+	@$(PRODUCT_VERSION_SCRIPT) set "$(VERSION)" "$(CURDIR)"
+
+bump-build: ## Increment the shared store build number without committing.
+	@$(ANDROID_VERSION_SCRIPT) bump-build
+
+version-bump: bump-version ## Alias of bump-version.
 
 git-build-info: ## Print git build metadata used in release artifact names.
 	@./scripts/git_build_info.sh .

@@ -38,7 +38,7 @@ case "${1:-show}" in
     read_build
     ;;
   bump-build)
-    "$SCRIPT_DIR/bump_version.sh" --bump-code
+    "$SCRIPT_DIR/bump_version.sh" --no-commit-prompt --bump-code
     ;;
   *)
     printf 'Usage: %s show | show-build | bump-build\n' "$0" >&2
