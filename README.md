@@ -145,12 +145,13 @@ make android-upload-play \
 #### iOS / App Store Connect
 
 The release defaults are Team `45V6QJP3A2`, bundle identifier `saien.quotadog`,
-the installed App Store profile
-`iOS Team Store Provisioning Profile: saien.quotadog`, and App Store Connect
-app `6804401157`. The archive is signed with that local profile. The API key
-is used only when uploading, and the TestFlight URL is printed at the end.
-Override `IOS_RELEASE_PROFILE` or `IOS_APP_STORE_CONNECT_APP_ID` when a
-different signing setup is needed.
+automatic signing, and App Store Connect app `6804401157`. Xcode selects the
+locally installed profiles for archiving and export. Leave `IOS_RELEASE_PROFILE`
+empty for Xcode-managed profiles, including
+`iOS Team Store Provisioning Profile: saien.quotadog`. Set `IOS_RELEASE_PROFILE`
+only to a manually managed App Store profile to use manual signing.
+The API key is used only when uploading, and the TestFlight URL is printed at
+the end. Override `IOS_APP_STORE_CONNECT_APP_ID` for a different app.
 
 App Store Connect auth uses `APP_STORE_CONNECT_*`, `ASC_*`, or `EXPO_ASC_*`
 variables. These single-platform targets remain available for a retry:

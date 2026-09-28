@@ -28,7 +28,8 @@ BUMP_VERSION_SCRIPT ?= ./scripts/bump-version.sh
 PRODUCT_VERSION_SCRIPT ?= ./scripts/lib/product-version.sh
 IOS_BUNDLE_ID ?= saien.quotadog
 IOS_TEAM_ID ?= $(shell sed -n 's/^TEAM_ID=//p' iosApp/Configuration/Config.xcconfig)
-IOS_RELEASE_PROFILE ?= iOS Team Store Provisioning Profile: saien.quotadog
+# A named profile selects manual signing; leave empty for Xcode-managed profiles.
+IOS_RELEASE_PROFILE ?=
 IOS_SIGNING_CERTIFICATE ?= Apple Distribution
 IOS_APP_STORE_CONNECT_APP_ID ?= 6804401157
 IOS_ARCHIVE_PATH ?=

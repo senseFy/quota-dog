@@ -431,7 +431,7 @@ make --no-print-directory -C "$ROOT_DIR" -n ios-archive \
 assert_not_contains "--reuse-existing" "$ios_make_dry_run_output"
 assert_contains "--app-store-connect-app-id" "$ios_make_dry_run_output"
 assert_contains "6804401157" "$ios_make_dry_run_output"
-assert_contains "iOS Team Store Provisioning Profile: saien.quotadog" "$ios_make_dry_run_output"
-assert_contains "--profile" "$ios_make_dry_run_output"
+assert_contains '--profile ""' "$ios_make_dry_run_output"
+assert_not_contains "iOS Team Store Provisioning Profile: saien.quotadog" "$ios_make_dry_run_output"
 
 echo "QuotaDog publish-tracks contract tests passed."
