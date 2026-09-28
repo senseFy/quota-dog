@@ -17,6 +17,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import saien.quotadog.app.theme.QdTheme
@@ -30,10 +32,10 @@ fun QdGlassIconButton(
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
     diameter: Dp = 34.dp,
+    shape: Shape = QdTheme.shapes.sm,
     content: @Composable () -> Unit,
 ) {
     val colors = QdTheme.colors
-    val shape = QdTheme.shapes.sm
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
     val hovered by interaction.collectIsHoveredAsState()
@@ -54,6 +56,7 @@ fun QdGlassIconButton(
             .border(1.dp, colors.border, shape)
             .clickable(
                 enabled = enabled,
+                role = Role.Button,
                 interactionSource = interaction,
                 indication = null,
                 onClick = onClick,

@@ -55,6 +55,8 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -629,6 +631,7 @@ private fun DashboardHeader(
     val colors = QdTheme.colors
     val typo = QdTheme.typography
     val spacing = QdTheme.spacing
+    val refreshAllLabel = if (refreshAllBusy) "Refresh remaining" else "Refresh all"
 
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -659,7 +662,7 @@ private fun DashboardHeader(
 
         if (isDesktop) {
             QdButton(
-                text = if (refreshAllBusy) "Refresh remaining" else "Refresh all",
+                text = refreshAllLabel,
                 onClick = onRefreshAll,
                 variant = QdButtonVariant.Secondary,
                 size = QdButtonSize.Small,
@@ -681,7 +684,27 @@ private fun DashboardHeader(
                 onSelectReversed = onSelectSortReversed,
             )
         }
-        QdGlassIconButton(onClick = onOpenSettings, diameter = 32.dp) {
+        if (!isDesktop && (refreshAllEnabled || refreshAllBusy)) {
+            QdGlassIconButton(
+                onClick = onRefreshAll,
+                modifier = Modifier.semantics { contentDescription = refreshAllLabel },
+                enabled = refreshAllEnabled,
+                diameter = 32.dp,
+                shape = QdTheme.shapes.pill,
+            ) {
+                val rotation = rememberRefreshRotation(active = refreshAllBusy)
+                QdRefreshIcon(
+                    modifier = Modifier.rotate(rotation),
+                    tint = colors.textSecondary,
+                    size = 18.dp,
+                )
+            }
+        }
+        QdGlassIconButton(
+            onClick = onOpenSettings,
+            diameter = 32.dp,
+            shape = QdTheme.shapes.pill,
+        ) {
             QdSettingsGearIcon(tint = colors.textSecondary, size = 18.dp)
         }
     }
