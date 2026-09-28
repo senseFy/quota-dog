@@ -16,10 +16,12 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.material.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -38,6 +40,7 @@ import kotlin.math.roundToInt
 
 /**
  * Rectangular segmented selector (tab-like). Animates the active segment background.
+ * Enable [autoScrollToSelected] only inside a scrollable selector, not settings forms.
  */
 @Composable
 fun <T> QdSegmentedControl(
@@ -46,6 +49,7 @@ fun <T> QdSegmentedControl(
     onSelect: (T) -> Unit,
     modifier: Modifier = Modifier,
     fillWidth: Boolean = true,
+    autoScrollToSelected: Boolean = false,
 ) {
     val colors = QdTheme.colors
     val typo = QdTheme.typography
@@ -59,6 +63,12 @@ fun <T> QdSegmentedControl(
     var indicatorInitialized by remember { mutableStateOf(false) }
     val selectedBounds = segmentBounds[selectedIndex]
     val shape = QdTheme.shapes.sm
+    val bringSelectedIntoView = remember { BringIntoViewRequester() }
+
+    LaunchedEffect(autoScrollToSelected, selectedIndex, selectedBounds) {
+        if (!autoScrollToSelected || selectedIndex < 0 || selectedBounds == null) return@LaunchedEffect
+        bringSelectedIntoView.bringIntoView()
+    }
 
     LaunchedEffect(selectedBounds) {
         val bounds = selectedBounds ?: return@LaunchedEffect
@@ -111,6 +121,13 @@ fun <T> QdSegmentedControl(
                 Box(
                     modifier = Modifier
                         .then(if (fillWidth) Modifier.weight(1f) else Modifier)
+                        .then(
+                            if (autoScrollToSelected && active) {
+                                Modifier.bringIntoViewRequester(bringSelectedIntoView)
+                            } else {
+                                Modifier
+                            },
+                        )
                         .heightIn(min = 28.dp)
                         .onGloballyPositioned { coordinates ->
                             val position = coordinates.positionInParent()

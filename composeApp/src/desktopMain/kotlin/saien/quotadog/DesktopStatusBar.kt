@@ -58,6 +58,7 @@ internal data class DesktopStatusBarProviderFilter(
 internal data class DesktopStatusBarAccount(
     val id: String,
     val title: String,
+    val planLabel: String = "",
     val status: String,
     val emptyLabel: String,
     val provider: String,
@@ -386,6 +387,8 @@ private fun DesktopStatusBarState.toJson(): String {
             appendJsonField("id", account.id)
             append(',')
             appendJsonField("title", account.title)
+            append(',')
+            appendJsonField("planLabel", account.planLabel)
             append(',')
             appendJsonField("status", account.status)
             append(',')

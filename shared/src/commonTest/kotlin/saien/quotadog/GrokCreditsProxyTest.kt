@@ -33,6 +33,40 @@ class GrokCreditsProxyTest {
     }
 
     @Test
+    fun readsTierNestedOnTheCreditsConfig() {
+        val snapshot = GrokCreditsProxyFetcher.parseCreditsJson(
+            """
+            {
+              "config": {
+                "creditUsagePercent": 12,
+                "subscriptionTier": "SuperGrok"
+              }
+            }
+            """.trimIndent(),
+            now = now,
+        )
+        assertEquals("SuperGrok", snapshot.subscriptionTier)
+    }
+
+    @Test
+    fun readsPlanFromSettingsPayload() {
+        assertEquals(
+            "SuperGrok Heavy",
+            GrokCreditsProxyFetcher.parseSettingsJson(
+                """{"subscription_tier_display":"SuperGrok Heavy"}""",
+            ),
+        )
+        assertEquals(
+            "SuperGrok",
+            GrokCreditsProxyFetcher.parseSettingsJson(
+                """{"settings":{"subscriptionTierDisplay":"supergrok"}}""",
+            ),
+        )
+        assertNull(GrokCreditsProxyFetcher.parseSettingsJson("{}"))
+        assertNull(GrokCreditsProxyFetcher.parseSettingsJson("not json"))
+    }
+
+    @Test
     fun fallsBackToOnDemandRatio() {
         val snapshot = GrokCreditsProxyFetcher.parseCreditsJson(
             """

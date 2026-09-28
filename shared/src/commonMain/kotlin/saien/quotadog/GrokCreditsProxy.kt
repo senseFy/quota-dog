@@ -10,9 +10,14 @@ import kotlinx.datetime.Instant
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
 
 internal object GrokCreditsProxyFetcher {
     const val ENDPOINT = "https://cli-chat-proxy.grok.com/v1/billing?format=credits"
+    const val SETTINGS_ENDPOINT = "https://cli-chat-proxy.grok.com/v1/settings"
 
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -22,14 +27,7 @@ internal object GrokCreditsProxyFetcher {
         userId: String? = null,
     ): GrokBillingSnapshot {
         val response = httpClient.get(ENDPOINT) {
-            header("Authorization", "Bearer $accessToken")
-            header("X-XAI-Token-Auth", "xai-grok-cli")
-            header("Accept", "application/json")
-            header("User-Agent", "QuotaDog/1.0 (Kotlin)")
-            userId
-                ?.trim()
-                ?.takeIf { it.isNotEmpty() && !it.contains('@') }
-                ?.let { header("x-userid", it) }
+            applyGrokProxyHeaders(accessToken, userId)
         }
         return parseResponse(
             statusCode = response.status.value,
@@ -59,6 +57,58 @@ internal object GrokCreditsProxyFetcher {
         return parseCreditsJson(body, now)
     }
 
+    /**
+     * Plan names are not on the credits payload. `/v1/settings` returns
+     * `subscription_tier_display` (for example "SuperGrok" or "SuperGrok Heavy").
+     * A failure here leaves usage intact and simply omits the label.
+     */
+    suspend fun fetchSubscriptionTier(
+        httpClient: HttpClient,
+        accessToken: String,
+        userId: String? = null,
+    ): String? {
+        val response = runCatching {
+            httpClient.get(SETTINGS_ENDPOINT) {
+                applyGrokProxyHeaders(accessToken, userId)
+            }
+        }.getOrNull() ?: return null
+        if (response.status.value !in 200..299) return null
+        val body = runCatching { response.bodyAsText() }.getOrNull() ?: return null
+        return parseSettingsJson(body)
+    }
+
+    internal fun parseSettingsJson(body: String): String? {
+        val root = runCatching { json.parseToJsonElement(body).jsonObject }.getOrNull() ?: return null
+        val raw = root.stringField("subscription_tier_display")
+            ?: root.stringField("subscriptionTierDisplay")
+            ?: root.stringField("subscription_tier")
+            ?: root.stringField("subscriptionTier")
+            ?: (root["settings"] as? JsonObject)?.let { settings ->
+                settings.stringField("subscription_tier_display")
+                    ?: settings.stringField("subscriptionTierDisplay")
+            }
+        return formatGrokPlanLabel(raw)
+    }
+
+    private fun io.ktor.client.request.HttpRequestBuilder.applyGrokProxyHeaders(
+        accessToken: String,
+        userId: String?,
+    ) {
+        header("Authorization", "Bearer $accessToken")
+        header("X-XAI-Token-Auth", "xai-grok-cli")
+        header("Accept", "application/json")
+        header("User-Agent", "QuotaDog/1.0 (Kotlin)")
+        userId
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() && !it.contains('@') }
+            ?.let { header("x-userid", it) }
+    }
+
+    private fun JsonObject.stringField(name: String): String? {
+        val primitive = this[name] as? JsonPrimitive ?: return null
+        return primitive.contentOrNull?.trim()?.takeIf { it.isNotEmpty() }
+    }
+
     internal fun parseCreditsJson(body: String, now: Instant = Clock.System.now()): GrokBillingSnapshot {
         val response = runCatching {
             json.decodeFromString(GrokCreditsResponse.serializer(), body)
@@ -81,7 +131,10 @@ internal object GrokCreditsProxyFetcher {
         }
 
         val usedPercent = percent ?: 0.0
-        val subscriptionTier = response.subscriptionTier
+        val subscriptionTier = config.subscriptionTier
+            ?: config.subscriptionTierDisplay
+            ?: config.subscriptionTierSnake
+            ?: response.subscriptionTier
             ?: response.subscriptionTierDisplay
             ?: response.subscriptionTierSnake
 
@@ -118,6 +171,9 @@ internal object GrokCreditsProxyFetcher {
         val billingPeriodEnd: String? = null,
         val onDemandCap: GrokCentAmount? = null,
         val onDemandUsed: GrokCentAmount? = null,
+        val subscriptionTier: String? = null,
+        @SerialName("subscription_tier") val subscriptionTierSnake: String? = null,
+        @SerialName("subscription_tier_display") val subscriptionTierDisplay: String? = null,
     )
 
     @Serializable

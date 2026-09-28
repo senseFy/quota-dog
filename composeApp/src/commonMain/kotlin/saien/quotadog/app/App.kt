@@ -10,6 +10,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.interaction.collectIsPressedAsState
@@ -99,6 +100,7 @@ import saien.quotadog.app.components.QdGlassIconButton
 import saien.quotadog.app.components.QdIconButton
 import saien.quotadog.app.components.QdMinusIcon
 import saien.quotadog.app.components.QdMoreIcon
+import saien.quotadog.app.components.QdPlanLabel
 import saien.quotadog.app.components.QdPlusIcon
 import saien.quotadog.app.components.QdProgressBar
 import saien.quotadog.app.components.QdProviderAvatar
@@ -118,6 +120,7 @@ import saien.quotadog.availableProviders
 import saien.quotadog.canonicalManualOrder
 import saien.quotadog.cliImportAvailable
 import saien.quotadog.codexResetSummary
+import saien.quotadog.displayPlanLabel
 import saien.quotadog.droidAuthFileHint
 import saien.quotadog.droidCliImportAvailable
 import saien.quotadog.expiryLabel
@@ -292,7 +295,7 @@ private fun QuotaDogScreen(
             .background(colors.background),
     ) {
         val isDesktop = maxWidth >= 900.dp
-        val activeProvider = selectedProvider?.takeIf { isDesktop && it in availableProviders }
+        val activeProvider = selectedProvider?.takeIf { it in availableProviders }
         val contentMaxWidth = if (isDesktop) 1080.dp else maxWidth
         val horizontalPadding = if (isDesktop) spacing.xxl else spacing.lg
         val topPadding = safeTop + if (isDesktop) spacing.xl else spacing.lg
@@ -325,14 +328,12 @@ private fun QuotaDogScreen(
             if (accounts.isEmpty()) {
                 AccountsEmptyState(isDesktop = isDesktop)
             } else {
-                if (isDesktop) {
-                    DesktopProviderSwitcher(
-                        accounts = accounts,
-                        providers = availableProviders,
-                        selected = activeProvider,
-                        onSelect = { selectedProvider = it },
-                    )
-                }
+                    ProviderSwitcher(
+                    accounts = accounts,
+                    providers = availableProviders,
+                    selected = activeProvider,
+                    onSelect = { selectedProvider = it },
+                )
                 if (manualReorderEditing) {
                     ManualReorderBar(
                         onDone = {
@@ -347,7 +348,7 @@ private fun QuotaDogScreen(
                 val moveVisibleAccount = { key: AccountKey, delta: Int, pushSync: Boolean ->
                     val pool = store.state.value.accounts.values.filter { it.shouldShowAccount() }
                     val active = selectedProvider?.takeIf { chosen ->
-                        isDesktop && pool.any { it.providerId == chosen }
+                        pool.any { it.providerId == chosen }
                     }
                     val updated = reorderDisplayedManualOrder(
                         accounts = pool,
@@ -922,7 +923,7 @@ private fun AccountsEmptyState(isDesktop: Boolean) {
 }
 
 @Composable
-private fun DesktopProviderSwitcher(
+private fun ProviderSwitcher(
     accounts: List<AccountUiState>,
     providers: List<ProviderId>,
     selected: ProviderId?,
@@ -934,12 +935,19 @@ private fun DesktopProviderSwitcher(
                 val accountCount = accounts.count { it.providerId == provider }
                 "${provider.displayName} ($accountCount)" to provider
             }
-    QdSegmentedControl(
-        options = options,
-        selected = selected,
-        onSelect = onSelect,
-        fillWidth = false,
-    )
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState()),
+    ) {
+        QdSegmentedControl(
+            options = options,
+            selected = selected,
+            onSelect = onSelect,
+            fillWidth = false,
+            autoScrollToSelected = true,
+        )
+    }
 }
 
 private fun AccountSortMode.shortLabel(): String = when (this) {
@@ -1114,12 +1122,22 @@ private fun AccountCard(
                     modifier = Modifier.weight(1f),
                     verticalArrangement = Arrangement.spacedBy(1.dp),
                 ) {
-                    Text(
-                        state.providerId.displayName,
-                        style = typo.caption,
-                        color = colors.textTertiary,
-                        maxLines = 1,
-                    )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(spacing.xs),
+                    ) {
+                        Text(
+                            state.providerId.displayName,
+                            style = typo.caption,
+                            color = colors.textTertiary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false),
+                        )
+                        state.snapshot?.displayPlanLabel()?.let { plan ->
+                            QdPlanLabel(plan)
+                        }
+                    }
                     AccountEmailTitle(state.accountSubtitle(), emailPrivacyMode)
                 }
 

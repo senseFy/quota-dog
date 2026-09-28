@@ -136,6 +136,7 @@ data class ProviderUsageSnapshot(
     val stale: Boolean = false,
     val accountEmail: String? = null,
     val message: String? = null,
+    val planLabel: String? = null,
     val resetCreditsAvailable: Int? = null,
     val resetCreditsApplicable: Int? = null,
     val resetCredits: List<CodexResetCredit> = emptyList(),
@@ -749,7 +750,7 @@ class QuotaDogClient(
             windows = parsed.windows,
             collectedAt = Clock.System.now(),
             accountEmail = token.email,
-            message = parsed.planType?.let { "Plan: $it" },
+            planLabel = formatCodexPlanLabel(parsed.planType),
             resetCreditsAvailable = merged.availableCount,
             resetCreditsApplicable = merged.applicableCount,
             resetCredits = merged.credits,
@@ -766,6 +767,9 @@ class QuotaDogClient(
 
     private suspend fun fetchGrokUsage(token: OAuthTokenBundle): ProviderUsageSnapshot {
         val billing = fetchGrokBillingSnapshot(token)
+        val tier = billing.subscriptionTier ?: runCatching {
+            GrokCreditsProxyFetcher.fetchSubscriptionTier(httpClient, token.accessToken, token.accountId)
+        }.getOrNull()
         val label = grokCreditsWindowLabel(billing.resetsAt, periodType = billing.periodType)
         val durationSeconds = inferWindowDurationSeconds("credits", label)
         return ProviderUsageSnapshot(
@@ -783,11 +787,8 @@ class QuotaDogClient(
             ),
             collectedAt = Clock.System.now(),
             accountEmail = token.email,
-            message = buildString {
-                billing.subscriptionTier?.let { append("Plan: $it") }
-                if (isNotEmpty()) append(" · ")
-                append("Source: xAI billing")
-            },
+            message = "Source: xAI billing",
+            planLabel = formatGrokPlanLabel(tier),
         )
     }
 
@@ -812,7 +813,8 @@ class QuotaDogClient(
 
     private suspend fun fetchCursorUsage(token: OAuthTokenBundle): ProviderUsageSnapshot {
         val usage = CursorUsageFetcher.fetch(httpClient, token.accessToken)
-        val planLabel = formatCursorPlanLabel(usage.membershipType ?: token.accountId)
+        val rawPlan = usage.membershipType?.trim()?.takeIf { it.isNotEmpty() }
+            ?: token.accountId?.takeIf { it.looksLikePlanCode() }
         val email = token.email
             ?: runCatching { CursorUsageFetcher.fetchUserEmail(httpClient, token.accessToken) }.getOrNull()
         return ProviderUsageSnapshot(
@@ -822,14 +824,13 @@ class QuotaDogClient(
             collectedAt = Clock.System.now(),
             accountEmail = email,
             message = buildString {
-                if (planLabel != null) append("Plan: $planLabel")
                 formatCursorSpend(usage.includedSpendCents, usage.includedLimitCents)?.let { spend ->
-                    if (isNotEmpty()) append(" · ")
                     append(spend)
+                    append(" · ")
                 }
-                if (isNotEmpty()) append(" · ")
                 append("Source: Cursor (${cursorAuthFileHint()})")
             },
+            planLabel = formatCursorPlanLabel(rawPlan),
         )
     }
 
@@ -843,11 +844,8 @@ class QuotaDogClient(
             windows = usage.windows,
             collectedAt = Clock.System.now(),
             accountEmail = email,
-            message = buildString {
-                usage.planLabel?.let { append("Plan: $it") }
-                if (isNotEmpty()) append(" · ")
-                append("Source: Antigravity CLI (${antigravityAuthHint()})")
-            },
+            message = "Source: Antigravity CLI (${antigravityAuthHint()})",
+            planLabel = formatSubscriptionPlanLabel(usage.planLabel),
         )
     }
 
@@ -860,14 +858,13 @@ class QuotaDogClient(
             collectedAt = Clock.System.now(),
             accountEmail = usage.email ?: token.email,
             message = buildString {
-                usage.planName?.let { append("Plan: $it") }
                 usage.overageBalanceDollars?.let { dollars ->
-                    if (isNotEmpty()) append(" · ")
                     append("Extra balance: ${formatDevinDollars(dollars)}")
+                    append(" · ")
                 }
-                if (isNotEmpty()) append(" · ")
                 append("Source: Devin CLI (${devinAuthFileHint()})")
             },
+            planLabel = formatSubscriptionPlanLabel(usage.planName),
         )
     }
 
@@ -880,14 +877,13 @@ class QuotaDogClient(
             collectedAt = Clock.System.now(),
             accountEmail = usage.email ?: token.email,
             message = buildString {
-                usage.planLabel?.let { append("Plan: $it") }
                 usage.extraUsageBalanceCents?.takeIf { it > 0 }?.let { cents ->
-                    if (isNotEmpty()) append(" · ")
                     append("Extra usage balance: ${formatDroidCents(cents)}")
+                    append(" · ")
                 }
-                if (isNotEmpty()) append(" · ")
                 append("Source: droid CLI (${droidAuthFileHint()})")
             },
+            planLabel = formatDroidPlanLabel(usage.planLabel),
         )
     }
 
@@ -1776,16 +1772,6 @@ private fun inferWindowDurationSeconds(id: String, label: String): Long? {
             else -> null
         }
     }
-}
-
-private fun formatCursorPlanLabel(raw: String?): String? {
-    val value = raw?.trim()?.takeIf { it.isNotEmpty() } ?: return null
-    return value
-        .split('_', '-', ' ')
-        .filter { it.isNotBlank() }
-        .joinToString(" ") { part ->
-            part.lowercase().replaceFirstChar { it.titlecase() }
-        }
 }
 
 private fun formatCursorSpend(usedCents: Int?, limitCents: Int?): String? {

@@ -1371,14 +1371,60 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
     BOOL refreshable = [self boolIn:account key:@"refreshable"];
     CGFloat titleX = QDCardPad + QDAvatarSize + 8.0;
     CGFloat trailing = refreshable ? (QDAccountRefreshSize + QDAccountRefreshGap) : 0.0;
-    CGFloat titleW = MAX(40.0, width - QDCardPad - trailing - titleX);
-
-    NSTextField *title = [self label:[self stringIn:account key:@"title" fallback:@"Account"]
+    CGFloat rowWidth = MAX(40.0, width - QDCardPad - trailing - titleX);
+    NSString *planLabel = [self stringIn:account key:@"planLabel" fallback:@""];
+    CGFloat badgeGap = 6.0;
+    CGFloat badgeHeight = 16.0;
+    CGFloat badgePadX = 8.0;
+    // Match QdPlanLabel's cap while preserving room for the account title.
+    CGFloat badgeMaxWidth = MIN(148.0, MAX(0.0, rowWidth - 40.0 - badgeGap));
+    NSTextField *badgeText = nil;
+    CGFloat badgeWidth = 0.0;
+    if (planLabel.length > 0 && badgeMaxWidth > badgePadX * 2.0) {
+        // sizeToFit includes the text field's own insets. Measuring the string
+        // alone leaves the field narrower than the glyphs, so AppKit draws "…".
+        badgeText = [self label:planLabel
+                       fontSize:10.0
+                         weight:NSFontWeightSemibold
+                          color:palette.primary];
+        badgeText.translatesAutoresizingMaskIntoConstraints = YES;
+        badgeText.lineBreakMode = NSLineBreakByTruncatingTail;
+        badgeText.alignment = NSTextAlignmentCenter;
+        badgeText.toolTip = planLabel;
+        [badgeText sizeToFit];
+        badgeWidth = MIN(ceil(NSWidth(badgeText.frame)) + badgePadX * 2.0, badgeMaxWidth);
+        CGFloat textHeight = ceil(NSHeight(badgeText.frame));
+        badgeText.frame = NSMakeRect(
+            badgePadX,
+            floor((badgeHeight - textHeight) / 2.0),
+            badgeWidth - badgePadX * 2.0,
+            textHeight);
+    }
+    CGFloat badgeReserve = badgeWidth > 0.0 ? badgeWidth + badgeGap : 0.0;
+    NSString *titleText = [self stringIn:account key:@"title" fallback:@"Account"];
+    NSTextField *title = [self label:titleText
                             fontSize:14.0
                               weight:NSFontWeightSemibold
                                color:palette.textPrimary];
-    title.frame = NSMakeRect(titleX, y, titleW, 16);
+    title.translatesAutoresizingMaskIntoConstraints = YES;
+    [title sizeToFit];
+    CGFloat titleNatural = ceil(NSWidth(title.frame));
+    CGFloat titleLimit = MAX(40.0, rowWidth - badgeReserve);
+    CGFloat titleW = MIN(titleNatural, titleLimit);
+    CGFloat titleH = 16.0;
+    title.frame = NSMakeRect(titleX, y, titleW, titleH);
     [card addSubview:title];
+
+    if (badgeText != nil) {
+        // The title field is taller than its glyphs, so a shared top edge sits
+        // the capsule above the email. One point down lands on the cap line.
+        CGFloat badgeY = y + 1.0;
+        QDFillView *badge = [[QDFillView alloc] initWithFrame:NSMakeRect(titleX + titleW + badgeGap, badgeY, badgeWidth, badgeHeight)];
+        badge.fillColor = [palette.primary colorWithAlphaComponent:0.16];
+        badge.cornerRadius = badgeHeight / 2.0;
+        [badge addSubview:badgeText];
+        [card addSubview:badge];
+    }
 
     NSString *statusText = [self stringIn:account key:@"status" fallback:@""];
     if (statusText.length > 0) {
@@ -1386,7 +1432,7 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
                                  fontSize:11.0
                                    weight:NSFontWeightRegular
                                     color:busy ? palette.textSecondary : palette.textTertiary];
-        status.frame = NSMakeRect(titleX, y + 16, titleW, 14);
+        status.frame = NSMakeRect(titleX, y + 16, rowWidth, 14);
         [card addSubview:status];
     }
 

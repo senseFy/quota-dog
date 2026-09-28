@@ -61,6 +61,7 @@ import saien.quotadog.app.components.QdButtonVariant
 import saien.quotadog.app.components.QdCard
 import saien.quotadog.app.components.QdCloseIcon
 import saien.quotadog.app.components.QdIconButton
+import saien.quotadog.app.components.QdPlanLabel
 import saien.quotadog.app.components.QdProgressBar
 import saien.quotadog.app.components.QdProviderAvatar
 import saien.quotadog.app.components.QdRefreshIcon
@@ -578,13 +579,23 @@ private fun TrayAccountCard(
             ) {
                 QdProviderAvatar(account.providerId, size = 18.dp)
                 Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = account.trayAccountTitle(emailPrivacyMode),
-                        style = typo.titleMedium,
-                        color = colors.textPrimary,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(spacing.xs),
+                    ) {
+                        Text(
+                            text = account.trayAccountTitle(emailPrivacyMode),
+                            style = typo.titleMedium,
+                            color = colors.textPrimary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false),
+                        )
+                        account.snapshot?.displayPlanLabel()?.let { plan ->
+                            QdPlanLabel(plan)
+                        }
+                    }
                     val status = account.trayStatusLabel()
                     if (status.isNotEmpty()) {
                         Text(
@@ -820,6 +831,7 @@ private fun List<AccountUiState>.toDesktopStatusBarState(
             DesktopStatusBarAccount(
                 id = account.accountKey.toStatusBarId(),
                 title = account.trayAccountTitle(emailPrivacyMode),
+                planLabel = account.snapshot?.displayPlanLabel().orEmpty(),
                 status = account.trayStatusLabel(),
                 emptyLabel = account.trayEmptyLabel(),
                 provider = account.providerId.name,

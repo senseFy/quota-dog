@@ -104,6 +104,11 @@ kotlin {
                 implementation(libs.jna)
             }
         }
+        val desktopTest by getting {
+            dependencies {
+                implementation(libs.compose.ui.test.junit4)
+            }
+        }
     }
 }
 
