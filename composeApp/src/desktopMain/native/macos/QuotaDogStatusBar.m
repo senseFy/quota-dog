@@ -25,7 +25,6 @@ static void QDLog(NSString *format, ...) {
 static const CGFloat QDPanelWidth = 420.0;
 static const CGFloat QDPanelMaxHeight = 800.0;
 static const CGFloat QDOuterPad = 20.0;
-static const CGFloat QDCardRadius = 8.0;
 static const CGFloat QDCardPad = 12.0;
 static const CGFloat QDAvatarSize = 20.0;
 static const CGFloat QDProgressHeight = 4.0;
@@ -373,6 +372,41 @@ static NSImage *QDProviderLogoImage(NSString *provider, NSColor *tint, CGFloat p
 - (void)viewDidChangeEffectiveAppearance {
     [super viewDidChangeEffectiveAppearance];
     [self updateLayerStyle];
+}
+@end
+
+/// Dashed rule across the menu-bar panel. Clicks pass through to the account below.
+@interface QDTearMarkView : QDFlippedView
+@property(nonatomic, strong) NSColor *dashColor;
+@end
+
+@implementation QDTearMarkView
+- (instancetype)initWithFrame:(NSRect)frame {
+    self = [super initWithFrame:frame];
+    if (self) {
+        self.wantsLayer = YES;
+        self.layer.backgroundColor = NSColor.clearColor.CGColor;
+    }
+    return self;
+}
+
+- (NSView *)hitTest:(NSPoint)point {
+    (void)point;
+    return nil;
+}
+
+- (void)drawRect:(NSRect)dirtyRect {
+    if (!self.dashColor || NSWidth(self.bounds) < 8.0) return;
+    CGFloat y = floor(NSMidY(self.bounds)) + 0.5;
+    NSBezierPath *rule = [NSBezierPath bezierPath];
+    [rule moveToPoint:NSMakePoint(0.0, y)];
+    [rule lineToPoint:NSMakePoint(NSWidth(self.bounds), y)];
+    rule.lineWidth = 1.0;
+    rule.lineCapStyle = NSLineCapStyleRound;
+    CGFloat pattern[] = {3.0, 3.5};
+    [rule setLineDash:pattern count:2 phase:1.5];
+    [self.dashColor setStroke];
+    [rule stroke];
 }
 @end
 
@@ -1355,23 +1389,24 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
             remainingDisplay:(BOOL)remainingDisplay {
     CGFloat height = [self heightForAccount:account];
     QDAccountCardView *card = [[QDAccountCardView alloc] initWithFrame:NSMakeRect(0, 0, width, height)];
-    card.fillColor = palette.surface;
-    card.borderColor = palette.border;
-    card.cornerRadius = QDCardRadius;
+    // The menu-bar panel is the only container. This view only groups one account and tracks hover.
+    card.fillColor = NSColor.clearColor;
+    card.borderColor = nil;
+    card.cornerRadius = 0;
 
-    CGFloat contentWidth = width - QDCardPad * 2.0;
+    CGFloat contentWidth = width;
     CGFloat y = QDCardPad;
 
     NSString *provider = [self stringIn:account key:@"provider" fallback:@"CODEX"];
     NSView *avatar = [self buildProviderAvatar:provider palette:palette];
-    avatar.frame = NSMakeRect(QDCardPad, y, QDAvatarSize, QDAvatarSize);
+    avatar.frame = NSMakeRect(0, y, QDAvatarSize, QDAvatarSize);
     [card addSubview:avatar];
 
     BOOL busy = [self boolIn:account key:@"busy"];
     BOOL refreshable = [self boolIn:account key:@"refreshable"];
-    CGFloat titleX = QDCardPad + QDAvatarSize + 8.0;
+    CGFloat titleX = QDAvatarSize + 8.0;
     CGFloat trailing = refreshable ? (QDAccountRefreshSize + QDAccountRefreshGap) : 0.0;
-    CGFloat rowWidth = MAX(40.0, width - QDCardPad - trailing - titleX);
+    CGFloat rowWidth = MAX(40.0, width - trailing - titleX);
     NSString *planLabel = [self stringIn:account key:@"planLabel" fallback:@""];
     CGFloat badgeGap = 6.0;
     CGFloat badgeHeight = 16.0;
@@ -1443,7 +1478,7 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
                                                                   action:@selector(accountRefreshClicked:)];
         refresh.accountIdentifier = [self stringIn:account key:@"id" fallback:@""];
         refresh.frame = NSMakeRect(
-            width - QDCardPad - QDAccountRefreshSize,
+            width - QDAccountRefreshSize,
             y - 1.0,
             QDAccountRefreshSize,
             QDAccountRefreshSize);
@@ -1462,7 +1497,7 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
     NSInteger resetAvailable = [self integerIn:account key:@"resetAvailable" fallback:0];
     if (windows.count == 0) {
         if (resetAvailable <= 0) {
-            QDFillView *empty = [[QDFillView alloc] initWithFrame:NSMakeRect(QDCardPad, y, contentWidth, 32)];
+            QDFillView *empty = [[QDFillView alloc] initWithFrame:NSMakeRect(0, y, contentWidth, 32)];
             empty.fillColor = palette.surfaceMuted;
             empty.cornerRadius = 10.0;
             NSTextField *emptyLabel = [self label:[self stringIn:account key:@"emptyLabel" fallback:@"No usage data yet"]
@@ -1481,7 +1516,7 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
                                               width:contentWidth
                                             palette:palette
                                    remainingDisplay:remainingDisplay];
-            row.frame = NSMakeRect(QDCardPad, y, contentWidth, QDWindowRowHeight);
+            row.frame = NSMakeRect(0, y, contentWidth, QDWindowRowHeight);
             [card addSubview:row];
             y += QDWindowRowHeight + (i + 1 < count ? 6.0 : 0.0);
         }
@@ -1492,7 +1527,7 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
             y += 6.0;
         }
         NSView *resetRow = [self buildResetCreditsRow:account width:contentWidth palette:palette];
-        resetRow.frame = NSMakeRect(QDCardPad, y, contentWidth, QDResetRowHeight);
+        resetRow.frame = NSMakeRect(0, y, contentWidth, QDResetRowHeight);
         [card addSubview:resetRow];
         y += QDResetRowHeight;
 
@@ -1502,13 +1537,21 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
             NSDictionary *credit = [credits[i] isKindOfClass:[NSDictionary class]] ? credits[i] : @{};
             NSView *creditRow = [self buildResetCreditRow:credit width:contentWidth palette:palette];
             y += (i == 0) ? 4.0 : 2.0;
-            creditRow.frame = NSMakeRect(QDCardPad, y, contentWidth, QDResetRowHeight);
+            creditRow.frame = NSMakeRect(0, y, contentWidth, QDResetRowHeight);
             [card addSubview:creditRow];
             y += QDResetRowHeight;
         }
     }
 
     return card;
+}
+
+- (void)addFullWidthTearAtY:(CGFloat)midY color:(NSColor *)color toView:(NSView *)view {
+    CGFloat markHeight = 4.0;
+    QDTearMarkView *mark = [[QDTearMarkView alloc] initWithFrame:NSMakeRect(
+        0, midY - markHeight / 2.0, QDPanelWidth, markHeight)];
+    mark.dashColor = color;
+    [view addSubview:mark];
 }
 
 - (CGFloat)heightForAccountsContent:(NSArray *)accounts moreAccounts:(NSInteger)moreAccounts {
@@ -1520,7 +1563,6 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
     for (NSUInteger i = 0; i < count; i++) {
         NSDictionary *account = [accounts[i] isKindOfClass:[NSDictionary class]] ? accounts[i] : @{};
         totalHeight += [self heightForAccount:account];
-        if (i + 1 < count) totalHeight += QDAccountGap;
     }
     if (moreAccounts > 0) {
         totalHeight += QDAccountGap + 16.0;
@@ -1531,6 +1573,9 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
 - (void)rebuildPanelContent {
     BOOL darkTheme = QDResolveDarkTheme(self.state);
     QDPalette palette = QDPaletteForDark(darkTheme);
+    NSColor *dashColor = [palette.textTertiary colorWithAlphaComponent:0.8];
+    // Same ink as the type, barely there, so the cap reads in both themes.
+    NSColor *bandColor = [palette.textPrimary colorWithAlphaComponent:darkTheme ? 0.07 : 0.05];
 
     CGFloat contentWidth = QDPanelWidth - QDOuterPad * 2.0;
     NSArray *accounts = [self arrayForKey:@"accounts"];
@@ -1629,7 +1674,7 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
         [root addSubview:empty];
     } else {
         NSUInteger count = MIN(accounts.count, QDMaxAccounts);
-        QDFlippedView *document = [[QDFlippedView alloc] initWithFrame:NSMakeRect(0, 0, contentWidth, intrinsicContentHeight)];
+        QDFlippedView *document = [[QDFlippedView alloc] initWithFrame:NSMakeRect(0, 0, QDPanelWidth, intrinsicContentHeight)];
         document.wantsLayer = YES;
 #if QD_DEBUG_LAYOUT
         document.layer.backgroundColor = QDHex(0xCA8A04).CGColor;
@@ -1637,6 +1682,7 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
 
         BOOL remainingDisplay = QDIsRemainingDisplayMode(self.state);
         CGFloat cursor = 0;
+        NSMutableArray<NSNumber *> *tearOffsets = [NSMutableArray arrayWithCapacity:count];
         for (NSUInteger i = 0; i < count; i++) {
             NSDictionary *account = [accounts[i] isKindOfClass:[NSDictionary class]] ? accounts[i] : @{};
             CGFloat h = [self heightForAccount:account];
@@ -1644,10 +1690,18 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
                                             width:contentWidth
                                           palette:palette
                                  remainingDisplay:remainingDisplay];
-            card.frame = NSMakeRect(0, cursor, contentWidth, h);
+            card.frame = NSMakeRect(QDOuterPad, cursor, contentWidth, h);
             [document addSubview:card];
-            cursor += h + (i + 1 < count ? QDAccountGap : 0.0);
+            cursor += h;
+            if (i + 1 < count) {
+                [tearOffsets addObject:@(cursor)];
+            }
         }
+        // Added after the accounts so the rule paints across the full panel, including the side padding.
+        for (NSNumber *offset in tearOffsets) {
+            [self addFullWidthTearAtY:offset.doubleValue color:dashColor toView:document];
+        }
+
         if (moreAccounts > 0) {
             cursor += QDAccountGap;
             NSString *moreText = moreAccounts == 1
@@ -1657,19 +1711,19 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
                                    fontSize:11.0
                                      weight:NSFontWeightRegular
                                       color:palette.textTertiary];
-            more.frame = NSMakeRect(8, cursor, contentWidth - 16, 16);
+            more.frame = NSMakeRect(QDOuterPad, cursor, contentWidth, 16);
             [document addSubview:more];
             cursor += 16.0;
         }
 
         CGFloat builtHeight = MAX(cursor, 1.0);
-        document.frame = NSMakeRect(0, 0, contentWidth, builtHeight);
+        document.frame = NSMakeRect(0, 0, QDPanelWidth, builtHeight);
         contentHeight = MIN(builtHeight, maxContentHeight);
         panelHeight = headerHeight + contentHeight + footerHeight;
         root.frame = NSMakeRect(0, 0, QDPanelWidth, panelHeight);
 
         if (builtHeight > contentHeight + 0.5) {
-            NSScrollView *scroll = [[NSScrollView alloc] initWithFrame:NSMakeRect(QDOuterPad, contentTop, contentWidth, contentHeight)];
+            NSScrollView *scroll = [[NSScrollView alloc] initWithFrame:NSMakeRect(0, contentTop, QDPanelWidth, contentHeight)];
 #if QD_DEBUG_LAYOUT
             scroll.drawsBackground = YES;
             scroll.backgroundColor = QDHex(0xEAB308);
@@ -1679,12 +1733,14 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
             scroll.hasVerticalScroller = YES;
             scroll.hasHorizontalScroller = NO;
             scroll.autohidesScrollers = YES;
+            scroll.scrollerStyle = NSScrollerStyleOverlay;
+            scroll.automaticallyAdjustsContentInsets = NO;
             scroll.borderType = NSNoBorder;
             scroll.documentView = document;
             [document scrollPoint:NSMakePoint(0, 0)];
             [root addSubview:scroll];
         } else {
-            document.frame = NSMakeRect(QDOuterPad, contentTop, contentWidth, builtHeight);
+            document.frame = NSMakeRect(0, contentTop, QDPanelWidth, builtHeight);
 #if QD_DEBUG_LAYOUT
             QDFillView *contentBg = [[QDFillView alloc] initWithFrame:document.frame];
             contentBg.fillColor = QDHex(0xEAB308);
@@ -1730,6 +1786,23 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
 
     panelHeight = NSMaxY(quit.frame) + QDFooterBottomPad;
     NSSize size = NSMakeSize(QDPanelWidth, panelHeight);
+
+#if !QD_DEBUG_LAYOUT
+    // Header and footer are the bound edges of the note: a quiet wash, then the same tear as between accounts.
+    QDFillView *headerBand = [[QDFillView alloc] initWithFrame:NSMakeRect(0, 0, QDPanelWidth, headerHeight)];
+    headerBand.fillColor = bandColor;
+    headerBand.cornerRadius = 0;
+    [root addSubview:headerBand positioned:NSWindowBelow relativeTo:nil];
+
+    CGFloat footerBandY = contentTop + contentHeight;
+    QDFillView *footerBand = [[QDFillView alloc] initWithFrame:NSMakeRect(0, footerBandY, QDPanelWidth, size.height - footerBandY)];
+    footerBand.fillColor = bandColor;
+    footerBand.cornerRadius = 0;
+    [root addSubview:footerBand positioned:NSWindowBelow relativeTo:nil];
+
+    [self addFullWidthTearAtY:headerHeight color:dashColor toView:root];
+    [self addFullWidthTearAtY:footerBandY color:dashColor toView:root];
+#endif
     root.frame = NSMakeRect(0, 0, size.width, size.height);
 #if QD_DEBUG_LAYOUT
     root.fillColor = QDHex(0xC026C0);

@@ -41,7 +41,7 @@ int main(void) {
                                                         width:width.doubleValue
                                                       palette:QDLightPalette()
                                              remainingDisplay:NO];
-                    CGFloat rowRight = width.doubleValue - QDCardPad;
+                    CGFloat rowRight = width.doubleValue;
                     if (refreshable.boolValue) {
                         rowRight -= QDAccountRefreshSize + QDAccountRefreshGap;
                     }
