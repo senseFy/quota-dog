@@ -1393,6 +1393,10 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
     card.fillColor = NSColor.clearColor;
     card.borderColor = nil;
     card.cornerRadius = 0;
+    // Accounts with no usable quota left recede behind usable ones.
+    if ([self boolIn:account key:@"exhausted"]) {
+        card.alphaValue = 0.5;
+    }
 
     CGFloat contentWidth = width;
     CGFloat y = QDCardPad;

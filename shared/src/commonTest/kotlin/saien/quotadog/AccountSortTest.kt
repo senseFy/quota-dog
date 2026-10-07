@@ -3,7 +3,10 @@ package saien.quotadog
 import kotlinx.datetime.Instant
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
+import kotlin.test.assertSame
+import kotlin.test.assertTrue
 
 class AccountSortTest {
     @Test
@@ -113,6 +116,40 @@ class AccountSortTest {
     }
 
     @Test
+    fun oneSpentWindowBlocksTheAccountAndSinksIt() {
+        val accounts = listOf(
+            account(ProviderId.CODEX, "amy", email = "amy@example.com", usedRatios = listOf(0.2, 1.0)),
+            account(ProviderId.GROK, "zed", email = "zed@example.com", usedRatios = listOf(0.4)),
+            account(ProviderId.CLAUDE_CODE, "bea", email = "bea@example.com", usedRatios = listOf(1.0)),
+            account(ProviderId.CURSOR, "no-data", email = "nodata@example.com"),
+        )
+
+        assertTrue(accounts[0].isQuotaExhausted())
+        assertFalse(accounts[1].isQuotaExhausted())
+        assertFalse(accounts[3].isQuotaExhausted())
+
+        val sorted = accounts.sortedAccounts(AccountSortMode.Name).withExhaustedLast()
+            .map { it.accountKey.accountId }
+
+        assertEquals(listOf("no-data", "zed", "amy", "bea"), sorted)
+    }
+
+    @Test
+    fun exhaustedSinkLeavesSingleGroupListsAlone() {
+        val usable = listOf(
+            account(ProviderId.CODEX, "a", email = "a@example.com", usedRatios = listOf(0.1)),
+            account(ProviderId.GROK, "b", email = "b@example.com"),
+        )
+        val spent = listOf(
+            account(ProviderId.CODEX, "c", email = "c@example.com", usedRatios = listOf(1.0)),
+            account(ProviderId.GROK, "d", email = "d@example.com", usedRatios = listOf(1.2, 0.0)),
+        )
+
+        assertSame(usable, usable.withExhaustedLast())
+        assertSame(spent, spent.withExhaustedLast())
+    }
+
+    @Test
     fun decodeSkipsUnknownProviders() {
         val raw = """{"accounts":[{"providerId":"NOT_A_PROVIDER","accountId":"x"},{"providerId":"DROID","accountId":"y"}]}"""
 
@@ -124,14 +161,17 @@ class AccountSortTest {
         id: String,
         email: String? = null,
         refreshedAt: Long? = null,
+        usedRatios: List<Double> = emptyList(),
     ): AccountUiState {
-        val snapshot = if (email == null && refreshedAt == null) {
+        val snapshot = if (email == null && refreshedAt == null && usedRatios.isEmpty()) {
             null
         } else {
             ProviderUsageSnapshot(
                 providerId = provider,
                 authState = AuthState.LoggedIn,
-                windows = emptyList(),
+                windows = usedRatios.mapIndexed { index, used ->
+                    UsageWindow(id = "$id-$index", label = "$id-$index", usedRatio = used, resetsAt = null)
+                },
                 collectedAt = Instant.fromEpochMilliseconds(refreshedAt ?: 0L),
                 accountEmail = email,
             )

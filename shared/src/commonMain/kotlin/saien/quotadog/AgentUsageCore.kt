@@ -109,6 +109,10 @@ data class UsageWindow(
     val durationSeconds: Long? = null
 ) {
     val remainingRatio: Double = (1.0 - usedRatio).coerceIn(0.0, 1.0)
+
+    /** No quota left in this window. [isQuotaExhausted] decides what that means for the account. */
+    val isExhausted: Boolean
+        get() = usedRatio.isFinite() && usedRatio >= 1.0
 }
 
 @Serializable

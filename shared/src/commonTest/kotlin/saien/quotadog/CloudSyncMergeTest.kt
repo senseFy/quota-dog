@@ -124,6 +124,28 @@ class CloudSyncMergeTest {
         assertEquals(true, merged.preferences.accountSortReversed?.value)
     }
 
+    @Test
+    fun mergesSinkExhaustedAccountsByNewestEdit() {
+        val local = CloudSyncDocumentV1(
+            deviceId = "local",
+            updatedAtEpochMillis = 1,
+            preferences = CloudSyncPreferencesRecord(
+                sinkExhaustedAccounts = CloudSyncBooleanPreference(false, updatedAtEpochMillis = 50)
+            )
+        )
+        val remote = CloudSyncDocumentV1(
+            deviceId = "remote",
+            updatedAtEpochMillis = 1,
+            preferences = CloudSyncPreferencesRecord(
+                sinkExhaustedAccounts = CloudSyncBooleanPreference(true, updatedAtEpochMillis = 20)
+            )
+        )
+
+        val merged = mergeCloudSyncDocuments(local, remote, nowEpochMillis = 80)
+
+        assertEquals(false, merged.preferences.sinkExhaustedAccounts?.value)
+    }
+
     private fun token(accessToken: String): OAuthTokenBundle {
         return OAuthTokenBundle(
             accessToken = accessToken,

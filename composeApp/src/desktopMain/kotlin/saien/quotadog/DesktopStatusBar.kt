@@ -64,6 +64,7 @@ internal data class DesktopStatusBarAccount(
     val provider: String,
     val busy: Boolean,
     val refreshable: Boolean,
+    val exhausted: Boolean = false,
     val windows: List<DesktopStatusBarUsageWindow>,
     val resetAvailable: Int = 0,
     val resetLabel: String? = null,
@@ -399,6 +400,8 @@ private fun DesktopStatusBarState.toJson(): String {
             append("\"busy\":").append(account.busy)
             append(',')
             append("\"refreshable\":").append(account.refreshable)
+            append(',')
+            append("\"exhausted\":").append(account.exhausted)
             append(',')
             append("\"windows\":[")
             account.windows.forEachIndexed { windowIndex, window ->

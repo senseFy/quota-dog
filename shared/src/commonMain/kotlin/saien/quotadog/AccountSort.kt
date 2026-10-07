@@ -32,6 +32,22 @@ fun AccountUiState.refreshEpochMillis(): Long {
     return snapshot?.collectedAt?.toEpochMilliseconds() ?: Long.MIN_VALUE
 }
 
+/**
+ * Usable accounts keep their current order, then accounts with no usable quota left.
+ * Returns this list when every account is usable or every account is spent.
+ */
+fun List<AccountUiState>.withExhaustedLast(): List<AccountUiState> {
+    if (size < 2) return this
+    val usable = ArrayList<AccountUiState>(size)
+    val exhausted = ArrayList<AccountUiState>()
+    for (account in this) {
+        if (account.isQuotaExhausted()) exhausted.add(account) else usable.add(account)
+    }
+    if (exhausted.isEmpty() || usable.isEmpty()) return this
+    usable.addAll(exhausted)
+    return usable
+}
+
 fun List<AccountUiState>.sortedAccounts(
     mode: AccountSortMode,
     manualOrder: List<AccountKey> = emptyList(),

@@ -57,6 +57,8 @@ fun QdSettingsSheet(
     onUsageDisplayModeChange: (UsageDisplayMode) -> Unit,
     showProjectedUsage: Boolean,
     onShowProjectedUsageChange: (Boolean) -> Unit,
+    sinkExhaustedAccounts: Boolean,
+    onSinkExhaustedAccountsChange: (Boolean) -> Unit,
     emailPrivacyMode: EmailPrivacyMode,
     onEmailPrivacyModeChange: (EmailPrivacyMode) -> Unit,
     autoRefreshMinutes: Int,
@@ -213,6 +215,22 @@ fun QdSettingsSheet(
                                 ),
                                 selected = showProjectedUsage,
                                 onSelect = onShowProjectedUsageChange,
+                            )
+                        },
+                    )
+
+                    // Spent accounts.
+                    QdSettingsRow(
+                        title = "Spent accounts",
+                        description = "Fade an account when it runs out of quota, and move it down.",
+                        control = {
+                            QdSegmentedControl(
+                                options = listOf(
+                                    "Off" to false,
+                                    "On" to true,
+                                ),
+                                selected = sinkExhaustedAccounts,
+                                onSelect = onSinkExhaustedAccountsChange,
                             )
                         },
                     )

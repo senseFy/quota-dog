@@ -8,6 +8,21 @@ import kotlin.test.assertTrue
 
 class AppPreferencesTest {
     @Test
+    fun sinkExhaustedAccountsDefaultsOnAndRoundTrips() {
+        val settings = MapSettings()
+        val preferences = AppPreferences(settings)
+
+        assertTrue(preferences.sinkExhaustedAccounts.value)
+
+        preferences.setSinkExhaustedAccounts(false)
+
+        assertFalse(AppPreferences(settings).sinkExhaustedAccounts.value)
+        val imported = AppPreferences(MapSettings())
+        imported.importForSync(preferences.exportForSync())
+        assertFalse(imported.sinkExhaustedAccounts.value)
+    }
+
+    @Test
     fun projectedUsageDisplayDefaultsOff() {
         val preferences = AppPreferences(MapSettings())
 

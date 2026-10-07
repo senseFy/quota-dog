@@ -47,6 +47,9 @@ class AppPreferences(
     private val _accountSortReversed = MutableStateFlow(loadAccountSortReversed())
     val accountSortReversed: StateFlow<Boolean> = _accountSortReversed
 
+    private val _sinkExhaustedAccounts = MutableStateFlow(loadSinkExhaustedAccounts())
+    val sinkExhaustedAccounts: StateFlow<Boolean> = _sinkExhaustedAccounts
+
     fun setThemeMode(mode: ThemeMode) {
         settings.putString(KEY_THEME, mode.name)
         settings.putLong(updatedAtKey(KEY_THEME), nowMillis())
@@ -100,6 +103,12 @@ class AppPreferences(
         _accountSortReversed.value = reversed
     }
 
+    fun setSinkExhaustedAccounts(enabled: Boolean) {
+        settings.putBoolean(KEY_SINK_EXHAUSTED_ACCOUNTS, enabled)
+        settings.putLong(updatedAtKey(KEY_SINK_EXHAUSTED_ACCOUNTS), nowMillis())
+        _sinkExhaustedAccounts.value = enabled
+    }
+
     fun exportForSync(): CloudSyncPreferencesRecord {
         return CloudSyncPreferencesRecord(
             themeMode = CloudSyncStringPreference(
@@ -133,6 +142,10 @@ class AppPreferences(
             accountSortReversed = CloudSyncBooleanPreference(
                 value = _accountSortReversed.value,
                 updatedAtEpochMillis = preferenceUpdatedAt(KEY_ACCOUNT_SORT_REVERSED)
+            ),
+            sinkExhaustedAccounts = CloudSyncBooleanPreference(
+                value = _sinkExhaustedAccounts.value,
+                updatedAtEpochMillis = preferenceUpdatedAt(KEY_SINK_EXHAUSTED_ACCOUNTS)
             )
         )
     }
@@ -179,6 +192,11 @@ class AppPreferences(
             settings.putLong(updatedAtKey(KEY_ACCOUNT_SORT_REVERSED), it.updatedAtEpochMillis)
             _accountSortReversed.value = it.value
         }
+        merged.sinkExhaustedAccounts?.let {
+            settings.putBoolean(KEY_SINK_EXHAUSTED_ACCOUNTS, it.value)
+            settings.putLong(updatedAtKey(KEY_SINK_EXHAUSTED_ACCOUNTS), it.updatedAtEpochMillis)
+            _sinkExhaustedAccounts.value = it.value
+        }
     }
 
     private fun loadThemeMode(): ThemeMode {
@@ -217,6 +235,10 @@ class AppPreferences(
         return settings.getBooleanOrNull(KEY_ACCOUNT_SORT_REVERSED) ?: false
     }
 
+    private fun loadSinkExhaustedAccounts(): Boolean {
+        return settings.getBooleanOrNull(KEY_SINK_EXHAUSTED_ACCOUNTS) ?: true
+    }
+
     private fun importString(key: String, value: String, updatedAtEpochMillis: Long) {
         settings.putString(key, value)
         settings.putLong(updatedAtKey(key), updatedAtEpochMillis)
@@ -244,5 +266,6 @@ class AppPreferences(
         const val KEY_ACCOUNT_SORT_MODE = "pref_account_sort_mode"
         const val KEY_ACCOUNT_MANUAL_ORDER = "pref_account_manual_order"
         const val KEY_ACCOUNT_SORT_REVERSED = "pref_account_sort_reversed"
+        const val KEY_SINK_EXHAUSTED_ACCOUNTS = "pref_sink_exhausted_accounts"
     }
 }

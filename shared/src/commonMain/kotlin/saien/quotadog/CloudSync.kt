@@ -61,7 +61,8 @@ data class CloudSyncPreferencesRecord(
     val emailPrivacyMode: CloudSyncStringPreference? = null,
     val accountSortMode: CloudSyncStringPreference? = null,
     val accountManualOrder: CloudSyncStringPreference? = null,
-    val accountSortReversed: CloudSyncBooleanPreference? = null
+    val accountSortReversed: CloudSyncBooleanPreference? = null,
+    val sinkExhaustedAccounts: CloudSyncBooleanPreference? = null
 )
 
 @Serializable
@@ -138,7 +139,11 @@ internal fun mergePreferences(
         emailPrivacyMode = newest(local.emailPrivacyMode, remote.emailPrivacyMode) { it.updatedAtEpochMillis },
         accountSortMode = newest(local.accountSortMode, remote.accountSortMode) { it.updatedAtEpochMillis },
         accountManualOrder = newest(local.accountManualOrder, remote.accountManualOrder) { it.updatedAtEpochMillis },
-        accountSortReversed = newest(local.accountSortReversed, remote.accountSortReversed) { it.updatedAtEpochMillis }
+        accountSortReversed = newest(local.accountSortReversed, remote.accountSortReversed) { it.updatedAtEpochMillis },
+        sinkExhaustedAccounts = newest(
+            local.sinkExhaustedAccounts,
+            remote.sinkExhaustedAccounts
+        ) { it.updatedAtEpochMillis }
     )
 }
 

@@ -36,6 +36,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.shadow
@@ -213,6 +214,7 @@ private fun QuotaDogTray(
     val accountManualOrder by preferences.accountManualOrder.collectAsState()
     val emailPrivacyMode by preferences.emailPrivacyMode.collectAsState()
     val usageDisplayMode by preferences.usageDisplayMode.collectAsState()
+    val sinkExhaustedAccounts by preferences.sinkExhaustedAccounts.collectAsState()
     val themeMode by preferences.themeMode.collectAsState()
     val systemDark = rememberSystemDarkTheme()
     val darkTheme = when (themeMode) {
@@ -233,9 +235,14 @@ private fun QuotaDogTray(
     val availableProviders = accounts.map { it.providerId }.distinct().sortedBy { it.ordinal }
     val activeStatusBarProvider =
         selectedStatusBarProvider?.takeIf { it in availableProviders }
-    val statusBarAccounts = activeStatusBarProvider?.let { selected ->
+    val filteredStatusBarAccounts = activeStatusBarProvider?.let { selected ->
         accounts.filter { it.providerId == selected }
     } ?: accounts
+    val statusBarAccounts = if (sinkExhaustedAccounts) {
+        filteredStatusBarAccounts.withExhaustedLast()
+    } else {
+        filteredStatusBarAccounts
+    }
     val refreshableAccounts = accounts.filter { it.canRefreshFromTray() }
     val statusBarState = statusBarAccounts.toDesktopStatusBarState(
         allAccounts = accounts,
@@ -244,6 +251,7 @@ private fun QuotaDogTray(
         refreshableAccounts = refreshableAccounts,
         emailPrivacyMode = emailPrivacyMode,
         usageDisplayMode = usageDisplayMode,
+        sinkExhaustedAccounts = sinkExhaustedAccounts,
         darkTheme = darkTheme,
     )
 
@@ -316,6 +324,7 @@ private fun QuotaDogTray(
                 refreshableAccounts = refreshableAccounts,
                 emailPrivacyMode = emailPrivacyMode,
                 usageDisplayMode = usageDisplayMode,
+                sinkExhaustedAccounts = sinkExhaustedAccounts,
                 onSelectProvider = { selectedStatusBarProvider = it },
                 onRefresh = { store.startRefreshAll() },
                 onRefreshAccount = { store.startRefresh(it) },
@@ -357,6 +366,7 @@ private fun QuotaDogTrayPanel(
     refreshableAccounts: List<AccountUiState>,
     emailPrivacyMode: EmailPrivacyMode,
     usageDisplayMode: UsageDisplayMode,
+    sinkExhaustedAccounts: Boolean,
     onSelectProvider: (ProviderId?) -> Unit,
     onRefresh: () -> Unit,
     onRefreshAccount: (AccountKey) -> Unit,
@@ -381,6 +391,7 @@ private fun QuotaDogTrayPanel(
             refreshableAccounts = refreshableAccounts,
             emailPrivacyMode = emailPrivacyMode,
             usageDisplayMode = usageDisplayMode,
+            sinkExhaustedAccounts = sinkExhaustedAccounts,
             onSelectProvider = onSelectProvider,
             onRefresh = onRefresh,
             onRefreshAccount = onRefreshAccount,
@@ -400,6 +411,7 @@ private fun QuotaDogTrayPanelContent(
     refreshableAccounts: List<AccountUiState>,
     emailPrivacyMode: EmailPrivacyMode,
     usageDisplayMode: UsageDisplayMode,
+    sinkExhaustedAccounts: Boolean,
     onSelectProvider: (ProviderId?) -> Unit,
     onRefresh: () -> Unit,
     onRefreshAccount: (AccountKey) -> Unit,
@@ -488,6 +500,7 @@ private fun QuotaDogTrayPanelContent(
                             account = account,
                             emailPrivacyMode = emailPrivacyMode,
                             usageDisplayMode = usageDisplayMode,
+                            sinkExhaustedAccounts = sinkExhaustedAccounts,
                             onRefresh = { onRefreshAccount(account.accountKey) },
                         )
                     }
@@ -553,6 +566,7 @@ private fun TrayAccountCard(
     account: AccountUiState,
     emailPrivacyMode: EmailPrivacyMode,
     usageDisplayMode: UsageDisplayMode,
+    sinkExhaustedAccounts: Boolean,
     onRefresh: () -> Unit,
 ) {
     val colors = QdTheme.colors
@@ -566,7 +580,9 @@ private fun TrayAccountCard(
     val showRefresh = refreshable && (hovered || account.busy)
 
     QdCard(
-        modifier = Modifier.hoverable(hoverInteraction),
+        modifier = Modifier
+            .hoverable(hoverInteraction)
+            .alpha(if (sinkExhaustedAccounts && account.isQuotaExhausted()) EXHAUSTED_ACCOUNT_ALPHA else 1f),
         padding = PaddingValues(spacing.sm),
         background = colors.surface,
         elevated = false,
@@ -752,6 +768,7 @@ private fun TrayResetCreditsRow(summary: CodexResetSummary) {
 }
 
 private const val TRAY_ACCOUNT_LIMIT = 6
+private const val EXHAUSTED_ACCOUNT_ALPHA = 0.5f
 private val TRAY_OPEN_AUTO_REFRESH_THRESHOLD = 10.minutes
 
 @Composable
@@ -810,6 +827,7 @@ private fun List<AccountUiState>.toDesktopStatusBarState(
     refreshableAccounts: List<AccountUiState>,
     emailPrivacyMode: EmailPrivacyMode,
     usageDisplayMode: UsageDisplayMode,
+    sinkExhaustedAccounts: Boolean,
     darkTheme: Boolean,
 ): DesktopStatusBarState {
     val visibleAccounts = take(STATUS_BAR_ACCOUNT_LIMIT)
@@ -837,6 +855,7 @@ private fun List<AccountUiState>.toDesktopStatusBarState(
                 provider = account.providerId.name,
                 busy = account.busy || account.loginStart != null,
                 refreshable = account.canRefreshFromTray(),
+                exhausted = sinkExhaustedAccounts && account.isQuotaExhausted(),
                 windows = account.snapshot?.windows.orEmpty().map { window ->
                     DesktopStatusBarUsageWindow(
                         label = window.trayWindowLabel(),

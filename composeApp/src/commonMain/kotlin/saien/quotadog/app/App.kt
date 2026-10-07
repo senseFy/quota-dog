@@ -51,6 +51,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.rotate
@@ -127,10 +128,14 @@ import saien.quotadog.expiryLabel
 import saien.quotadog.grokAuthFileHint
 import saien.quotadog.grokCliImportAvailable
 import saien.quotadog.isExpiringSoon
+import saien.quotadog.isQuotaExhausted
 import saien.quotadog.oauthAvailable
 import saien.quotadog.projectedUsedRatio
 import saien.quotadog.reorderDisplayedManualOrder
 import saien.quotadog.sortedAccounts
+import saien.quotadog.spentWindowResetAt
+import saien.quotadog.withExhaustedLast
+import kotlin.time.Duration.Companion.minutes
 
 @Composable
 fun App(
@@ -181,6 +186,11 @@ fun QuotaDogBackgroundEffects(
     cloudSync: CloudSyncCoordinator,
 ) {
     val autoRefreshMinutes by preferences.autoRefreshMinutes.collectAsState()
+    val state by store.state.collectAsState()
+    val nextSpentReset = state.accounts.values
+        .filter { it.canRefreshUsage() }
+        .mapNotNull { it.spentWindowResetAt() }
+        .minOrNull()
 
     LaunchedEffect(Unit) {
         cloudSync.startRestoreSession()
@@ -198,7 +208,25 @@ fun QuotaDogBackgroundEffects(
             store.startRefreshAll()
         }
     }
+
+    // A spent window keeps reading 100% after its quota is back until something refreshes it, and
+    // auto refresh is off by default. Refresh accounts once their reset passes; each refresh
+    // re-keys this effect to the next reset.
+    LaunchedEffect(nextSpentReset) {
+        val resetAt = nextSpentReset ?: return@LaunchedEffect
+        delay(resetAt - Clock.System.now() + SPENT_RESET_REFRESH_GRACE)
+        val now = Clock.System.now()
+        store.state.value.accounts.values
+            .filter { account ->
+                val accountResetAt = account.spentWindowResetAt()
+                account.canRefreshUsage() && !account.busy && accountResetAt != null && accountResetAt <= now
+            }
+            .forEach { store.startRefresh(it.accountKey) }
+    }
 }
+
+/** Gives the provider time to roll a window over before the post-reset refresh. */
+private val SPENT_RESET_REFRESH_GRACE = 1.minutes
 
 @Composable
 private fun QuotaDogScreen(
@@ -211,6 +239,7 @@ private fun QuotaDogScreen(
     val autoRefreshMinutes by preferences.autoRefreshMinutes.collectAsState()
     val usageDisplayMode by preferences.usageDisplayMode.collectAsState()
     val showProjectedUsage by preferences.showProjectedUsage.collectAsState()
+    val sinkExhaustedAccounts by preferences.sinkExhaustedAccounts.collectAsState()
     val emailPrivacyMode by preferences.emailPrivacyMode.collectAsState()
     val accountSortMode by preferences.accountSortMode.collectAsState()
     val accountSortReversed by preferences.accountSortReversed.collectAsState()
@@ -342,9 +371,15 @@ private fun QuotaDogScreen(
                         },
                     )
                 }
-                val visibleAccounts = activeProvider?.let { selected ->
+                val filteredAccounts = activeProvider?.let { selected ->
                     accounts.filter { it.providerId == selected }
                 } ?: accounts
+                // Manual editing keeps the saved order so a move matches the row on screen.
+                val visibleAccounts = if (manualReorderEditing || !sinkExhaustedAccounts) {
+                    filteredAccounts
+                } else {
+                    filteredAccounts.withExhaustedLast()
+                }
                 val moveVisibleAccount = { key: AccountKey, delta: Int, pushSync: Boolean ->
                     val pool = store.state.value.accounts.values.filter { it.shouldShowAccount() }
                     val active = selectedProvider?.takeIf { chosen ->
@@ -369,6 +404,7 @@ private fun QuotaDogScreen(
                     manualReorder = manualReorderEditing,
                     usageDisplayMode = usageDisplayMode,
                     showProjectedUsage = showProjectedUsage,
+                    sinkExhaustedAccounts = sinkExhaustedAccounts,
                     emailPrivacyMode = emailPrivacyMode,
                     callbackInput = { callbackInputs[it].orEmpty() },
                     onCallbackChange = { accountKey, value -> callbackInputs[accountKey] = value },
@@ -521,6 +557,15 @@ private fun QuotaDogScreen(
                 cloudSync.startPushLocalChanges()
                 snackbar.show(
                     text = if (it) "Usage estimate enabled" else "Usage estimate disabled",
+                    tone = QdSnackbarTone.Success,
+                )
+            },
+            sinkExhaustedAccounts = sinkExhaustedAccounts,
+            onSinkExhaustedAccountsChange = {
+                preferences.setSinkExhaustedAccounts(it)
+                cloudSync.startPushLocalChanges()
+                snackbar.show(
+                    text = if (it) "Spent accounts enabled" else "Spent accounts disabled",
                     tone = QdSnackbarTone.Success,
                 )
             },
@@ -981,6 +1026,7 @@ private fun AccountCards(
     manualReorder: Boolean,
     usageDisplayMode: UsageDisplayMode,
     showProjectedUsage: Boolean,
+    sinkExhaustedAccounts: Boolean,
     emailPrivacyMode: EmailPrivacyMode,
     callbackInput: (AccountKey) -> String,
     onCallbackChange: (AccountKey, String) -> Unit,
@@ -1027,6 +1073,7 @@ private fun AccountCards(
             state = providerState,
             usageDisplayMode = usageDisplayMode,
             showProjectedUsage = showProjectedUsage,
+            sinkExhaustedAccounts = sinkExhaustedAccounts,
             emailPrivacyMode = emailPrivacyMode,
             callbackInput = callbackInput(providerState.accountKey),
             onCallbackChange = { onCallbackChange(providerState.accountKey, it) },
@@ -1052,25 +1099,36 @@ private fun AccountCards(
         return
     }
 
+    // Spent accounts arrive last, so they start a new row instead of sharing one with a usable account.
+    val spentStart = if (sinkExhaustedAccounts) {
+        accounts.indexOfFirst { it.isQuotaExhausted() }
+    } else {
+        -1
+    }
+    val usableAccounts = if (spentStart < 0) accounts else accounts.subList(0, spentStart)
+    val spentAccounts = if (spentStart < 0) emptyList() else accounts.subList(spentStart, accounts.size)
+
     Column(verticalArrangement = Arrangement.spacedBy(spacing.md)) {
-        accounts.chunked(2).forEachIndexed { rowIndex, rowAccounts ->
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(IntrinsicSize.Min),
-                horizontalArrangement = Arrangement.spacedBy(spacing.md),
-            ) {
-                rowAccounts.forEachIndexed { columnIndex, providerState ->
-                    key(providerState.accountKey) {
-                        cardAt(
-                            rowIndex * 2 + columnIndex,
-                            providerState,
-                            Modifier.weight(1f).fillMaxHeight(),
-                        )
+        listOf(0 to usableAccounts, usableAccounts.size to spentAccounts).forEach { (offset, group) ->
+            group.chunked(2).forEachIndexed { rowIndex, rowAccounts ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(IntrinsicSize.Min),
+                    horizontalArrangement = Arrangement.spacedBy(spacing.md),
+                ) {
+                    rowAccounts.forEachIndexed { columnIndex, providerState ->
+                        key(providerState.accountKey) {
+                            cardAt(
+                                offset + rowIndex * 2 + columnIndex,
+                                providerState,
+                                Modifier.weight(1f).fillMaxHeight(),
+                            )
+                        }
                     }
-                }
-                if (rowAccounts.size == 1) {
-                    Box(modifier = Modifier.weight(1f))
+                    if (rowAccounts.size == 1) {
+                        Box(modifier = Modifier.weight(1f))
+                    }
                 }
             }
         }
@@ -1085,11 +1143,14 @@ private data class AccountReorderControls(
     val onMoveDown: () -> Unit,
 )
 
+private const val EXHAUSTED_ACCOUNT_ALPHA = 0.5f
+
 @Composable
 private fun AccountCard(
     state: AccountUiState,
     usageDisplayMode: UsageDisplayMode,
     showProjectedUsage: Boolean,
+    sinkExhaustedAccounts: Boolean,
     emailPrivacyMode: EmailPrivacyMode,
     callbackInput: String,
     onCallbackChange: (String) -> Unit,
@@ -1107,7 +1168,9 @@ private fun AccountCard(
     var menuExpanded by remember { mutableStateOf(false) }
 
     QdCard(
-        modifier = modifier.fillMaxWidth(),
+        modifier = modifier
+            .fillMaxWidth()
+            .alpha(if (sinkExhaustedAccounts && state.isQuotaExhausted()) EXHAUSTED_ACCOUNT_ALPHA else 1f),
         padding = PaddingValues(spacing.md),
         background = colors.backgroundElevated,
     ) {
