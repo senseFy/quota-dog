@@ -328,7 +328,7 @@ private fun QuotaDogScreen(
             if (accounts.isEmpty()) {
                 AccountsEmptyState(isDesktop = isDesktop)
             } else {
-                    ProviderSwitcher(
+                ProviderSwitcher(
                     accounts = accounts,
                     providers = availableProviders,
                     selected = activeProvider,
