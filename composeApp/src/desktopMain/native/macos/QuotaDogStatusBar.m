@@ -1293,6 +1293,7 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
                            fontSize:11.0
                              weight:NSFontWeightMedium
                               color:fill];
+    meta.toolTip = [self stringIn:window key:@"resetTooltip" fallback:@""];
     meta.font = metaFont;
     meta.alignment = NSTextAlignmentRight;
     meta.lineBreakMode = NSLineBreakByClipping;
@@ -1333,6 +1334,7 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
                            fontSize:11.0
                              weight:NSFontWeightMedium
                               color:fill];
+    meta.toolTip = [self stringIn:account key:@"resetTooltip" fallback:@""];
     meta.font = metaFont;
     meta.alignment = NSTextAlignmentRight;
     meta.lineBreakMode = NSLineBreakByClipping;
@@ -1364,6 +1366,7 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
                            fontSize:11.0
                              weight:NSFontWeightRegular
                               color:urgent ? palette.warning : palette.textTertiary];
+    meta.toolTip = [self stringIn:credit key:@"tooltip" fallback:@""];
     meta.font = [NSFont monospacedDigitSystemFontOfSize:11.0 weight:NSFontWeightRegular];
     meta.alignment = NSTextAlignmentRight;
     meta.lineBreakMode = NSLineBreakByClipping;

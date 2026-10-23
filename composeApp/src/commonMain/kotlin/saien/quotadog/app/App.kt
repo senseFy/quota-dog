@@ -113,6 +113,7 @@ import saien.quotadog.app.components.QdSnackbarHost
 import saien.quotadog.app.components.QdSnackbarTone
 import saien.quotadog.app.components.QdSortAscendingIcon
 import saien.quotadog.app.components.QdSortDescendingIcon
+import saien.quotadog.app.components.QdTimestamp
 import saien.quotadog.app.components.rememberQdSnackbarController
 import saien.quotadog.app.theme.QdTheme
 import saien.quotadog.app.theme.QuotaDogTheme
@@ -1444,8 +1445,17 @@ private fun UsageWindowRow(window: UsageWindow, displayMode: UsageDisplayMode, s
                 overflow = TextOverflow.Ellipsis,
             )
             Row(verticalAlignment = Alignment.CenterVertically) {
+                QdTimestamp(window.resetsAt) {
+                    Text(
+                        window.remainingTime(),
+                        style = typo.numeric,
+                        color = colors.textTertiary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
                 Text(
-                    "${window.remainingTime()} · ",
+                    " · ",
                     style = typo.numeric,
                     color = colors.textTertiary,
                     maxLines = 1,
@@ -1518,12 +1528,14 @@ private fun CodexResetCreditsBlock(summary: CodexResetSummary) {
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                Text(
-                    credit.expiryLabel(),
-                    style = typo.numeric,
-                    color = if (credit.isExpiringSoon()) colors.warning else colors.textTertiary,
-                    maxLines = 1,
-                )
+                QdTimestamp(credit.expiresAt) {
+                    Text(
+                        credit.expiryLabel(),
+                        style = typo.numeric,
+                        color = if (credit.isExpiringSoon()) colors.warning else colors.textTertiary,
+                        maxLines = 1,
+                    )
+                }
             }
         }
         val shown = minOf(4, summary.credits.size)

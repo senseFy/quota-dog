@@ -67,6 +67,7 @@ import saien.quotadog.app.components.QdProgressBar
 import saien.quotadog.app.components.QdProviderAvatar
 import saien.quotadog.app.components.QdRefreshIcon
 import saien.quotadog.app.components.QdSegmentedControl
+import saien.quotadog.app.components.QdTimestamp
 import saien.quotadog.app.theme.QdTheme
 import saien.quotadog.app.theme.QuotaDogTheme
 import saien.quotadog.app.theme.SystemThemeRefresh
@@ -704,11 +705,19 @@ private fun TrayUsageWindowRow(window: UsageWindow, displayMode: UsageDisplayMod
                 overflow = TextOverflow.Ellipsis,
             )
             Text(
-                text = "$primaryLabel · ${window.trayResetLabel()}",
+                text = "$primaryLabel · ",
                 style = typo.numeric.copy(fontWeight = FontWeight.SemiBold),
                 color = fill,
                 maxLines = 1,
             )
+            QdTimestamp(window.resetsAt) {
+                Text(
+                    text = window.trayResetLabel(),
+                    style = typo.numeric.copy(fontWeight = FontWeight.SemiBold),
+                    color = fill,
+                    maxLines = 1,
+                )
+            }
         }
         QdProgressBar(
             progress = primaryPct / 100f,
@@ -736,12 +745,14 @@ private fun TrayResetCreditsRow(summary: CodexResetSummary) {
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            Text(
-                text = summary.compactLabel(),
-                style = typo.numeric.copy(fontWeight = FontWeight.SemiBold),
-                color = fill,
-                maxLines = 1,
-            )
+            QdTimestamp(summary.nearestExpiresAt) {
+                Text(
+                    text = summary.compactLabel(),
+                    style = typo.numeric.copy(fontWeight = FontWeight.SemiBold),
+                    color = fill,
+                    maxLines = 1,
+                )
+            }
         }
         summary.credits.take(4).forEach { credit ->
             Row(
@@ -756,12 +767,14 @@ private fun TrayResetCreditsRow(summary: CodexResetSummary) {
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                Text(
-                    text = credit.expiryLabel(),
-                    style = typo.numeric,
-                    color = if (credit.isExpiringSoon()) colors.warning else colors.textTertiary,
-                    maxLines = 1,
-                )
+                QdTimestamp(credit.expiresAt) {
+                    Text(
+                        text = credit.expiryLabel(),
+                        style = typo.numeric,
+                        color = if (credit.isExpiringSoon()) colors.warning else colors.textTertiary,
+                        maxLines = 1,
+                    )
+                }
             }
         }
     }
@@ -862,15 +875,18 @@ private fun List<AccountUiState>.toDesktopStatusBarState(
                         usedPct = (window.usedRatio * 100).roundToInt().coerceIn(0, 100),
                         remainingPct = (window.remainingRatio * 100).roundToInt().coerceIn(0, 100),
                         resetLabel = window.trayResetLabel(),
+                        resetTooltip = window.resetsAt?.exactLocalTimeLabel(),
                     )
                 },
                 resetAvailable = resetSummary?.availableCount ?: 0,
                 resetLabel = resetSummary?.compactLabel(),
+                resetTooltip = resetSummary?.nearestExpiresAt?.exactLocalTimeLabel(),
                 resetUrgent = resetSummary?.expiringSoon == true,
                 resetCredits = resetSummary?.credits.orEmpty().take(4).map { credit ->
                     DesktopStatusBarResetCredit(
                         title = credit.title ?: "Banked reset",
                         label = credit.expiryLabel(),
+                        tooltip = credit.expiresAt?.exactLocalTimeLabel(),
                         urgent = credit.isExpiringSoon(),
                     )
                 },

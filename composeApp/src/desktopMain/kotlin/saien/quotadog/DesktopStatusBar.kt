@@ -68,6 +68,7 @@ internal data class DesktopStatusBarAccount(
     val windows: List<DesktopStatusBarUsageWindow>,
     val resetAvailable: Int = 0,
     val resetLabel: String? = null,
+    val resetTooltip: String? = null,
     val resetUrgent: Boolean = false,
     val resetCredits: List<DesktopStatusBarResetCredit> = emptyList(),
 )
@@ -75,6 +76,7 @@ internal data class DesktopStatusBarAccount(
 internal data class DesktopStatusBarResetCredit(
     val title: String,
     val label: String,
+    val tooltip: String? = null,
     val urgent: Boolean = false,
 )
 
@@ -83,6 +85,7 @@ internal data class DesktopStatusBarUsageWindow(
     val usedPct: Int,
     val remainingPct: Int,
     val resetLabel: String,
+    val resetTooltip: String? = null,
 )
 
 @Composable
@@ -414,6 +417,8 @@ private fun DesktopStatusBarState.toJson(): String {
                 append("\"remainingPct\":").append(window.remainingPct)
                 append(',')
                 appendJsonField("resetLabel", window.resetLabel)
+                append(',')
+                appendJsonField("resetTooltip", window.resetTooltip.orEmpty())
                 append('}')
             }
             append(']')
@@ -421,6 +426,8 @@ private fun DesktopStatusBarState.toJson(): String {
             append("\"resetAvailable\":").append(account.resetAvailable)
             append(',')
             appendJsonField("resetLabel", account.resetLabel.orEmpty())
+            append(',')
+            appendJsonField("resetTooltip", account.resetTooltip.orEmpty())
             append(',')
             append("\"resetUrgent\":").append(account.resetUrgent)
             append(',')
@@ -431,6 +438,8 @@ private fun DesktopStatusBarState.toJson(): String {
                 appendJsonField("title", credit.title)
                 append(',')
                 appendJsonField("label", credit.label)
+                append(',')
+                appendJsonField("tooltip", credit.tooltip.orEmpty())
                 append(',')
                 append("\"urgent\":").append(credit.urgent)
                 append('}')
