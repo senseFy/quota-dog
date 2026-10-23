@@ -12,10 +12,21 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.datetime.Clock
 
-class CloudSyncCoordinator(
+class CloudSyncCoordinator internal constructor(
     private val localRepository: CloudSyncLocalRepository,
-    private val remoteBackend: CloudSyncRemoteBackend = DropboxSyncBackend()
+    private val remoteBackend: CloudSyncRemoteBackend,
+    private val encryptDocument: (CloudSyncDocumentV1, String) -> String,
 ) {
+    // Production always uses the default KDF strength; tests can avoid that cost internally.
+    constructor(
+        localRepository: CloudSyncLocalRepository,
+        remoteBackend: CloudSyncRemoteBackend = DropboxSyncBackend(),
+    ) : this(
+        localRepository,
+        remoteBackend,
+        { document, passphrase -> CloudSyncCrypto.encryptDocument(document, passphrase) },
+    )
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val syncMutex = Mutex()
     private var passphrase: String? = null
@@ -102,7 +113,7 @@ class CloudSyncCoordinator(
                 val local = localRepository.exportDocument()
                     .copy(updatedAtEpochMillis = Clock.System.now().toEpochMilliseconds())
                 val remote = remoteBackend.pull()
-                val encrypted = CloudSyncCrypto.encryptDocument(local, normalizedPassphrase)
+                val encrypted = encryptDocument(local, normalizedPassphrase)
                 remoteBackend.push(encrypted, remote?.rev ?: remoteBackend.storedRev())
                 _state.value = CloudSyncUiState(
                     status = CloudSyncStatus.Connected,
@@ -231,7 +242,7 @@ class CloudSyncCoordinator(
         rev: String?
     ) {
         val toUpload = merged.copy(updatedAtEpochMillis = Clock.System.now().toEpochMilliseconds())
-        val encrypted = CloudSyncCrypto.encryptDocument(toUpload, activePassphrase)
+        val encrypted = encryptDocument(toUpload, activePassphrase)
         try {
             remoteBackend.push(encrypted, rev)
         } catch (_: DropboxSyncConflictException) {
@@ -246,7 +257,7 @@ class CloudSyncCoordinator(
                 mergeCloudSyncDocuments(local, latestDocument)
             }
             localRepository.applyDocument(retryMerged)
-            val retryEncrypted = CloudSyncCrypto.encryptDocument(
+            val retryEncrypted = encryptDocument(
                 retryMerged.copy(updatedAtEpochMillis = Clock.System.now().toEpochMilliseconds()),
                 activePassphrase
             )
