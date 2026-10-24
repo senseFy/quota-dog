@@ -2,12 +2,15 @@ package saien.quotadog
 
 import com.russhwolf.settings.MapSettings
 import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.fail
 
 class CloudSyncCoordinatorTest {
     @Test
@@ -58,13 +61,15 @@ class CloudSyncCoordinatorTest {
             rev = "rev-2"
         )
         val backend = FakeConflictBackend(initialRemote, conflictRemote)
-        val coordinator = CloudSyncCoordinator(localRepository, backend)
+        val coordinator = CloudSyncCoordinator(localRepository, backend, ::encryptForTest)
+        try {
+            coordinator.awaitConnected { coordinator.startUnlock(passphrase) }
 
-        coordinator.startUnlock(passphrase)
-        coordinator.awaitConnected()
-
-        assertEquals("remote-new", tokenStore.load(accountKey)?.accessToken)
-        assertEquals(2, backend.pushAttempts)
+            assertEquals("remote-new", tokenStore.load(accountKey)?.accessToken)
+            assertEquals(2, backend.pushAttempts)
+        } finally {
+            coordinator.cancelCurrentOperation()
+        }
     }
 
     private suspend fun assertManualOrderSurvivesPendingPull(conflict: Boolean, remoteMissing: Boolean) {
@@ -80,23 +85,24 @@ class CloudSyncCoordinatorTest {
                     settings = MapSettings(),
                 ),
                 backend,
+                ::encryptForTest,
             )
             try {
-                coordinator.startUnlock(passphrase)
-                coordinator.state.first { it.status == CloudSyncStatus.Connected }
+                coordinator.awaitConnected { coordinator.startUnlock(passphrase) }
                 val original = listOf(
                     AccountKey(ProviderId.CODEX, "a@example.com"),
                     AccountKey(ProviderId.GROK, "b@example.com"),
                 )
                 preferences.setAccountManualOrder(original)
                 preferences.setAccountSortMode(AccountSortMode.Manual)
-                coordinator.startPushLocalChanges()
-                backend.pendingPull.await()
+                coordinator.awaitConnected {
+                    coordinator.startPushLocalChanges()
+                    backend.pendingPull.await()
 
-                // The drag saves locally; its next push waits until the pointer is released.
-                preferences.setAccountManualOrder(original.reversed())
-                backend.releasePull.complete(Unit)
-                coordinator.state.first { it.status == CloudSyncStatus.Connected }
+                    // The drag saves locally; its next push waits until the pointer is released.
+                    preferences.setAccountManualOrder(original.reversed())
+                    backend.releasePull.complete(Unit)
+                }
 
                 assertEquals(original.reversed(), preferences.accountManualOrder.value)
                 val uploaded = CloudSyncCrypto.decryptDocument(backend.remote!!.content, passphrase)
@@ -106,6 +112,9 @@ class CloudSyncCoordinatorTest {
             }
         }
     }
+
+    private fun encryptForTest(document: CloudSyncDocumentV1, passphrase: String): String =
+        CloudSyncCrypto.encryptDocument(document, passphrase, iterations = 2)
 
     private fun encryptedDocument(
         passphrase: String,
@@ -125,7 +134,7 @@ class CloudSyncCoordinatorTest {
             )
         )
         return DropboxRemoteFile(
-            content = CloudSyncCrypto.encryptDocument(document, passphrase, iterations = 2),
+            content = encryptForTest(document, passphrase),
             rev = rev
         )
     }
@@ -139,11 +148,22 @@ class CloudSyncCoordinatorTest {
         )
     }
 
-    private suspend fun CloudSyncCoordinator.awaitConnected() {
-        withTimeout(5_000) {
-            while (state.value.status != CloudSyncStatus.Connected) {
-                delay(20)
+    private suspend fun CloudSyncCoordinator.awaitConnected(action: suspend () -> Unit) = withTimeout(5_000) {
+        // Watch failures even while the action is waiting for a paused backend pull.
+        val failure = launch(start = CoroutineStart.UNDISPATCHED) {
+            val result = state.drop(1).first {
+                it.status == CloudSyncStatus.Error || it.status == CloudSyncStatus.Locked ||
+                    it.status == CloudSyncStatus.Disconnected
             }
+            fail("Sync ended with ${result.status}: ${result.message}")
+        }
+        try {
+            action()
+            // The action starts from Locked or awaits pendingPull before returning. Read the
+            // current state: a fast sync can finish with the same Connected value as before.
+            state.first { it.status == CloudSyncStatus.Connected }
+        } finally {
+            failure.cancel()
         }
     }
 
