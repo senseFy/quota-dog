@@ -130,8 +130,8 @@ the command alone does not install a scheduled job.
 Renewal verifies the previous signature and retains its releases, increments
 the manifest sequence, and signs new timestamps. Manifest sequence and app
 release sequence are independent. No signing key or renewal job runs in
-Cloudflare. Until the first explicit publication, the stable endpoint remains
-404 and the app reports that the update service could not be reached.
+Cloudflare. An unpublished channel returns 404; conditional renewal never
+initializes one automatically.
 
 ## Verification and recovery
 
@@ -175,23 +175,25 @@ application crashes or data migrations.
 - Desktop UI/receipt/runtime tests, shared desktop and iOS simulator tests,
   Android debug packaging, iOS compilation, publisher signature tests and
   Worker tests passed. Account-dependent live provider tests were excluded.
-- The production app and DMG passed Developer ID signing, Apple notarization,
-  stapling and Gatekeeper assessment. Feed preparation verified the final DMG
-  and its signed manifest without publishing it.
-- The signed acceptance host rejected a bad manifest signature served through
-  the public Cloudflare domain.
-- The native helper replaced an isolated installed app using the exact DMG
-  downloaded through the authenticated R2 API (SHA-256 matched). The new host
-  cleared its receipt, confirmed the transaction, removed the retained old app
-  and preserved sentinel data. This separate probe terminated its fixture host;
-  it does not establish the normal public-download/handoff path. It also exposed
-  an acceptance assertion that incorrectly counted the helper's persistent lock
-  file as a transaction directory; that assertion is now corrected.
-- **Full public HTTPS upgrade and altered-digest acceptance remain pending.**
-  Downloads from this machine to the public domain were approximately 5–25 KB/s
-  and eventually timed out. Temporary R2 objects were deleted. Run a fresh
-  `make test-updater-macos` after resolving the network path; do not reuse the
-  earlier app fixtures because the acceptance assertion changed.
+- The follow-up run passed 16 desktop tests and both publisher tests, including
+  actual Ed25519 signatures, conditional renewal and tampering rejection.
+- Version **1.0.12 (24)** passed Developer ID signing, Apple notarization,
+  stapling and Gatekeeper assessment. Its ARM64 DMG is 85,621,305 bytes with
+  SHA-256 `194e01737316befbd887a41509339a2e697a5b8d4215a8b0a21328a6b79dbada`.
+- All four fresh, signed/notarized acceptance cases passed through the public
+  Cloudflare HTTPS domain: normal upgrade, receipt-write failure/retry, invalid
+  manifest signature and incorrect artifact SHA-256. Both upgrade cases
+  observed normal host exit, a new process, confirmation, retained-old-bundle
+  cleanup and preservation of sentinel data. The fault case also observed a
+  blocked Quit before storage recovered.
+- The report is `build/updater-acceptance/20261024-153219-ca515ef4/report.json`.
+  Temporary R2 objects were deleted without errors; the cached package URL
+  returned 404 after deletion. Earlier download timeouts were resolved by
+  changing this validation machine's local route for the update domain.
+- The ARM64 package was uploaded, downloaded again through its public URL and
+  verified byte-for-byte by size/SHA-256 before publishing the signed stable
+  feed. The publisher then fetched and verified the published feed.
 
-No production feed or release was published. The first updater-enabled release
-still needs its normal version bump and manual installation by existing users.
+Existing users need to install the first updater-enabled DMG manually.
+Automatic feed scheduling and the encrypted offline key backup still require
+operator configuration; `make update-renew` alone does not schedule itself.

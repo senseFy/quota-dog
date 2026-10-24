@@ -11,7 +11,7 @@ bucket domain is needed. The Worker holds no update signing key.
 | `/updates/feeds/stable.json` | `feeds/stable.json` | No storage; every check reads R2 |
 | `/updates/releases/24/QuotaDog-1.0.12-macos-aarch64.dmg` | `releases/24/QuotaDog-1.0.12-macos-aarch64.dmg` | Immutable; up to one year |
 
-The release URL above is an example, not an existing release. Only feed JSON
+The release URL above is the first updater-enabled ARM64 release. Only feed JSON
 and versioned DMG paths are exposed. Downloads are streamed without changing
 their bytes or redirecting. Missing objects are not cached. Package caching
 is best-effort and subject to Cloudflare's cache object-size limits.
@@ -43,9 +43,9 @@ other routes. R2 remains private and `workers.dev`/preview URLs are disabled.
 ## Publish signed updates
 
 The app's updater and publication commands are documented in
-[`docs/macos-updates.md`](../../docs/macos-updates.md). Until a real signed
-feed is published, `/updates/feeds/stable.json` intentionally returns 404.
-Do not replace it with an unsigned placeholder.
+[`docs/macos-updates.md`](../../docs/macos-updates.md). The signed stable feed
+and ARM64 release **1.0.12 (24)** were published and publicly verified on
+2026-10-24. Never replace the feed with an unsigned placeholder.
 
 1. Build, sign, notarize and staple the final DMG.
 2. Use the kmp-updater publisher to calculate its size/SHA-256 and sign a
@@ -77,5 +77,5 @@ curl --head https://quotadog.saien.pro/updates/feeds/stable.json
 ```
 
 Tests cover exact bytes, no redirects, feed freshness, package caching,
-HEAD metadata, missing objects and restricted object paths. A missing feed
-is expected until updater publishing is configured.
+HEAD metadata, missing objects and restricted object paths. The stable feed
+must now return HTTP 200; acceptance feeds/packages return 404 after cleanup.
