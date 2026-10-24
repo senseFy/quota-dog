@@ -1,0 +1,20 @@
+{
+  "name": "quotadog",
+  "main": "worker.mjs",
+  "account_id": "c65e01069017b7e2fcf6cd1ac338e642",
+  "compatibility_date": "2026-10-24",
+  "workers_dev": false,
+  "preview_urls": false,
+  "routes": [
+    { "pattern": "quotadog.saien.pro", "custom_domain": true }
+  ],
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "run_worker_first": true
+  },
+  "r2_buckets": [
+    { "binding": "RELEASES", "bucket_name": "quotadog-releases" }
+  ],
+  "observability": { "enabled": false }
+}

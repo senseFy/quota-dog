@@ -35,6 +35,9 @@ jobs:
       - name: Run mobile release contract tests
         run: make test-mobile-release
 
+      - name: Test update hosting
+        run: node --test infra/cloudflare/worker.test.mjs
+
       - name: Assemble Android debug APK
         run: ./gradlew :androidApp:assembleDebug --stacktrace
 

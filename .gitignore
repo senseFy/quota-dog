@@ -85,6 +85,9 @@ $RECYCLE.BIN/
 
 # Node (if any tooling)
 node_modules/
+.wrangler/
+.dev.vars
+.dev.vars.*
 
 # Env / secrets
 .env

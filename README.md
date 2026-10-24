@@ -239,6 +239,12 @@ Optional env vars: `RELEASE_VERSION`, `CODESIGN_IDENTITY`, `NOTARY_PROFILE`,
 
 ### Publishing a GitHub Release
 
+The app domain is [quotadog.saien.pro](https://quotadog.saien.pro). Its
+Cloudflare Worker and private R2 update bucket are configured in
+[`infra/cloudflare`](infra/cloudflare/README.md). The `/updates/` hosting
+paths are reserved for signed update feeds and immutable release packages;
+hosting alone does not enable updates in the app.
+
 Pushing a `vX.Y.Z` tag triggers
 [`.github/workflows/release.yml`](.github/workflows/release.yml), which builds
 and attaches:
