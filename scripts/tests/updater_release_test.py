@@ -13,9 +13,55 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from publish_update import sign_feed, verify_feed
 from updater_tools import tool
 import publish_update
+import record_update_feed
 
 
 class PublisherTests(unittest.TestCase):
+    def test_public_audit_records_only_a_new_verified_feed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            private = root / "release.private-key"
+            public = subprocess.check_output([str(tool("publisher")), "keygen", str(private)], text=True).strip()
+            config = dict(keyId="test-key", publicKey=public, baseUrl="https://updates.example.test/updates")
+            (root / "updater.properties").write_text("\n".join(f"{k}={v}" for k, v in config.items()))
+            now = int(time.time())
+            payload = dict(schema=1, appId="saien.quotadog", channel="stable", sequence=10,
+                           issuedAt=now, expiresAt=now + 86400, releases=[])
+            old = root / "old.json"
+            new = root / "new.json"
+            sign_feed(payload, old, config, private)
+            sign_feed(dict(payload, sequence=11), new, config, private)
+            remote = dict(feed=old.read_bytes())
+            writes = []
+            original = subprocess.check_output
+
+            def fetch(url, destination, maximum=262144):
+                Path(destination).write_bytes(remote["feed"])
+                return True
+
+            def github(command, **kwargs):
+                if command[0] != "gh": return original(command, **kwargs)
+                if "PUT" in command:
+                    writes.append(json.loads(kwargs["input"]))
+                    return b'{"commit":{"html_url":"https://example.test/commit"}}'
+                return json.dumps(dict(sha="existing-file-sha", content=base64.b64encode(old.read_bytes()).decode())).encode()
+
+            with patch.object(record_update_feed, "ROOT", root), patch.object(record_update_feed, "fetch", fetch), \
+                    patch.object(record_update_feed.subprocess, "check_output", github):
+                record_update_feed.main()
+                self.assertEqual(writes, [])
+                remote["feed"] = new.read_bytes()
+                record_update_feed.main()
+                self.assertEqual(len(writes), 1)
+                self.assertEqual(writes[0]["sha"], "existing-file-sha")
+                self.assertEqual(writes[0]["branch"], "main")
+                self.assertEqual(base64.b64decode(writes[0]["content"]), new.read_bytes())
+                envelope = json.loads(new.read_bytes())
+                envelope["payload"] = base64.b64encode(json.dumps(dict(payload, sequence=12)).encode()).decode()
+                remote["feed"] = json.dumps(envelope).encode()
+                with self.assertRaises(subprocess.CalledProcessError): record_update_feed.main()
+                self.assertEqual(len(writes), 1)
+
     def test_scheduled_renewal_preserves_releases_and_rejects_tampering(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

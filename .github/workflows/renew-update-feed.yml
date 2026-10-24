@@ -1,0 +1,78 @@
+name: Renew update feed
+
+on:
+  schedule:
+    # Daily at 11:17 Asia/Shanghai; avoid the busy start of the UTC hour.
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+    inputs:
+      force_refresh:
+        description: Renew now, even if the feed is not near expiry
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# All future jobs that write stable.json must use this same concurrency group.
+concurrency:
+  group: quotadog-stable-feed
+  cancel-in-progress: false
+
+jobs:
+  renew:
+    if: github.repository == 'senseFy/quota-dog' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: updater-production
+    permissions:
+      contents: write # Record the public signed feed after renewal, keeping the schedule active.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+          package-manager-cache: false
+
+      - name: Install publishing tools and verify signing behavior
+        run: |
+          npm install --global wrangler@4.78.0
+          openssl version
+          python3 scripts/tests/updater_release_test.py
+
+      - name: Renew signed stable feed
+        env:
+          QUOTADOG_UPDATER_PRIVATE_KEY: ${{ secrets.QUOTADOG_UPDATER_PRIVATE_KEY }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.QUOTADOG_CLOUDFLARE_API_TOKEN }}
+          FORCE_REFRESH: ${{ inputs.force_refresh || false }}
+          WRANGLER_SEND_METRICS: "false"
+        shell: bash
+        run: |
+          set -euo pipefail
+          : "${QUOTADOG_UPDATER_PRIVATE_KEY:?Missing update signing key}"
+          : "${CLOUDFLARE_API_TOKEN:?Missing Cloudflare upload credential}"
+          umask 077
+          key_dir="$(mktemp -d "$RUNNER_TEMP/quotadog-update-key.XXXXXX")"
+          trap 'rm -rf "$key_dir"' EXIT
+          printf '%s' "$QUOTADOG_UPDATER_PRIVATE_KEY" > "$key_dir/private-key"
+          unset QUOTADOG_UPDATER_PRIVATE_KEY
+          mode=--renew-if-due
+          if [[ "$FORCE_REFRESH" == true ]]; then mode=--refresh; fi
+          python3 scripts/publish_update.py "$mode" --publish --private-key "$key_dir/private-key"
+
+      - name: Record the public signed feed
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/record_update_feed.py

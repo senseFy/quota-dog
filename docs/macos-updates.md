@@ -47,7 +47,14 @@ The publisher key created for this app is stored locally at:
 ~/.config/quotadog/updater/quotadog-2026.private-key
 ```
 
-The file is mode `0600`. Keep an encrypted offline backup. Do not regenerate it
+The file is mode `0600`. This is the update manifest signing key, separate from
+the Apple Developer ID certificate and Cloudflare upload credentials. The
+workflow also uses an encrypted GitHub environment secret, whose original
+value cannot be downloaded from GitHub later. Keep an independent encrypted
+backup of the local file, for example a password-manager attachment or a copy
+on an encrypted external drive. A second copy on the same Mac does not protect
+against losing that Mac. No backup has been made to an external destination yet.
+Do not regenerate it
 for a routine release: previously installed apps trust the pinned public key.
 The SDK supports overlapping keys for planned rotation, but loss of the only
 trusted key requires a separately distributed replacement application.
@@ -124,8 +131,34 @@ For a daily scheduler, use `make update-renew`. It publishes only when the signe
 feed expires within 10 days, renews it for 30 days, and skips an unpublished
 channel. It verifies the previous signature even when renewal is not yet due.
 The signing machine needs JDK 21, OpenSSL 3, Wrangler credentials and the private
-key. Scheduling and an encrypted offline key backup must be configured separately;
-the command alone does not install a scheduled job.
+key. The command alone does not install a local scheduled job.
+
+`.github/workflows/renew-update-feed.yml` runs this policy daily at 03:17 UTC
+(11:17 Asia/Shanghai), and supports a manual `force_refresh` run for verification
+or immediate renewal. It uses JDK 21, pinned action commits and Wrangler 4.78.0.
+It runs only on this repository's `main` branch. GitHub's `updater-production`
+environment is also restricted to `main`, with these environment secrets:
+
+- `QUOTADOG_UPDATER_PRIVATE_KEY`: the contents of the existing signing-key file.
+- `QUOTADOG_CLOUDFLARE_API_TOKEN`: the authenticated R2 upload credential.
+
+Secrets are supplied only to the publication step. The signing key is written
+to a mode-0600 temporary file and removed when the step exits. No private key
+is committed, printed or included in workflow artifacts. The job verifies the
+publisher against temporary test keys before receiving production secrets.
+Every workflow that publishes `stable.json` must share the concurrency group
+`quotadog-stable-feed`; do not publish locally while this job is running.
+
+GitHub can delay scheduled runs, so renewal starts with a 10-day margin. After
+renewal, the workflow commits the verified public signed feed to
+`infra/cloudflare/published/stable.json` as an audit record. An unchanged feed
+does not create a commit. Production still reads R2, never this audit file.
+These renewal commits also keep repository activity current: GitHub disables
+scheduled workflows in public repositories after 60 days of inactivity. This
+is why the job has `contents: write`; the audit step receives only GitHub's
+short-lived repository token, not the update or Cloudflare secrets. Keep Actions
+failure/disable notifications enabled in case the workflow stops succeeding. See
+[GitHub's schedule documentation](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule).
 
 Renewal verifies the previous signature and retains its releases, increments
 the manifest sequence, and signs new timestamps. Manifest sequence and app
@@ -195,5 +228,4 @@ application crashes or data migrations.
   feed. The publisher then fetched and verified the published feed.
 
 Existing users need to install the first updater-enabled DMG manually.
-Automatic feed scheduling and the encrypted offline key backup still require
-operator configuration; `make update-renew` alone does not schedule itself.
+The encrypted offline key backup still requires an operator-selected destination.
