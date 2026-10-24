@@ -10,7 +10,8 @@ Windows, Linux and mobile installations do not use this installer.
 
 - The app pins the Ed25519 public key, key ID, Developer ID team and update
   origin from `updater.properties`. These are packaged resources, not runtime
-  environment overrides. Private signing keys are never bundled or uploaded.
+  environment overrides. Private signing keys are never bundled with the app
+  or published in R2 release objects.
 - `VERSION_CODE` is the desktop release sequence as well as the shared store
   build. It is embedded as a string in `Info.plist` (`KMPUpdaterRelease`) and
   in the desktop build metadata. Display versions do not determine update order.
@@ -50,10 +51,12 @@ The publisher key created for this app is stored locally at:
 The file is mode `0600`. This is the update manifest signing key, separate from
 the Apple Developer ID certificate and Cloudflare upload credentials. The
 workflow also uses an encrypted GitHub environment secret, whose original
-value cannot be downloaded from GitHub later. Keep an independent encrypted
+value cannot be retrieved from the Secrets settings page or metadata API.
+Keep an independent encrypted
 backup of the local file, for example a password-manager attachment or a copy
 on an encrypted external drive. A second copy on the same Mac does not protect
-against losing that Mac. No backup has been made to an external destination yet.
+against losing that Mac. For a strictly offline copy, use a disconnected
+encrypted drive. No independent backup has been made to an external destination yet.
 Do not regenerate it
 for a routine release: previously installed apps trust the pinned public key.
 The SDK supports overlapping keys for planned rotation, but loss of the only
@@ -228,4 +231,4 @@ application crashes or data migrations.
   feed. The publisher then fetched and verified the published feed.
 
 Existing users need to install the first updater-enabled DMG manually.
-The encrypted offline key backup still requires an operator-selected destination.
+The independent encrypted key backup still requires an operator-selected destination.
