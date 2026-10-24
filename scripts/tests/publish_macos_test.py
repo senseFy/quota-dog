@@ -216,12 +216,57 @@ class MacOSReleaseTests(unittest.TestCase):
             if command[:3] == ("gh", "release", "download"):
                 (Path(command[command.index("--dir") + 1]) / "QuotaDog-1.0.13-macos-aarch64.dmg").write_bytes(dmg.read_bytes())
 
-        with patch.object(release, "find_github_release", side_effect=[None, draft, dict(draft, draft=False)]), \
-                patch.object(release, "check_github_tag"), patch.object(release, "run", run):
+        with patch.object(release, "find_github_release", side_effect=[None, None, draft, draft, dict(draft, draft=False)]), \
+                patch.object(release, "check_github_tag"), patch.object(release, "run", run), \
+                patch.object(release.time, "sleep") as sleep:
             release.github_release(self.directory, self.state, dmg)
+        self.assertEqual(sleep.call_count, 2)
         self.assertEqual([command[2] for command in commands], ["create", "upload", "download", "edit"])
         self.assertIn("--draft", commands[0])
         self.assertIn("--draft=false", commands[-1])
+        self.assertTrue(json.loads((self.directory / "state.json").read_text())["github_draft_created"])
+
+    def test_invisible_created_draft_is_not_created_again_on_resume(self):
+        self.state["source"] = "a" * 40
+        with patch.object(release, "find_github_release", return_value=None), \
+                patch.object(release, "check_github_tag"), patch.object(release, "run") as run, \
+                patch.object(release.time, "sleep"):
+            with self.assertRaisesRegex(RuntimeError, "resume this run"):
+                release.github_release(self.directory, self.state, self.directory / "package.dmg")
+            self.assertEqual(run.call_count, 1)
+            self.assertEqual(run.call_args.args[:3], ("gh", "release", "create"))
+            self.state = json.loads((self.directory / "state.json").read_text())
+            run.reset_mock()
+            with self.assertRaisesRegex(RuntimeError, "resume this run"):
+                release.github_release(self.directory, self.state, self.directory / "package.dmg")
+            run.assert_not_called()
+
+    def test_status_distinguishes_live_cloudflare_release_from_pending_github(self):
+        self.state.update(github=True, done=["Publish update feed", "Deploy website"], active_step="Publish GitHub Release")
+        output = io.StringIO()
+        release.publication_status(self.state, stream=output)
+        self.assertIn("PARTIALLY PUBLISHED", output.getvalue())
+        self.assertIn("App download / update feed: published and verified", output.getvalue())
+        self.assertIn("Website: deployed", output.getvalue())
+        self.assertIn("GitHub Release: not confirmed published", output.getvalue())
+        self.assertIn("Stopped at: Publish GitHub Release", output.getvalue())
+        self.state["done"].append("Publish GitHub Release")
+        self.state.pop("active_step")
+        self.state["complete"] = True
+        output = io.StringIO()
+        release.publication_status(self.state, stream=output)
+        self.assertIn("SUCCESS: release publication is complete", output.getvalue())
+        self.assertNotIn("not confirmed", output.getvalue())
+
+    def test_completed_run_reports_success_without_suggesting_another_retry(self):
+        self.state.update(complete=True, done=["Publish update feed", "Deploy website"])
+        release.save(self.directory, self.state)
+        with patch.object(sys, "argv", ["publish_macos.py", "--resume", str(self.directory)]), \
+                patch.object(release, "preflight", side_effect=AssertionError("Already complete")):
+            release.main()
+        self.assertIn("SUCCESS: release publication is complete", self.output.getvalue())
+        self.assertNotIn("Resume:", self.output.getvalue())
+        self.assertNotIn("will be committed and pushed", self.output.getvalue())
 
     def test_existing_github_asset_is_verified_without_overwriting(self):
         dmg = self.directory / "package.dmg"

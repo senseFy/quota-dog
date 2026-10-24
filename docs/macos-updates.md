@@ -123,12 +123,15 @@ python3 scripts/publish_macos.py --version 1.0.13 --notes /path/to/notes.md \
   --notes-language zh-CN --github-release yes --yes
 ```
 
-Each run prints its resume command and saves checkpoints under ignored
-`build/release/macos/<run>/`. Keep this directory until publication is complete.
+Each run saves checkpoints under ignored `build/release/macos/<run>/`;
+incomplete runs also print their resume command. Keep this directory until publication is complete.
 Successful build/notarization steps are reused. Retries recheck the local DMG,
 public package/feed and website; a different existing artifact or different
 release notes are rejected instead of overwritten. GitHub drafts are resumed
-without replacing existing assets. A completed run is a no-op.
+without replacing existing assets. After creating or publishing a draft, the
+command retries delayed GitHub listing results with increasing pauses. A saved
+successful draft creation is queried again on resume instead of creating another
+draft. A completed run is a no-op.
 
 Do not edit release metadata or switch source commits mid-run. If interrupted
 during the metadata commit, resume first: it can recover its own partial edits
@@ -137,7 +140,10 @@ run for manual resolution. `--prepare-only` still creates a local release commit
 and submits binaries to Apple; it does not push, upload to R2 or deploy the site.
 
 Publication spans several services and is not atomic. If a later step fails,
-earlier published steps remain live; resume the same run. The command checks
+earlier published steps remain live; resume the same run. The final status lists
+the app download/update feed, website and GitHub Release separately. For example,
+`PARTIALLY PUBLISHED` with a published feed and a deployed website means the app
+is already available even if GitHub Release is not yet confirmed. The command checks
 for active feed-renewal Actions jobs before publication, but this is not a
 distributed lock. Continue to use one publisher and avoid concurrent releases
 or feed renewal jobs. `--allow-existing` is an explicit publisher retry mode;

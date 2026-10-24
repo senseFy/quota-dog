@@ -327,6 +327,20 @@ def find_github_release(tag):
     return next((release for page in pages for release in page if release["tag_name"] == tag), None)
 
 
+def wait_for_github_release(tag, published=False):
+    # GitHub's release listing can briefly lag successful create/edit requests.
+    # Retry reads only; never repeat a create just because its result is absent.
+    for attempt in range(6):
+        release = find_github_release(tag)
+        if release is not None and (not published or not release["draft"]):
+            return release
+        if attempt < 5:
+            delay = 2 ** attempt
+            print(f"Waiting for GitHub to show {'the published release' if published else 'the draft'}; retrying in {delay}s...", flush=True)
+            time.sleep(delay)
+    raise RuntimeError("GitHub has not yet returned the expected release state; resume this run to retry")
+
+
 def check_github_tag(state, required=False):
     response = subprocess.run(["gh", "api", f"repos/{REPOSITORY}/git/ref/tags/{state['tag']}"],
                               cwd=ROOT, text=True, capture_output=True)
@@ -341,7 +355,7 @@ def check_github_tag(state, required=False):
 
 def github_release(directory, state, dmg):
     tag = state["tag"]
-    release = find_github_release(tag)
+    release = wait_for_github_release(tag) if state.get("github_draft_created") else find_github_release(tag)
     check_github_tag(state, required=bool(release and not release["draft"]))
     body = state["notes"].rstrip() + f"\n\nSource: `{state['source']}`\nBuild: {state['build']} (macOS Apple Silicon)\n"
     notes = directory / "github-notes.md"
@@ -349,9 +363,9 @@ def github_release(directory, state, dmg):
     if release is None:
         run("gh", "release", "create", tag, "--repo", REPOSITORY, "--draft", "--target", state["source"],
             "--title", f"QuotaDog {state['version']} (macOS)", "--notes-file", notes)
-        release = find_github_release(tag)
-        if release is None:
-            raise RuntimeError("Created GitHub draft is not yet visible; resume to retry")
+        state["github_draft_created"] = True
+        save(directory, state)
+        release = wait_for_github_release(tag)
     if release["target_commitish"] != state["source"] or (release.get("body") or "").replace("\r\n", "\n").strip() != body.strip():
         raise RuntimeError("Existing GitHub Release has different source or notes; refusing to replace it")
     name = f"QuotaDog-{state['version']}-macos-aarch64.dmg"
@@ -371,16 +385,44 @@ def github_release(directory, state, dmg):
             raise RuntimeError("GitHub asset differs; it will not be overwritten")
     if release["draft"]:
         run("gh", "release", "edit", tag, "--repo", REPOSITORY, "--draft=false", "--latest")
-    published = find_github_release(tag)
-    if published is None or published["draft"]:
-        raise RuntimeError("GitHub Release is not yet public; resume to verify")
+    wait_for_github_release(tag, published=True)
     check_github_tag(state, required=True)
+
+
+def publication_status(state, stream=None):
+    stream = stream or sys.stdout
+    done = state.get("done", [])
+    feed = "Publish update feed" in done
+    website = "Deploy website" in done
+    github = "Publish GitHub Release" in done
+    github_requested = state.get("github", False)
+    if state.get("complete"):
+        overall = "SUCCESS: release publication is complete."
+    elif feed and website and (github or not github_requested):
+        overall = "PUBLISHED: distribution steps completed; local synchronization is incomplete."
+    elif feed or website or github:
+        overall = "PARTIALLY PUBLISHED: completed publication steps remain live."
+    elif state.get("publication_started"):
+        overall = "PUBLICATION INCOMPLETE: remote changes may have succeeded; resume to verify."
+    else:
+        overall = "NOT PUBLISHED: release preparation is incomplete or publication was deferred."
+    print(f"\n{overall}", file=stream, flush=True)
+    print("  App download / update feed: " + ("published and verified" if feed else "not confirmed published"), file=stream)
+    print("  Website: " + ("deployed" if website else "not confirmed deployed"), file=stream)
+    print("  GitHub Release: " + ("published and verified" if github else "not confirmed published" if github_requested else "not requested"), file=stream)
+    if state.get("active_step"):
+        print("  Stopped at: " + state["active_step"], file=stream)
 
 
 def summary(state, directory=None):
     config = properties(ROOT / "updater.properties")
     print(f"\nQuotaDog {state['version']} (build {state['build']}, Apple Silicon)")
-    print("Shared version/build, CHANGELOG.md and the website will be committed and pushed to origin/main.")
+    if state.get("complete"):
+        print("This release has already been published. Details of the published artifact:")
+    elif state.get("source"):
+        print("Release metadata is committed. This run reuses the prepared source and completed build steps.")
+    else:
+        print("Shared version/build, CHANGELOG.md and the website will be committed and pushed to origin/main.")
     print(f"Update origin: {config['baseUrl']}\nNotes language: {state['language']}")
     print("GitHub Release: " + (state["tag"] if state["github"] else "disabled"))
     print("\n" + state["notes"])
@@ -403,9 +445,12 @@ def release(directory, state, args, env):
             return
         check_source(state)
         print(f"\n== {name} ==", flush=True)
+        state["active_step"] = name
+        save(directory, state)
         action()
         if name not in state["done"]:
             state["done"].append(name)
+        state.pop("active_step", None)
         save(directory, state)
 
     step("Build and sign app", lambda: run("bash", "scripts/build_release.sh", env=env))
@@ -443,6 +488,8 @@ def release(directory, state, args, env):
     if digest(dmg) != state["sha256"] or dmg.stat().st_size != state["size"]:
         raise RuntimeError("DMG changed while awaiting confirmation; it will not be published")
     check_renewal()
+    state["publication_started"] = True
+    save(directory, state)
     # Check remote provenance even when the push previously succeeded.
     publish_source(state)
     step("Publish update feed", lambda: run(*publisher, "--publish", env=env), repeat=True)
@@ -467,6 +514,7 @@ def release(directory, state, args, env):
     print(f"\nPublished and verified QuotaDog {state['version']} ({state['build']}): {origin}")
     if state["github"]:
         print(f"https://github.com/{REPOSITORY}/releases/tag/{state['tag']}")
+    publication_status(state)
 
 
 def main():
@@ -484,6 +532,7 @@ def main():
     if args.resume and any((args.version, args.notes, args.notes_language, args.github_release, args.private_key != DEFAULT_KEY)):
         parser.error("--resume uses the saved version, notes, GitHub choice and key path; omit those options")
     directory = args.resume.expanduser().resolve() if args.resume else None
+    state = None
     try:
         if not directory and not args.dry_run:
             assert_clean()
@@ -498,6 +547,7 @@ def main():
             return
         if state.get("complete"):
             print("This release run is already complete.")
+            publication_status(state)
             return
         RUNS.mkdir(parents=True, exist_ok=True)
         with (RUNS / "publish.lock").open("a") as lock:
@@ -519,11 +569,15 @@ def main():
             release(directory, state, args, env)
     except (RuntimeError, OSError, ValueError, KeyError, argparse.ArgumentTypeError, subprocess.CalledProcessError, EOFError, KeyboardInterrupt) as error:
         print(f"\nRelease stopped: {error or 'interrupted'}", file=sys.stderr)
+        if state and "done" in state:
+            publication_status(state, stream=sys.stderr)
         return 1
     finally:
         if directory and (directory / "state.json").is_file():
-            command = shlex.join([sys.executable, "scripts/publish_macos.py", "--resume", str(directory)])
-            print(f"\nSaved release: {directory}\nResume: {command}", flush=True)
+            print(f"\nSaved release: {directory}", flush=True)
+            if not state or not state.get("complete"):
+                command = shlex.join([sys.executable, "scripts/publish_macos.py", "--resume", str(directory)])
+                print(f"Resume: {command}", flush=True)
     return 0
 
 
