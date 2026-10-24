@@ -243,7 +243,10 @@ The app domain is [quotadog.saien.pro](https://quotadog.saien.pro). Its
 Cloudflare Worker and private R2 update bucket are configured in
 [`infra/cloudflare`](infra/cloudflare/README.md). The `/updates/` hosting
 paths are reserved for signed update feeds and immutable release packages;
-hosting alone does not enable updates in the app.
+signed macOS builds expose **Settings → Software update**. See
+[macOS updates](docs/macos-updates.md) for signing keys, publishing, feed renewal,
+and isolated upgrade acceptance. Existing installations without the updater
+need one manual installation of a new signed release.
 
 Pushing a `vX.Y.Z` tag triggers
 [`.github/workflows/release.yml`](.github/workflows/release.yml), which builds

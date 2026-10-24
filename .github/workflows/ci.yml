@@ -32,6 +32,18 @@ jobs:
       - name: Run multiplatform tests
         run: ./gradlew :shared:allTests --stacktrace
 
+      - name: Run desktop UI and updater receipt tests
+        run: ./gradlew :composeApp:desktopTest --stacktrace
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Test update publisher signatures
+        run: |
+          export PATH="$(brew --prefix openssl@3)/bin:$PATH"
+          python3 scripts/tests/updater_release_test.py
+
       - name: Run mobile release contract tests
         run: make test-mobile-release
 

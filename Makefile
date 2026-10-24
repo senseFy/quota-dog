@@ -136,6 +136,24 @@ release-dmg-local: ## Build a signed macOS DMG; skip notarization.
 release-dmg-unsigned: ## Build an unsigned macOS DMG for local testing.
 	@./scripts/build_release_dmg.sh --skip-codesign --skip-notarize
 
+.PHONY: update-prepare update-publish update-refresh test-updater test-updater-macos
+
+update-prepare: ## Prepare a signed update feed; pass DMG=/path/to/notarized.dmg.
+	@python3 scripts/publish_update.py --dmg "$(DMG)" $(if $(NOTES),--notes "$(NOTES)",)
+
+update-publish: ## Upload a verified DMG, then publish the signed stable feed.
+	@python3 scripts/publish_update.py --dmg "$(DMG)" $(if $(NOTES),--notes "$(NOTES)",) --publish
+
+update-refresh: ## Renew and publish the existing signed feed without releasing a new app.
+	@python3 scripts/publish_update.py --refresh --publish
+
+test-updater: ## Test the updater UI/receipts and offline publisher signatures.
+	@$(GRADLE) :composeApp:desktopTest
+	@python3 scripts/tests/updater_release_test.py
+
+test-updater-macos: ## Run isolated signed/notarized upgrades through Cloudflare; requires release credentials.
+	@python3 scripts/test_macos_update.py $(UPDATER_ACCEPTANCE_ARGS)
+
 version-current: ## Print VERSION_NAME and VERSION_CODE from version.properties.
 	@./scripts/bump_version.sh --print-current
 

@@ -77,6 +77,7 @@ fun QdSettingsSheet(
     onDisconnectCloudSync: () -> Unit,
     onDismiss: () -> Unit,
     versionLabel: String,
+    updatesContent: (@Composable () -> Unit)? = null,
 ) {
     val colors = QdTheme.colors
     val typo = QdTheme.typography
@@ -392,6 +393,7 @@ fun QdSettingsSheet(
                     )
 
                     // About.
+                    updatesContent?.invoke()
                     QdSettingsRow(
                         title = "About",
                         description = "QuotaDog $versionLabel",

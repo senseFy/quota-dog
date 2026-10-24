@@ -80,6 +80,10 @@ import java.awt.Window as AwtWindow
 import kotlin.time.Duration.Companion.minutes
 
 fun main() = application {
+    val desktopMetadata = remember { DesktopUpdateMetadata.load() }
+    val updater = remember { if (isMacOs()) DesktopUpdater(desktopMetadata) else null }
+    DisposableEffect(updater) { onDispose { updater?.close() } }
+    val quit: () -> Unit = { updater?.quit(::exitApplication) ?: exitApplication() }
     val tokenStore = remember { PlatformTokenStore() }
     val usageSnapshotStore = remember { SettingsUsageSnapshotStore() }
     val preferences = remember { AppPreferences() }
@@ -116,7 +120,7 @@ fun main() = application {
             windowVisible = true
             mainWindowFocusToken += 1
         },
-        onQuit = ::exitApplication,
+        onQuit = quit,
         onStatusBarAvailabilityChanged = { statusBarAvailable = it },
     )
 
@@ -126,7 +130,7 @@ fun main() = application {
                 if (statusBarAvailable) {
                     windowVisible = false
                 } else {
-                    exitApplication()
+                    quit()
                 }
             },
             title = "QuotaDog",
@@ -159,9 +163,12 @@ fun main() = application {
                 cloudSync = cloudSync,
                 store = store,
                 manageBackgroundEffects = false,
+                versionLabel = "v${desktopMetadata.version} (${desktopMetadata.sequence})",
+                updatesContent = updater?.let { { DesktopUpdateSettings(it) } },
             )
         }
     }
+    LaunchedEffect(updater) { updater?.start(::exitApplication) }
 }
 
 @Composable

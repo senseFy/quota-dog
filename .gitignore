@@ -88,6 +88,8 @@ node_modules/
 .wrangler/
 .dev.vars
 .dev.vars.*
+__pycache__/
+*.private-key
 
 # Env / secrets
 .env

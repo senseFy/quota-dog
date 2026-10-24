@@ -13,6 +13,7 @@ ktor = "3.5.1"
 jna = "5.14.0"
 lucideIcons = "2.2.1"
 multiplatformSettings = "1.1.1"
+kmpUpdater = "0.1.0-alpha.1"
 
 [libraries]
 androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "androidx-activityCompose" }
@@ -24,6 +25,7 @@ compose-ui = { module = "org.jetbrains.compose.ui:ui", version.ref = "compose-pl
 compose-ui-test-junit4 = { module = "org.jetbrains.compose.ui:ui-test-junit4", version.ref = "compose-plugin" }
 kotlin-test = { module = "org.jetbrains.kotlin:kotlin-test", version.ref = "kotlin" }
 kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "kotlinxCoroutines" }
+kotlinx-coroutines-swing = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-swing", version.ref = "kotlinxCoroutines" }
 kotlinx-datetime = { module = "org.jetbrains.kotlinx:kotlinx-datetime", version.ref = "kotlinxDatetime" }
 kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinxSerializationJson" }
 ktor-client-android = { module = "io.ktor:ktor-client-android", version.ref = "ktor" }
@@ -36,6 +38,7 @@ jna = { module = "net.java.dev.jna:jna", version.ref = "jna" }
 lucide-icons-cmp = { module = "com.composables:icons-lucide-cmp", version.ref = "lucideIcons" }
 multiplatform-settings = { module = "com.russhwolf:multiplatform-settings", version.ref = "multiplatformSettings" }
 multiplatform-settings-test = { module = "com.russhwolf:multiplatform-settings-test", version.ref = "multiplatformSettings" }
+kmp-updater-jvm = { module = "io.github.sensefy:updater-jvm", version.ref = "kmpUpdater" }
 
 [plugins]
 androidApplication = { id = "com.android.application", version.ref = "agp" }

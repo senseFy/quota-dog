@@ -163,6 +163,8 @@ fun App(
     // Desktop tray keeps the process alive after the main window is hidden; host those
     // effects outside App so refresh/detect/sync session survive window teardown.
     manageBackgroundEffects: Boolean = true,
+    versionLabel: String = "v1.0.0",
+    updatesContent: (@Composable () -> Unit)? = null,
 ) {
     val themeMode by preferences.themeMode.collectAsState()
     val systemDark = rememberSystemDarkTheme()
@@ -176,7 +178,7 @@ fun App(
         if (manageBackgroundEffects) {
             QuotaDogBackgroundEffects(store = store, preferences = preferences, cloudSync = cloudSync)
         }
-        QuotaDogScreen(store, preferences, cloudSync)
+        QuotaDogScreen(store, preferences, cloudSync, versionLabel, updatesContent)
     }
 }
 
@@ -234,6 +236,8 @@ private fun QuotaDogScreen(
     store: QuotaDogStore,
     preferences: AppPreferences,
     cloudSync: CloudSyncCoordinator,
+    versionLabel: String,
+    updatesContent: (@Composable () -> Unit)?,
 ) {
     val state by store.state.collectAsState()
     val themeMode by preferences.themeMode.collectAsState()
@@ -624,7 +628,8 @@ private fun QuotaDogScreen(
                 snackbar.show("Dropbox sync disconnected", tone = QdSnackbarTone.Success)
             },
             onDismiss = { showSettings = false },
-            versionLabel = "v1.0.0",
+            versionLabel = versionLabel,
+            updatesContent = updatesContent,
         )
 
         QdConfirmDialog(

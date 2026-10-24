@@ -63,12 +63,9 @@ else
   CODESIGN_IDENTITY="$(resolve_codesign_identity)"
   [[ -n "${CODESIGN_IDENTITY:-}" ]] || die "CODESIGN_IDENTITY not set and no 'Developer ID Application' identity found in keychain."
   export CODESIGN_IDENTITY
-  export QUOTADOG_MAC_SIGN=1
+  # Seal the bundle only after embedding the updater and signing native JAR contents.
+  export QUOTADOG_MAC_SIGN=0
   detail "Codesign:" "$CODESIGN_IDENTITY"
-  GRADLE_ARGS+=(
-    -Pcompose.desktop.mac.sign=true
-    -Pcompose.desktop.mac.signing.identity="$CODESIGN_IDENTITY"
-  )
 fi
 
 echo ""
@@ -84,6 +81,12 @@ echo "📦 Packaging Compose Desktop app..."
 mkdir -p "$RELEASES_DIR"
 rm -rf "$OUTPUT_APP_PATH"
 cp -R "$GRADLE_APP_PATH" "$OUTPUT_APP_PATH"
+
+if [[ "$SKIP_CODESIGN" == "1" ]]; then
+  python3 "$ROOT_DIR/scripts/sign_macos_app.py" "$OUTPUT_APP_PATH" --unsigned
+else
+  python3 "$ROOT_DIR/scripts/sign_macos_app.py" "$OUTPUT_APP_PATH" --identity "$CODESIGN_IDENTITY"
+fi
 
 if [[ "$SKIP_CODESIGN" != "1" ]]; then
   echo ""

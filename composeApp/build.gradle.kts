@@ -20,6 +20,37 @@ val releaseVersionName: String =
         ?: versionProperties.getProperty("VERSION_NAME")?.takeIf { it.isNotBlank() }
         ?: "1.0.0"
 
+val updaterProperties = Properties().apply {
+    rootProject.file("updater.properties").inputStream().use { load(it) }
+}
+val acceptanceDirectory = providers.gradleProperty("quotadog.acceptanceDirectory").orNull
+val updateSequence = (if (acceptanceDirectory != null) {
+    providers.gradleProperty("quotadog.acceptanceSequence").get()
+} else {
+    versionProperties.getProperty("VERSION_CODE")
+}).also { require(it.toLong() > 0) }
+val desktopAppId = if (acceptanceDirectory != null) "saien.quotadog.acceptance" else "saien.quotadog"
+val desktopBuildProperties = layout.buildDirectory.dir("generated/desktopBuildProperties")
+val desktopMetadata = updaterProperties.stringPropertyNames().associateWith(updaterProperties::getProperty) + mapOf(
+    "appId" to desktopAppId,
+    "version" to releaseVersionName,
+    "sequence" to updateSequence,
+    "channel" to (providers.gradleProperty("quotadog.acceptanceChannel").orNull
+        ?.takeIf { acceptanceDirectory != null } ?: "stable"),
+    "acceptanceDirectory" to acceptanceDirectory.orEmpty(),
+)
+val generateDesktopBuildProperties by tasks.registering {
+    inputs.properties(desktopMetadata)
+    outputs.dir(desktopBuildProperties)
+    doLast {
+        val output = desktopBuildProperties.get().file("quotadog-build.properties").asFile
+        output.parentFile.mkdirs()
+        output.writeText(desktopMetadata.toSortedMap().entries.joinToString("\n", postfix = "\n") { (key, value) ->
+            "$key=${value.replace("\\", "\\\\")}"
+        })
+    }
+}
+
 val macStatusBarResourcesDir = layout.buildDirectory.dir("generated/macosStatusBarResources")
 val compileMacStatusBar by tasks.registering(Exec::class) {
     val source = layout.projectDirectory.file("src/desktopMain/native/macos/QuotaDogStatusBar.m")
@@ -101,9 +132,12 @@ kotlin {
         }
         val desktopMain by getting {
             resources.srcDir(macStatusBarResourcesDir)
+            resources.srcDir(desktopBuildProperties)
             dependencies {
                 implementation(compose.desktop.currentOs)
                 implementation(libs.jna)
+                implementation(libs.kmp.updater.jvm)
+                implementation(libs.kotlinx.coroutines.swing)
             }
         }
         val desktopTest by getting {
@@ -115,22 +149,22 @@ kotlin {
 }
 
 tasks.named("desktopProcessResources") {
-    dependsOn(compileMacStatusBar)
+    dependsOn(compileMacStatusBar, generateDesktopBuildProperties)
 }
 
 compose.desktop {
     application {
-        mainClass = "saien.quotadog.MainKt"
+        mainClass = if (acceptanceDirectory == null) "saien.quotadog.MainKt" else "saien.quotadog.UpdaterAcceptanceKt"
         jvmArgs += "-Xdock:icon=${project.file("icons/QuotaDog.png").absolutePath}"
 
         nativeDistributions {
             // Dmg = macOS, Msi = Windows installer, Deb = Debian/Ubuntu Linux.
             targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb)
-            packageName = "QuotaDog"
+            packageName = if (acceptanceDirectory == null) "QuotaDog" else "QuotaDog Acceptance"
             // The desktop app uses the Ktor Java engine (`java.net.http`) and a local OAuth
             // callback server (`jdk.httpserver`). jlink does not infer these reliably from the
             // packaged classpath, so include them explicitly in the runtime image.
-            modules("java.net.http", "jdk.httpserver")
+            modules("java.net.http", "jdk.httpserver", "jdk.crypto.ec", "jdk.unsupported", "java.management", "java.naming")
             // Compose Desktop requires strict semver `X.Y.Z`; strip any suffix
             // such as "-dev" or "-rc.1" so local dev versions still package.
             packageVersion = releaseVersionName.substringBefore('-').let { stripped ->
@@ -145,10 +179,14 @@ compose.desktop {
             }
 
             macOS {
-                bundleID = "saien.quotadog"
+                bundleID = desktopAppId
+                minimumSystemVersion = "13.0"
+                infoPlist {
+                    extraKeysRawXml = "<key>KMPUpdaterRelease</key><string>$updateSequence</string>"
+                }
                 iconFile.set(project.file("icons/QuotaDog.icns"))
-                // Formal release signing is driven by scripts/build_release*.sh, which export
-                // QUOTADOG_MAC_SIGN=1 and CODESIGN_IDENTITY (same Developer ID as Saytive).
+                // Direct Gradle signing remains optional. Release scripts sign after
+                // embedding the updater helper and signing native libraries inside JARs.
                 // CI / local unsigned packages leave those unset and stay unsigned.
                 signing {
                     val providers = project.providers

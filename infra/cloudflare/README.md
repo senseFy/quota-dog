@@ -15,6 +15,9 @@ The release URL above is an example, not an existing release. Only feed JSON
 and versioned DMG paths are exposed. Downloads are streamed without changing
 their bytes or redirecting. Missing objects are not cached. Package caching
 is best-effort and subject to Cloudflare's cache object-size limits.
+Temporary `QuotaDog-acceptance-*` DMGs check R2 existence before using an edge
+copy and forbid client caching. Deleting their R2 objects immediately makes
+their URLs unavailable, without needing zone-wide cache purge permissions.
 
 ## Provision and deploy
 
@@ -39,7 +42,8 @@ other routes. R2 remains private and `workers.dev`/preview URLs are disabled.
 
 ## Publish signed updates
 
-Hosting is separate from the app updater integration. Until a real signed
+The app's updater and publication commands are documented in
+[`docs/macos-updates.md`](../../docs/macos-updates.md). Until a real signed
 feed is published, `/updates/feeds/stable.json` intentionally returns 404.
 Do not replace it with an unsigned placeholder.
 

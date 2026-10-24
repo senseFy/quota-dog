@@ -157,6 +157,9 @@ if [[ "$SKIP_NOTARIZE" != "1" ]]; then
   if [[ "${AUTHORITY:-}" != Developer\ ID\ Application* ]]; then
     die "App is not signed with a Developer ID Application certificate (found: ${AUTHORITY:-unknown})."
   fi
+  # Staple the application itself before DMG construction so the updater's staged
+  # app keeps its Gatekeeper ticket after it leaves the disk image.
+  NOTARY_PROFILE="$NOTARY_PROFILE" python3 "$ROOT_DIR/scripts/notarize_macos.py" "$APP_PATH"
 fi
 
 TMP_DMG_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/quotadog-dmgroot.XXXXXX")"

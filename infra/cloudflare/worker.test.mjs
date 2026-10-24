@@ -80,3 +80,33 @@ test("only immutable artifacts use the edge cache; feed checks always read R2", 
     else globalThis.caches = original;
   }
 });
+
+test("temporary packages use edge storage but disappear immediately after R2 deletion", async () => {
+  const original = globalThis.caches;
+  let cached;
+  const pending = [];
+  globalThis.caches = { default: {
+    async match() { return cached?.clone(); },
+    async put(_, response) { cached = response; },
+  } };
+  try {
+    const request = new Request("https://quotadog.saien.pro/updates/releases/2/QuotaDog-acceptance-test-macos-aarch64.dmg");
+    const bytes = new Uint8Array([1, 2, 3]);
+    const env = environment(bytes);
+    const response = await worker.fetch(request, env, { waitUntil(p) { pending.push(p); } });
+    assert.equal(response.headers.get("cache-control"), "no-store, no-transform");
+    assert.equal(response.headers.get("cloudflare-cdn-cache-control"), "no-store");
+    assert.deepEqual(new Uint8Array(await response.arrayBuffer()), bytes);
+    await Promise.all(pending);
+    assert.ok(cached);
+    env.RELEASES.get = async () => { throw new Error("expected edge hit"); };
+    const hit = await worker.fetch(request, env);
+    assert.equal(hit.headers.get("cache-control"), "no-store, no-transform");
+    assert.deepEqual(new Uint8Array(await hit.arrayBuffer()), bytes);
+    env.RELEASES.head = async () => null;
+    assert.equal((await worker.fetch(request, env)).status, 404);
+  } finally {
+    if (original === undefined) delete globalThis.caches;
+    else globalThis.caches = original;
+  }
+});
