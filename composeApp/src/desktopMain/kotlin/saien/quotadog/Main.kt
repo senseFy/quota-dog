@@ -84,6 +84,7 @@ fun main() = application {
     val updater = remember { if (isMacOs()) DesktopUpdater(desktopMetadata) else null }
     DisposableEffect(updater) { onDispose { updater?.close() } }
     val quit: () -> Unit = { updater?.quit(::exitApplication) ?: exitApplication() }
+    DesktopQuitHandler(quit)
     val tokenStore = remember { PlatformTokenStore() }
     val usageSnapshotStore = remember { SettingsUsageSnapshotStore() }
     val preferences = remember { AppPreferences() }

@@ -30,8 +30,13 @@ fun main() = application {
     check(app.startsWith(root) && Files.readString(root.resolve(".quotadog-updater-acceptance")) == "v1\n")
     val directory = app.parent
     val data = directory.resolve("data")
-    val updater = remember { DesktopUpdater(metadata, data) }
+    val updater = remember { DesktopUpdater(metadata, data, beforeReceiptWrite = {
+        if (Files.exists(directory.resolve("fail-receipt"))) {
+            throw java.io.IOException("Acceptance: receipt storage unavailable after handoff")
+        }
+    }) }
     DisposableEffect(updater) { onDispose { updater.close() } }
+    DesktopQuitHandler { updater.quit(::exitApplication) }
     fun record(event: String) {
         Files.writeString(directory.resolve("events.log"), "${metadata.sequence} ${ProcessHandle.current().pid()} $event\n", CREATE, APPEND)
     }
@@ -79,9 +84,22 @@ fun main() = application {
                             Files.writeString(directory.resolve("result.txt"), "rejected-artifact\n")
                             exitApplication()
                         } else {
-                            check(scenario == "success" && downloaded.canInstall) { downloaded.message }
+                            check(scenario in setOf("success", "receipt-failure") && downloaded.canInstall) { downloaded.message }
                             record("prepared")
+                            if (scenario == "receipt-failure") Files.writeString(directory.resolve("fail-receipt"), "fail\n")
                             updater.install()
+                            if (scenario == "receipt-failure") {
+                                updater.state.first { it.canSaveReceipt }
+                                record("receipt-save-blocked")
+                                var quitInvoked = false
+                                updater.quit { quitInvoked = true; exitApplication() }
+                                delay(1000)
+                                check(!quitInvoked && updater.state.value.canSaveReceipt)
+                                check(!Files.exists(data.resolve("pending-installation")))
+                                record("quit-blocked")
+                                Files.delete(directory.resolve("fail-receipt"))
+                                updater.saveReceiptAndQuit()
+                            }
                             awaitCancellation()
                         }
                     }

@@ -27,11 +27,12 @@ internal fun DesktopUpdateSettings(updater: DesktopUpdater) {
             DesktopUpdateAction.Cancel -> updater.cancel()
             DesktopUpdateAction.Discard -> updater.discard()
             DesktopUpdateAction.Recover -> updater.retryRecovery()
+            DesktopUpdateAction.SaveReceipt -> updater.saveReceiptAndQuit()
         }
     }
 }
 
-internal enum class DesktopUpdateAction { Check, Download, Install, Cancel, Discard, Recover }
+internal enum class DesktopUpdateAction { Check, Download, Install, Cancel, Discard, Recover, SaveReceipt }
 
 @Composable
 internal fun DesktopUpdateControls(state: DesktopUpdateUiState, onAction: (DesktopUpdateAction) -> Unit) {
@@ -48,6 +49,7 @@ internal fun DesktopUpdateControls(state: DesktopUpdateUiState, onAction: (Deskt
                 if (state.canCancel) QdButton("Cancel", { onAction(DesktopUpdateAction.Cancel) }, size = QdButtonSize.Small, variant = QdButtonVariant.Secondary)
                 if (state.canDiscard) QdButton("Discard", { onAction(DesktopUpdateAction.Discard) }, size = QdButtonSize.Small, variant = QdButtonVariant.Secondary)
                 if (state.canRecover) QdButton("Retry recovery", { onAction(DesktopUpdateAction.Recover) }, size = QdButtonSize.Small)
+                if (state.canSaveReceipt) QdButton("Save recovery info & quit", { onAction(DesktopUpdateAction.SaveReceipt) }, size = QdButtonSize.Small)
             }
         }
     })

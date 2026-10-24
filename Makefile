@@ -136,7 +136,7 @@ release-dmg-local: ## Build a signed macOS DMG; skip notarization.
 release-dmg-unsigned: ## Build an unsigned macOS DMG for local testing.
 	@./scripts/build_release_dmg.sh --skip-codesign --skip-notarize
 
-.PHONY: update-prepare update-publish update-refresh test-updater test-updater-macos
+.PHONY: update-prepare update-publish update-refresh update-renew test-updater test-updater-macos
 
 update-prepare: ## Prepare a signed update feed; pass DMG=/path/to/notarized.dmg.
 	@python3 scripts/publish_update.py --dmg "$(DMG)" $(if $(NOTES),--notes "$(NOTES)",)
@@ -146,6 +146,9 @@ update-publish: ## Upload a verified DMG, then publish the signed stable feed.
 
 update-refresh: ## Renew and publish the existing signed feed without releasing a new app.
 	@python3 scripts/publish_update.py --refresh --publish
+
+update-renew: ## Renew the existing feed only when it expires within 10 days; safe for daily scheduling.
+	@python3 scripts/publish_update.py --renew-if-due --publish
 
 test-updater: ## Test the updater UI/receipts and offline publisher signatures.
 	@$(GRADLE) :composeApp:desktopTest

@@ -23,6 +23,11 @@ Windows, Linux and mobile installations do not use this installer.
   helper's status is checked and installation is confirmed before deleting the
   retained old bundle. A retained original installation can be cleaned up with
   **Retry recovery**. Failed/unrecognized recovery never silently clears state.
+- Before handing off, the app probes receipt storage with an actual write and
+  fsync. If saving still fails after helper acceptance, ordinary Quit, Cmd+Q and
+  Dock Quit are blocked. **Save recovery info & quit** retries the same receipt
+  without accepting another installation. If the helper has already timed out,
+  opening the app again recovers the retained original transaction.
 - The tray's Quit action (or closing the window when no tray is available)
   cancels transfers and releases staged updates. Closing the main window into
   the tray keeps the updater alive. There are no background checks,
@@ -115,6 +120,13 @@ release is planned:
 make update-refresh
 ```
 
+For a daily scheduler, use `make update-renew`. It publishes only when the signed
+feed expires within 10 days, renews it for 30 days, and skips an unpublished
+channel. It verifies the previous signature even when renewal is not yet due.
+The signing machine needs JDK 21, OpenSSL 3, Wrangler credentials and the private
+key. Scheduling and an encrypted offline key backup must be configured separately;
+the command alone does not install a scheduled job.
+
 Renewal verifies the previous signature and retains its releases, increments
 the manifest sequence, and signs new timestamps. Manifest sequence and app
 release sequence are independent. No signing key or renewal job runs in
@@ -135,7 +147,8 @@ temporary Cloudflare feeds/packages. It runs the same controller, UI, SDK and
 production helper as QuotaDog without initializing provider clients or reading
 real account settings. It verifies a new process, release replacement, startup
 confirmation, old-bundle removal, data preservation, bad signatures and altered
-artifact digests. It never replaces `/Applications/QuotaDog.app` or publishes
+artifact digests. A receipt-write fault also checks that Quit is blocked until
+storage recovers and the same transaction can finish. It never replaces `/Applications/QuotaDog.app` or publishes
 `stable.json`.
 
 The harness deletes its temporary R2 objects. Packages named
@@ -150,7 +163,7 @@ Logs, notarization receipts, fixtures and `report.json` remain under
 make test-updater-macos UPDATER_ACCEPTANCE_ARGS="--resume build/updater-acceptance/<run>"
 ```
 
-Add `--case success`, `--case bad-signature` or `--case bad-artifact` to rerun
+Add `--case success`, `--case receipt-failure`, `--case bad-signature` or `--case bad-artifact` to rerun
 one scenario. Selected-case reports are separate from the complete run report.
 
 Keep failed native transaction directories for diagnosis. Startup confirmation

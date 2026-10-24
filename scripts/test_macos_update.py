@@ -13,6 +13,7 @@ import signal
 import subprocess
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from notarize_macos import notarize
 from publish_update import digest, properties, sign_feed, upload
 from sign_macos_app import sign_app
@@ -25,7 +26,7 @@ def main():
     parser.add_argument("--notary-profile", default="saytive-notary")
     parser.add_argument("--private-key", type=Path, default=Path.home() / ".config/quotadog/updater/quotadog-2026.private-key")
     parser.add_argument("--resume", type=Path)
-    parser.add_argument("--case", choices=("all", "success", "bad-signature", "bad-artifact"), default="all")
+    parser.add_argument("--case", choices=("all", "success", "receipt-failure", "bad-signature", "bad-artifact"), default="all")
     args = parser.parse_args()
     if platform.system() != "Darwin" or platform.machine() != "arm64":
         parser.error("This acceptance harness requires an Apple Silicon Mac")
@@ -41,6 +42,7 @@ def main():
     report_path = root / ("report.json" if args.case == "all" else f"report-{args.case}.json")
     uploaded = []
     try:
+        pending_notarization = []
         for sequence in (1, 2):
             app = root / f"release-{sequence}" / "QuotaDog Acceptance.app"
             if not (app.parent / "ready").exists():
@@ -51,9 +53,14 @@ def main():
                 if app.exists(): shutil.rmtree(app)
                 subprocess.run(["ditto", str(ROOT / "composeApp/build/compose/binaries/main/app/QuotaDog Acceptance.app"), str(app)], check=True)
                 sign_app(app, args.identity)
-                notarize(app, args.notary_profile)
-                subprocess.run(["spctl", "--assess", "--type", "execute", str(app)], check=True)
-                (app.parent / "ready").touch()
+                pending_notarization.append(app)
+        def finish_app(app):
+            notarize(app, args.notary_profile)
+            subprocess.run(["spctl", "--assess", "--type", "execute", str(app)], check=True)
+            (app.parent / "ready").touch()
+        # Independent signed app copies can be notarized concurrently; Gradle builds stay serial.
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            list(pool.map(finish_app, pending_notarization))
         dmg = root / "update.dmg"
         if not (root / "dmg-ready").exists():
             stage = root / "dmg-stage"
@@ -69,7 +76,7 @@ def main():
             upload(artifact_key, dmg, "application/x-apple-diskimage")
         artifact = dict(target="macos-aarch64", kind="dmg", url=config["baseUrl"] + "/" + artifact_key,
             size=dmg.stat().st_size, sha256=digest(dmg), minimumOsVersion="13.0")
-        for index, (scenario, expected) in enumerate((('success', 'success'), ('bad-signature', 'rejected-signature'), ('bad-artifact', 'rejected-artifact'))):
+        for index, (scenario, expected) in enumerate((('success', 'success'), ('receipt-failure', 'success'), ('bad-signature', 'rejected-signature'), ('bad-artifact', 'rejected-artifact'))):
             if args.case != "all" and args.case != scenario: continue
             attempt = root / (scenario + "-" + uuid.uuid4().hex[:6])
             attempt.mkdir()
@@ -103,13 +110,15 @@ def main():
             outcome = (attempt / "result.txt").read_text().strip()
             if outcome != expected: raise RuntimeError(f"{scenario}: {outcome}; see {attempt}")
             info = plistlib.loads((app / "Contents/Info.plist").read_bytes())
-            if info["KMPUpdaterRelease"] != ("2" if scenario == "success" else "1"):
+            if info["KMPUpdaterRelease"] != ("2" if expected == "success" else "1"):
                 raise RuntimeError("Unexpected installed release")
             events = (attempt / "events.log").read_text().splitlines()
-            if scenario == "success":
+            if expected == "success":
                 pids = {line.split()[1] for line in events if line.endswith(" boot")}
                 if len(pids) != 2: raise RuntimeError("Upgrade did not start a new process")
                 if not any(line.endswith("confirmed-data-preserved") for line in events): raise RuntimeError("No startup confirmation")
+                if scenario == "receipt-failure" and not any(line.endswith("quit-blocked") for line in events):
+                    raise RuntimeError("Quit was not blocked after receipt failure")
             if (attempt / "data/user-data.txt").read_text() != "preserve-this-data\n": raise RuntimeError("Application data changed")
             subprocess.run(["codesign", "--verify", "--deep", "--strict", str(app)], check=True)
             report["cases"].append(dict(scenario=scenario, outcome=outcome, directory=str(attempt), events=events))

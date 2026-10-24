@@ -15,7 +15,6 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelAndJoin
@@ -59,6 +58,7 @@ internal data class DesktopUpdateUiState(
     val canCancel: Boolean = false,
     val canDiscard: Boolean = false,
     val canRecover: Boolean = false,
+    val canSaveReceipt: Boolean = false,
     val progress: Float? = null,
     val notes: String? = null,
 )
@@ -68,6 +68,23 @@ internal data class UpdateReceipt(val transactionId: String, val sequence: Long,
 /** A receipt is scoped to the installed path; never discard another installation's transaction. */
 internal class UpdateReceiptStore(private val root: Path) {
     private val file = root.resolve("pending-installation")
+
+    fun checkWritable() {
+        // Exercise actual allocation/write/fsync before handing ownership to the helper.
+        // Permissions alone do not catch a full disk or an unwritable receipt target.
+        check(!Files.exists(file, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+            "An earlier update receipt still needs recovery"
+        }
+        val probe = Files.createTempFile(root, "receipt-probe-", ".tmp",
+            PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rw-------")))
+        try {
+            FileChannel.open(probe, WRITE).use { channel ->
+                val buffer = ByteBuffer.wrap(ByteArray(16_384))
+                while (buffer.hasRemaining()) channel.write(buffer)
+                channel.force(true)
+            }
+        } finally { Files.deleteIfExists(probe) }
+    }
 
     fun read(): UpdateReceipt? {
         if (!Files.exists(file)) return null
@@ -103,6 +120,7 @@ internal class UpdateReceiptStore(private val root: Path) {
 internal class DesktopUpdater(
     val metadata: DesktopUpdateMetadata = DesktopUpdateMetadata.load(),
     private val dataDirectory: Path = Path.of(System.getProperty("user.home"), "Library", "Application Support", "QuotaDog", "updater"),
+    private val beforeReceiptWrite: () -> Unit = {},
 ) : AutoCloseable {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val mutableState = MutableStateFlow(DesktopUpdateUiState())
@@ -112,6 +130,7 @@ internal class DesktopUpdater(
     private lateinit var installer: MacOsInstaller
     private lateinit var application: Path
     private lateinit var receipts: UpdateReceiptStore
+    private var exitGuard: UpdateExitGuard? = null
     private var operation: Job? = null
     private var working = false
     private var started = false
@@ -152,6 +171,13 @@ internal class DesktopUpdater(
                 Files.setPosixFilePermissions(dataDirectory, PosixFilePermissions.fromString("rwx------"))
                 val checkpoints = FileCheckpointStore(dataDirectory.resolve("checkpoints"))
                 receipts = UpdateReceiptStore(dataDirectory)
+                exitGuard = UpdateExitGuard(
+                    preflight = { withContext(Dispatchers.IO) { receipts.checkWritable() } },
+                    persist = { receipt -> withContext(Dispatchers.IO) {
+                        beforeReceiptWrite()
+                        receipts.write(receipt)
+                    } },
+                )
                 installer = MacOsInstaller(application, helper, metadata.appId, metadata.teamId,
                     metadata.sequence, dataDirectory.resolve("requests"))
                 val host = java.net.URI(metadata.baseUrl).host
@@ -189,15 +215,13 @@ internal class DesktopUpdater(
 
     fun install() = action {
         val ready = updater!!.state.value as? UpdateState.Ready ?: return@action
-        // Cancellation cannot interrupt persistence between accepted handoff and normal exit.
-        withContext(NonCancellable) {
+        exitGuard!!.handoff(accept = {
             val accepted = updater!!.install()
-            withContext(Dispatchers.IO) {
-                receipts.write(UpdateReceipt(accepted.transactionId, ready.offer.release.sequence, application.toString()))
-            }
-            exit()
-        }
+            UpdateReceipt(accepted.transactionId, ready.offer.release.sequence, application.toString())
+        }, onExit = exit)
     }
+
+    fun saveReceiptAndQuit() = action { exitGuard!!.requestExit(exit) }
 
     fun retryRecovery() = action(allowRecovery = true) { recover() }
 
@@ -254,8 +278,8 @@ internal class DesktopUpdater(
             try { block() }
             catch (error: CancellationException) { throw error }
             catch (error: Exception) {
-                notice = if (updater?.state?.value is UpdateState.AwaitingExit) {
-                    "Could not save the update receipt. Keep QuotaDog open until installation times out, then restart it."
+                notice = if (exitGuard?.needsReceipt == true) {
+                    RECEIPT_FAILURE_MESSAGE
                 } else errorMessage((error as? UpdateException)?.code)
             } finally {
                 working = false
@@ -293,6 +317,7 @@ internal class DesktopUpdater(
             canCancel = working && (value is UpdateState.Checking || value is UpdateState.Downloading || value is UpdateState.Preparing),
             canDiscard = !working && !recoveryRequired && (value is UpdateState.Ready || value is UpdateState.Available),
             canRecover = !working && recoveryRequired,
+            canSaveReceipt = !working && exitGuard?.needsReceipt == true,
             progress = (value as? UpdateState.Downloading)?.let { (it.bytes.toDouble() / it.offer.artifact.size).toFloat() },
             notes = offer?.release?.notes?.let { it["en"] ?: it.values.firstOrNull() })
     }
@@ -301,15 +326,28 @@ internal class DesktopUpdater(
     fun quit(onExit: () -> Unit) {
         scope.launch {
             operation?.cancelAndJoin()
-            if (!recoveryRequired && updater?.state?.value !is UpdateState.AwaitingExit) {
-                runCatching { updater?.discard() }
+            try {
+                if (exitGuard?.needsReceipt == true) {
+                    exitGuard!!.requestExit(onExit)
+                } else {
+                    if (!recoveryRequired && updater?.state?.value !is UpdateState.AwaitingExit) {
+                        runCatching { updater?.discard() }
+                    }
+                    onExit()
+                }
+            } catch (error: Exception) {
+                if (error is CancellationException) throw error
+                notice = RECEIPT_FAILURE_MESSAGE
+                render()
             }
-            onExit()
         }
     }
 
     override fun close() { scope.cancel(); transport?.close() }
 }
+
+private const val RECEIPT_FAILURE_MESSAGE =
+    "Could not save update recovery information. Quit is paused. Free disk space or restore folder access, then save and quit. If QuotaDog does not reopen, open it again to recover."
 
 private fun errorMessage(code: UpdateErrorCode?): String = when (code) {
     UpdateErrorCode.NETWORK -> "Could not reach the update service. Try again later."

@@ -95,13 +95,17 @@ def main():
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--dmg", type=Path)
     mode.add_argument("--refresh", action="store_true", help="Renew an existing feed without an app release")
+    mode.add_argument("--renew-if-due", action="store_true", help="Renew only when an existing feed is near expiry; never initialize a channel")
     mode.add_argument("--initialize", action="store_true", help="Create an empty feed if the channel has never been published")
     parser.add_argument("--notes", type=Path, help="UTF-8 release notes")
     parser.add_argument("--expires-days", type=int, default=30)
+    parser.add_argument("--renew-before-days", type=int, default=10)
     parser.add_argument("--private-key", type=Path, default=Path.home() / ".config/quotadog/updater/quotadog-2026.private-key")
     parser.add_argument("--publish", action="store_true")
     args = parser.parse_args()
     if not 1 <= args.expires_days <= 90: parser.error("expires-days must be 1..90")
+    if args.renew_if_due and not 1 <= args.renew_before_days < args.expires_days:
+        parser.error("renew-before-days must be positive and smaller than expires-days")
     config = properties(ROOT / "updater.properties")
     output = ROOT / "build/update-publication" / (time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6])
     output.mkdir(parents=True)
@@ -118,6 +122,14 @@ def main():
             raise RuntimeError("Published feed scope does not match QuotaDog")
         if args.initialize and exists: raise RuntimeError("Feed already exists; use --refresh")
         if args.refresh and not exists: raise RuntimeError("No existing feed to refresh")
+        if args.renew_if_due:
+            if not exists:
+                print("Stable feed has not been published; nothing to renew.")
+                return
+            remaining = old["expiresAt"] - int(time.time())
+            if remaining > args.renew_before_days * 86400:
+                print(f"No renewal needed: signed feed expires in {remaining // 86400} days.")
+                return
         releases = old["releases"] if old else []
         artifact = None
         if args.dmg:
