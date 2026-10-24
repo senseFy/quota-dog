@@ -81,7 +81,7 @@ ANDROID_RELEASE_ENVIRONMENT = \
 	ANDROID_PLAY_CONFIRM_PRODUCTION="$(ANDROID_PLAY_CONFIRM_PRODUCTION)" \
 	ANDROID_PLAY_DRY_RUN="$(ANDROID_PLAY_DRY_RUN)"
 
-.PHONY: help tasks clean test test-shared test-desktop run desktop-run desktop-package android-debug android-install release-apk release-aab release-app release-dmg release-dmg-local release-dmg-unsigned version-current version-bump bump-version set-version bump-build git-build-info build-identity android-version android-release-check android-upload-check android-release-play android-upload-play android-play-dry-run ios-version ios-release-check ios-upload-check ios-archive ios-release ios-upload-testflight ios-upload-archive ios-export publish-tracks test-mobile-release
+.PHONY: help tasks clean test test-shared test-desktop run desktop-run desktop-package desktop-icons android-debug android-install release-apk release-aab release-app release-dmg release-dmg-local release-dmg-unsigned version-current version-bump bump-version set-version bump-build git-build-info build-identity android-version android-release-check android-upload-check android-release-play android-upload-play android-play-dry-run ios-version ios-release-check ios-upload-check ios-archive ios-release ios-upload-testflight ios-upload-archive ios-export publish-tracks test-mobile-release
 
 help: ## Show this help.
 	@printf "QuotaDog commands:\n\n"
@@ -108,6 +108,9 @@ desktop-run: ## Run the Compose desktop app.
 
 desktop-package: ## Build a desktop package for the current OS.
 	@$(GRADLE) :composeApp:packageDistributionForCurrentOS
+
+desktop-icons: ## Regenerate the desktop app icons (macOS, Windows, Linux).
+	@swift scripts/generate-desktop-icons.swift
 
 android-debug: ## Build an Android debug APK.
 	@$(GRADLE) :androidApp:assembleDebug
