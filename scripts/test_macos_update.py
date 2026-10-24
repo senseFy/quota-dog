@@ -46,12 +46,12 @@ def main():
         for sequence in (1, 2):
             app = root / f"release-{sequence}" / "QuotaDog Acceptance.app"
             if not (app.parent / "ready").exists():
-                subprocess.run([str(ROOT / "gradlew"), ":composeApp:createDistributable", "--console=plain",
+                subprocess.run([str(ROOT / "gradlew"), ":composeApp:createReleaseDistributable", "--console=plain",
                     f"-Pquotadog.acceptanceDirectory={root}", f"-Pquotadog.acceptanceSequence={sequence}",
                     f"-Pquotadog.acceptanceChannel={channel}"], cwd=ROOT, check=True)
                 app.parent.mkdir(exist_ok=True)
                 if app.exists(): shutil.rmtree(app)
-                subprocess.run(["ditto", str(ROOT / "composeApp/build/compose/binaries/main/app/QuotaDog Acceptance.app"), str(app)], check=True)
+                subprocess.run(["ditto", str(ROOT / "composeApp/build/compose/binaries/main-release/app/QuotaDog Acceptance.app"), str(app)], check=True)
                 sign_app(app, args.identity)
                 pending_notarization.append(app)
         def finish_app(app):

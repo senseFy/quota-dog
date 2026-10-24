@@ -121,6 +121,70 @@ CI's generic unsigned macOS package is not eligible for this feed. There is no
 automatic production upload on commit or tag. Existing apps without an updater
 must install the first updater-enabled signed DMG manually.
 
+## Conservative macOS package sizing
+
+The macOS release script uses `createReleaseDistributable`. Its ProGuard rules
+only allow unused Lucide icon classes to be removed; all other application and
+dependency classes/members are kept. Obfuscation and bytecode optimization are
+disabled. Keep the bundled Java 21 runtime and its existing module set.
+
+Before signing, `sign_macos_app.py` removes the opposite-architecture Skiko dylib
+and its checksum from the runtime JAR. It derives the target from the launcher,
+requires a matching extracted dylib, preserves universal packages, and refuses
+to rewrite signed dependency JARs. The ARM64 library, native loader, notices and
+updater helper remain present.
+
+GitHub's macOS Release job uses the same packaging scripts, without Apple
+signing/notarization credentials. The local signed release flow still notarizes
+and staples both the app and DMG. Updater acceptance builds use the release
+variant too. `make test-updater` includes packaging checks and, on macOS, a native
+status-bar lifecycle regression test.
+
+For an isolated comparison build, set `QUOTADOG_RELEASES_DIR` to an absolute
+output directory when invoking `scripts/build_release_dmg.sh`. This leaves
+existing release artifacts intact. A comparison build with the existing version
+is not a new update: bump the release version/sequence before publishing it.
+
+Measured on Apple Silicon on 2026-10-24, against the published 1.0.12 (24) DMG:
+
+| Component | Before | After | Reduction |
+| --- | ---: | ---: | ---: |
+| Signed/notarized/stapled DMG | 85,621,305 bytes | 70,271,724 bytes | 17.93% |
+| App file contents | 153,873,873 bytes | 138,288,268 bytes | 10.13% |
+| Bundled Java runtime | 85,467,984 bytes | 85,467,984 bytes | unchanged |
+| Lucide JAR | 5,785,005 bytes | 52,995 bytes | 99.08% |
+
+App sizes sum regular-file lengths without double-counting symlinks, rather than
+APFS allocated blocks. DMG sizes are download byte counts. The JDK version,
+module list and `lib/modules` payload are unchanged; native libraries are
+re-signed. Lucide retains 16 classes (15 icons plus its namespace class). The
+foreign Skiko JAR shrinks from 9,364,819 to 165 bytes. Other small differences
+come from standard JAR repackaging and signatures.
+
+The comparison package is local only, retains version 1.0.12 (24), and is under
+`build/size-optimization/final/`; it has not replaced the published package.
+Machine-readable inventories are `build/size-optimization/before.json` and
+`after.json`. The production UI smoke check used isolated preferences and home
+storage. Its initial quit check reproduced an existing status-bar ARC release
+on the AWT thread in both baseline and optimized builds. Moving ownership
+transfer onto the main queue fixed the crash; the final packaged app exited
+normally, and a native worker-thread lifecycle regression test passed.
+
+Validation passed: 164 offline shared tests, 16 desktop tests, five packaging/
+native lifecycle tests and three publisher tests. The same 164 shared tests also
+passed against the processed JARs from the packaged app. Credential-dependent
+live provider tests are outside this comparison's acceptance criteria.
+
+The fresh signed/notarized updater run at
+`build/updater-acceptance/20261024-172040-aa236375/report.json` passed all four
+scenarios, with no cleanup errors. The first run at
+`build/updater-acceptance/20261024-170752-d190e1a5/report.json` remains recorded as
+failed: receipt-failure recovery installed the new app, but macOS `open` returned
+status 1 during relaunch. Repeating the same command manually confirmed the
+installation and preserved data; the fresh full rerun then passed automatically.
+This one-off OS relaunch failure was not reproduced or fixed by changing the
+updater helper. Keep that limitation separate from the status-bar crash fix.
+
 ## Feed renewal
 
 The default feed validity is 30 days. Renew before expiry even when no app

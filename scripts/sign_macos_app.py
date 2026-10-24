@@ -24,12 +24,59 @@ def run(*args):
     return result.stdout
 
 
+def require_unsigned_jar(archive, jar):
+    if any(
+        name.upper().startswith("META-INF/")
+        and name.upper().endswith((".SF", ".RSA", ".DSA", ".EC"))
+        for name in archive.namelist()
+    ):
+        raise RuntimeError(f"Cannot rewrite a signed dependency JAR: {jar.name}")
+
+
+def prune_foreign_skiko(app, executable):
+    """Drop only the opposite macOS Skiko architecture, before code signing.
+
+    Skiko's macOS runtime JAR can contain both architectures. Compose extracts
+    the current one next to the JAR but leaves the other one inside it. Infer
+    the target from the launcher (not the build host), and require its extracted
+    library to exist with the correct architecture before removing anything.
+    Universal launchers retain both architectures.
+    """
+    architectures = set(run("lipo", "-archs", executable).split())
+    if architectures not in ({"arm64"}, {"x86_64"}):
+        return
+    target = "arm64" if architectures == {"arm64"} else "x64"
+    foreign = "x64" if target == "arm64" else "arm64"
+    foreign_name = f"libskiko-macos-{foreign}.dylib"
+    app_files = app / "Contents/app"
+    for jar in app_files.glob("*.jar"):
+        with zipfile.ZipFile(jar) as archive:
+            removed = {n for n in (foreign_name, foreign_name + ".sha256") if n in archive.namelist()}
+            if foreign_name not in removed:
+                continue
+            retained = app_files / f"libskiko-macos-{target}.dylib"
+            if not retained.is_file() or set(run("lipo", "-archs", retained).split()) != architectures:
+                raise RuntimeError("Cannot trim Skiko without the matching extracted native library")
+            require_unsigned_jar(archive, jar)
+            with tempfile.TemporaryDirectory(prefix="quotadog-trim-") as directory:
+                updated = Path(directory) / "trimmed.jar"
+                with zipfile.ZipFile(updated, "w") as output:
+                    output.comment = archive.comment
+                    for entry in archive.infolist():
+                        if entry.filename not in removed:
+                            output.writestr(entry, archive.read(entry))
+                shutil.copy2(updated, jar.with_suffix(".trimmed"))
+        jar.with_suffix(".trimmed").replace(jar)
+        print(f"Removed unused {foreign} Skiko library from {jar.name}", flush=True)
+
+
 def sign_app(app, identity):
     app = Path(app).resolve(strict=True)
     info = plistlib.loads((app / "Contents/Info.plist").read_bytes())
     sequence = info.get("KMPUpdaterRelease")
     if not isinstance(sequence, str) or not sequence.isdecimal() or int(sequence) <= 0:
         raise RuntimeError("App must embed a positive KMPUpdaterRelease string before signing")
+    prune_foreign_skiko(app, app / "Contents/MacOS" / info["CFBundleExecutable"])
     helper = tool("helper")
     destination = app / "Contents/Helpers/kmp-updater-helper"
     destination.parent.mkdir(exist_ok=True)
@@ -54,8 +101,7 @@ def sign_app(app, identity):
             native = [n for n in archive.namelist() if n.endswith((".dylib", ".jnilib"))
                       and archive.read(n)[:4] in MACH_O]
             if not native: continue
-            if any(n.upper().startswith("META-INF/") and n.upper().endswith((".SF", ".RSA", ".DSA")) for n in archive.namelist()):
-                raise RuntimeError(f"Cannot rewrite a signed dependency JAR: {jar.name}")
+            require_unsigned_jar(archive, jar)
             with tempfile.TemporaryDirectory(prefix="quotadog-sign-") as directory:
                 temporary = Path(directory)
                 replacements = {}

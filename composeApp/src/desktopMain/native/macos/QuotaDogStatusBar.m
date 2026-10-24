@@ -1916,8 +1916,10 @@ void qd_statusbar_update(void *handle, const char *json) {
 
 void qd_statusbar_dispose(void *handle) {
     if (!handle) return;
-    QDStatusBarController *controller = (__bridge_transfer QDStatusBarController *)handle;
     void (^dispose)(void) = ^{
+        // Transfer ownership inside the main-queue block so ARC also runs the
+        // final release/dealloc here, not on the calling JVM AWT thread.
+        QDStatusBarController *controller = (__bridge_transfer QDStatusBarController *)handle;
         controller.providerSelectionGeneration += 1;
         controller.onRefresh = NULL;
         controller.onShow = NULL;

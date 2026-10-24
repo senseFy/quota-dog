@@ -24,9 +24,9 @@ resolve_codesign_identity() {
 }
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-RELEASES_DIR="$ROOT_DIR/releases"
+RELEASES_DIR="${QUOTADOG_RELEASES_DIR:-$ROOT_DIR/releases}"
 APP_NAME="QuotaDog.app"
-GRADLE_APP_PATH="$ROOT_DIR/composeApp/build/compose/binaries/main/app/$APP_NAME"
+GRADLE_APP_PATH="$ROOT_DIR/composeApp/build/compose/binaries/main-release/app/$APP_NAME"
 OUTPUT_APP_PATH="$RELEASES_DIR/$APP_NAME"
 SKIP_CODESIGN="${SKIP_CODESIGN:-0}"
 
@@ -52,7 +52,7 @@ fi
 detail "Output:" "$OUTPUT_APP_PATH"
 
 GRADLE_ARGS=(
-  :composeApp:createDistributable
+  :composeApp:createReleaseDistributable
   --stacktrace
 )
 

@@ -15,6 +15,8 @@ Env vars:
   DMG_NAME            Output dmg base name (default: QuotaDog)
   DMG_VOLNAME         Finder volume name (default: QuotaDog)
   RELEASE_VERSION     App/package version (default: 1.0.0)
+  QUOTADOG_RELEASES_DIR
+                      Absolute output directory (default: <project>/releases)
   CODESIGN_IDENTITY   Developer ID Application identity
                       (if unset, auto-detect from keychain)
 
@@ -88,7 +90,7 @@ resolve_codesign_identity() {
 }
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-RELEASES_DIR="$ROOT_DIR/releases"
+RELEASES_DIR="${QUOTADOG_RELEASES_DIR:-$ROOT_DIR/releases}"
 APP_NAME="QuotaDog.app"
 APP_PATH="$RELEASES_DIR/$APP_NAME"
 
@@ -245,7 +247,16 @@ else
   section "⏭️  Skipping notarization and stapling..."
 fi
 
-DMG_SIZE="$(du -h "$DMG_PATH" | cut -f1 | xargs)"
+# Report download bytes, not APFS allocated blocks (which can exceed file length
+# after hdiutil/codesign/stapling rewrite a compressed image).
+DMG_SIZE="$(python3 - "$DMG_PATH" <<'PY'
+from pathlib import Path
+import sys
+
+size = Path(sys.argv[1]).stat().st_size
+print(f"{size / 1_000_000:.2f} MB ({size:,} bytes)")
+PY
+)"
 
 section "✅ Release DMG ready: $(basename "$DMG_PATH")"
 detail "Size:" "$DMG_SIZE"

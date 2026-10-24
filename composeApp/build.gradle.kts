@@ -157,6 +157,14 @@ compose.desktop {
         mainClass = if (acceptanceDirectory == null) "saien.quotadog.MainKt" else "saien.quotadog.UpdaterAcceptanceKt"
         jvmArgs += "-Xdock:icon=${project.file("icons/QuotaDog.png").absolutePath}"
 
+        buildTypes.release.proguard {
+            // Restrict shrinking to unused Lucide icons; keep runtime-sensitive
+            // application/framework code intact. No renaming or bytecode optimization.
+            obfuscate.set(false)
+            optimize.set(false)
+            configurationFiles.from(project.file("proguard-desktop.pro"))
+        }
+
         nativeDistributions {
             // Dmg = macOS, Msi = Windows installer, Deb = Debian/Ubuntu Linux.
             targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb)

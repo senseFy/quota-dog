@@ -153,6 +153,7 @@ update-renew: ## Renew the existing feed only when it expires within 10 days; sa
 test-updater: ## Test the updater UI/receipts and offline publisher signatures.
 	@$(GRADLE) :composeApp:desktopTest
 	@python3 scripts/tests/updater_release_test.py
+	@python3 scripts/tests/macos_packaging_test.py
 
 test-updater-macos: ## Run isolated signed/notarized upgrades through Cloudflare; requires release credentials.
 	@python3 scripts/test_macos_update.py $(UPDATER_ACCEPTANCE_ARGS)

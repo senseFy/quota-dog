@@ -100,7 +100,7 @@ jobs:
         include:
           - os: macos-latest
             label: macOS dmg
-            task: packageDmg
+            task: packageReleaseDmg
             glob: "*.dmg"
           - os: windows-latest
             label: Windows msi
@@ -123,21 +123,37 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
 
       - name: Build native distribution
+        if: runner.os != 'macOS'
         env:
           RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
         shell: bash
         run: ./gradlew :composeApp:${{ matrix.task }} --stacktrace
+
+      - name: Set up macOS packaging tools
+        if: runner.os == 'macOS'
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+
+      - name: Build macOS distribution
+        if: runner.os == 'macOS'
+        env:
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+        # Share the release shrinking, architecture cleanup and helper embedding
+        # path with local builds. This job still has no Apple signing credentials.
+        run: ./scripts/build_release_dmg.sh --skip-codesign --skip-notarize
 
       - name: Stage desktop artifact
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p staging
-          # Compose Desktop output dir layout: composeApp/build/compose/binaries/main/{dmg|msi|deb}/
-          src=$(find composeApp/build/compose/binaries -type f -name "${{ matrix.glob }}" | head -n 1)
+          output_dir=composeApp/build/compose/binaries
+          if [ "$RUNNER_OS" = macOS ]; then output_dir=releases; fi
+          src=$(find "$output_dir" -type f -name "${{ matrix.glob }}" | head -n 1)
           if [ -z "$src" ]; then
             echo "::error::No artifact matched ${{ matrix.glob }}"
-            find composeApp/build/compose/binaries -type f | head -50
+            find "$output_dir" -type f | head -50
             exit 1
           fi
           ext="${src##*.}"
