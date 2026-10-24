@@ -37,11 +37,15 @@ See [SECURITY.md](SECURITY.md) for how to report security issues. Please remove 
 
 ### Requirements
 
-- JDK 17
+- Full JDK 21 (including `jpackage` for desktop distributions)
 - Android Studio or IntelliJ IDEA for Android/Desktop development
 - Xcode for iOS builds
 
 ### Commands
+
+Set `JAVA_HOME` to JDK 21 before running Gradle or the release scripts. Desktop
+builds target JVM 21; Android continues to target JVM 17 bytecode. Ktor engines
+and plugins share one version in `gradle/libs.versions.toml`.
 
 Use the bundled Gradle wrapper:
 

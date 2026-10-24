@@ -5,7 +5,7 @@ import io.ktor.client.request.header
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.HttpResponse
-import io.ktor.client.statement.readBytes
+import io.ktor.client.statement.readRawBytes
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.isSuccess
 import kotlinx.datetime.Clock
@@ -60,7 +60,7 @@ internal object GrokBillingFetcher {
     }
 
     private suspend fun parseResponse(response: HttpResponse): GrokBillingSnapshot {
-        val body = response.readBytes()
+        val body = response.readRawBytes()
         val headers = response.headers.entries().associate { (key, values) ->
             key.lowercase() to values.joinToString(",")
         }

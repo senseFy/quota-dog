@@ -20,7 +20,7 @@ build are very welcome.
 
 Requirements:
 
-- JDK 17
+- Full JDK 21 (`JAVA_HOME` must point to it; Android bytecode still targets JVM 17)
 - Android Studio or IntelliJ IDEA for Android/Desktop
 - Xcode for iOS
 

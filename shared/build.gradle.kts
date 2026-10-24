@@ -7,6 +7,8 @@ plugins {
 }
 
 kotlin {
+    jvmToolchain(21)
+
     android {
         namespace = "saien.quotadog.shared"
         compileSdk = libs.versions.android.compileSdk.get().toInt()
@@ -19,7 +21,7 @@ kotlin {
 
     jvm("desktop") {
         compilerOptions {
-            jvmTarget.set(JvmTarget.JVM_17)
+            jvmTarget.set(JvmTarget.JVM_21)
         }
     }
 
