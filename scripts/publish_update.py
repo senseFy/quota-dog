@@ -27,7 +27,10 @@ def digest(path):
 
 
 def fetch(url, destination, maximum=262144):
-    status = subprocess.check_output(["curl", "--silent", "--show-error", "--retry", "2", "--connect-timeout", "15", "--max-time", "180",
+    # Package verification should allow the same 30-minute transfer budget as the
+    # app transport. Small manifest requests keep their shorter deadline.
+    timeout = "1800" if maximum > 262144 else "180"
+    status = subprocess.check_output(["curl", "--silent", "--show-error", "--retry", "2", "--connect-timeout", "15", "--max-time", timeout,
         "--proto", "=https", "--max-filesize", str(maximum), "--output", str(destination), "--write-out", "%{http_code}", url], text=True)
     if status not in ("200", "404"): raise RuntimeError(f"Expected direct HTTP 200/404, received {status}: {url}")
     return status == "200"
