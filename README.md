@@ -237,6 +237,31 @@ Outputs land in `releases/` (gitignored), e.g.
 Optional env vars: `RELEASE_VERSION`, `CODESIGN_IDENTITY`, `NOTARY_PROFILE`,
 `NOTARY_KEY_PATH` / `NOTARY_KEY_ID` / `NOTARY_ISSUER`.
 
+#### Publish a signed macOS release
+
+From a clean `main` checkout, run:
+
+```bash
+make publish-macos
+```
+
+The interactive command asks for the next version, release notes (file or pasted
+Markdown), notes language and whether to publish a GitHub Release. It commits
+the shared version/build, `CHANGELOG.md` and download page, builds and notarizes
+the Apple Silicon DMG, then shows the exact artifact before asking to publish.
+After confirmation it pushes the source, uploads and verifies the Cloudflare
+package/feed, deploys the website, records the feed and optionally publishes the
+same DMG to GitHub. Do not run `bump-version` separately first.
+
+```bash
+make publish-macos MACOS_RELEASE_ARGS="--prepare-only" # stop before pushing/publishing
+make publish-macos MACOS_RELEASE_ARGS="--resume build/release/macos/<run>"
+make test-macos-release                               # offline release-flow tests
+```
+
+See [the macOS publishing guide](docs/macos-updates.md#interactive-release-command)
+for preview/automation options, credentials and retry behavior.
+
 ### Publishing a GitHub Release
 
 The app domain is [quotadog.saien.pro](https://quotadog.saien.pro). Its
@@ -256,8 +281,8 @@ and attaches:
 - Desktop: macOS `*.dmg`, Windows `*.msi`, Linux `*.deb`
 
 The CI macOS DMG is an **unsigned** Compose Desktop package for convenience.
-For a Gatekeeper-clean installer, build locally with `make release-dmg` and
-attach that artifact (or replace the CI upload later).
+For the signed production installer, use `make publish-macos`; its separate
+`macos-vX.Y.Z-buildN` tag avoids triggering this unsigned packaging workflow.
 
 iOS is intentionally not published this way — distribute via TestFlight / App
 Store instead.

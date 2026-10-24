@@ -44,6 +44,7 @@ jobs:
           export PATH="$(brew --prefix openssl@3)/bin:$PATH"
           python3 scripts/tests/updater_release_test.py
           python3 scripts/tests/macos_packaging_test.py
+          python3 scripts/tests/publish_macos_test.py
 
       - name: Run mobile release contract tests
         run: make test-mobile-release

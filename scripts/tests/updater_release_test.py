@@ -17,6 +17,66 @@ import record_update_feed
 
 
 class PublisherTests(unittest.TestCase):
+    def test_release_retry_preserves_unicode_notes_and_never_overwrites_conflicts(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            private = root / "release.private-key"
+            public = subprocess.check_output([str(tool("publisher")), "keygen", str(private)], text=True).strip()
+            config = dict(keyId="test-key", publicKey=public, baseUrl="https://updates.example.test/updates")
+            (root / "updater.properties").write_text("\n".join(f"{key}={value}" for key, value in config.items()))
+            (root / "version.properties").write_text("VERSION_NAME=1.0.13\nVERSION_CODE=25\n")
+            dmg = root / "release.dmg"
+            dmg.write_bytes(b"notarized-fixture")
+            notes = root / "notes.md"
+            notes.write_text("- 改进退出行为。\n", encoding="utf-8")
+            now = int(time.time())
+            payload = dict(schema=1, appId="saien.quotadog", channel="stable", sequence=1,
+                           issuedAt=now, expiresAt=now + 86400, releases=[])
+            feed = root / "old.json"
+            sign_feed(payload, feed, config, private)
+            remote = {"feeds/stable.json": feed.read_bytes()}
+            writes = []
+
+            def fetch(url, destination, maximum=262144):
+                key = url.removeprefix(config["baseUrl"] + "/")
+                if key not in remote: return False
+                Path(destination).write_bytes(remote[key])
+                return True
+
+            def upload(key, path, content_type):
+                remote[key] = Path(path).read_bytes()
+                writes.append(key)
+
+            arguments = ["publish_update.py", "--dmg", str(dmg), "--notes", str(notes), "--notes-language", "zh-CN",
+                         "--allow-existing", "--publish", "--private-key", str(private)]
+            with patch.object(publish_update, "ROOT", root), patch.object(publish_update, "fetch", fetch), \
+                    patch.object(publish_update, "upload", upload), patch.object(sys, "argv", arguments), \
+                    patch.object(publish_update, "inspect_dmg", return_value=(25, "1.0.13", "macos-aarch64")):
+                publish_update.main()
+                self.assertEqual(writes, ["releases/25/QuotaDog-1.0.13-macos-aarch64.dmg", "feeds/stable.json"])
+                release = verify_feed(remote["feeds/stable.json"], config)["releases"][0]
+                self.assertEqual(release["notes"], {"zh-CN": notes.read_text(encoding="utf-8")})
+                signed = remote["feeds/stable.json"]
+                publish_update.main()
+                self.assertEqual(len(writes), 2)
+                self.assertEqual(remote["feeds/stable.json"], signed)
+                # Normal publishing still rejects duplicates unless explicitly resuming.
+                with patch.object(sys, "argv", [arg for arg in arguments if arg != "--allow-existing"]):
+                    with self.assertRaisesRegex(RuntimeError, "already exists"):
+                        publish_update.main()
+                notes.write_text("Different notes\n", encoding="utf-8")
+                with self.assertRaisesRegex(RuntimeError, "already exists"):
+                    publish_update.main()
+                notes.write_text("- 改进退出行为。\n", encoding="utf-8")
+                expiry = verify_feed(signed, config)["expiresAt"]
+                with patch.object(publish_update.time, "time", return_value=expiry + 1):
+                    with self.assertRaisesRegex(RuntimeError, "feed has expired"):
+                        publish_update.main()
+                remote[writes[0]] = b"tampered-package"
+                with self.assertRaisesRegex(RuntimeError, "public package does not match"):
+                    publish_update.main()
+                self.assertEqual(len(writes), 2)
+
     def test_public_audit_records_only_a_new_verified_feed(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

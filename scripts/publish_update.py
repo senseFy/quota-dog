@@ -5,9 +5,9 @@ import base64
 import fcntl
 import hashlib
 import json
-import os
 from pathlib import Path
 import plistlib
+import re
 import subprocess
 import tempfile
 import time
@@ -16,7 +16,13 @@ from updater_tools import ROOT, tool
 
 
 def properties(path):
-    return dict(line.split("=", 1) for line in Path(path).read_text().splitlines() if line and not line.startswith("#"))
+    return dict(line.split("=", 1) for line in Path(path).read_text(encoding="utf-8").splitlines() if line and not line.startswith("#"))
+
+
+def notes_language(value):
+    if not re.fullmatch(r"[a-z]{2,3}(?:-[A-Za-z0-9]{2,8})*", value):
+        raise argparse.ArgumentTypeError("Use a language tag such as en, en-US or zh-CN")
+    return value
 
 
 def digest(path):
@@ -52,7 +58,7 @@ def verify_feed(data, config):
 
 def sign_feed(payload, output, config, private_key):
     source = output.with_suffix(".payload.json")
-    source.write_text(json.dumps(payload, ensure_ascii=False) + "\n")
+    source.write_text(json.dumps(payload, ensure_ascii=False) + "\n", encoding="utf-8")
     subprocess.run([str(tool("publisher")), "sign", str(source), str(output), config["keyId"], str(private_key)], check=True)
     # This also proves the private key matches the public key pinned in the app.
     verified = verify_feed(output.read_bytes(), config)
@@ -101,11 +107,14 @@ def main():
     mode.add_argument("--renew-if-due", action="store_true", help="Renew only when an existing feed is near expiry; never initialize a channel")
     mode.add_argument("--initialize", action="store_true", help="Create an empty feed if the channel has never been published")
     parser.add_argument("--notes", type=Path, help="UTF-8 release notes")
+    parser.add_argument("--notes-language", type=notes_language, default="en")
+    parser.add_argument("--allow-existing", action="store_true", help="Resume only if the published release and public package match exactly")
     parser.add_argument("--expires-days", type=int, default=30)
     parser.add_argument("--renew-before-days", type=int, default=10)
     parser.add_argument("--private-key", type=Path, default=Path.home() / ".config/quotadog/updater/quotadog-2026.private-key")
     parser.add_argument("--publish", action="store_true")
     args = parser.parse_args()
+    if args.allow_existing and not args.dmg: parser.error("--allow-existing requires --dmg")
     if not 1 <= args.expires_days <= 90: parser.error("expires-days must be 1..90")
     if args.renew_if_due and not 1 <= args.renew_before_days < args.expires_days:
         parser.error("renew-before-days must be positive and smaller than expires-days")
@@ -147,13 +156,27 @@ def main():
             artifact = dict(target=target, kind="dmg", url=config["baseUrl"] + "/" + key,
                 size=args.dmg.stat().st_size, sha256=digest(args.dmg), minimumOsVersion="13.0")
             release = next((r for r in releases if r["sequence"] == sequence), None)
+            notes = {args.notes_language: args.notes.read_text(encoding="utf-8")} if args.notes else {}
             if release:
-                if release["version"] != version or any(a["target"] == target for a in release["artifacts"]):
+                existing = next((a for a in release["artifacts"] if a["target"] == target), None)
+                same_release = (release["version"] == version and existing == artifact
+                                and release["notes"] == notes and release["minimumInstalledSequence"] == 0)
+                if args.allow_existing and same_release:
+                    if old["expiresAt"] <= int(time.time()):
+                        raise RuntimeError("Existing feed has expired; run make update-refresh before resuming")
+                    downloaded = output / "verified-package.dmg"
+                    if (not fetch(artifact["url"], downloaded, artifact["size"])
+                            or downloaded.stat().st_size != artifact["size"] or digest(downloaded) != artifact["sha256"]):
+                        raise RuntimeError("Existing public package does not match the local DMG")
+                    downloaded.unlink()
+                    print("Release is already published; verified the existing feed entry and public package.")
+                    return
+                if release["version"] != version or existing:
                     raise RuntimeError("This release/architecture already exists; bump the build or use --refresh")
                 release["artifacts"].append(artifact)
             else:
                 releases.append(dict(sequence=sequence, version=version, artifacts=[artifact], minimumInstalledSequence=0,
-                    notes={"en": args.notes.read_text()} if args.notes else {}))
+                    notes=notes))
         now = int(time.time())
         payload = dict(schema=1, appId="saien.quotadog", channel="stable", sequence=max(now, (old or {}).get("sequence", 0) + 1),
             issuedAt=now, expiresAt=now + args.expires_days * 86400, releases=releases)

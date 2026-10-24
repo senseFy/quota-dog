@@ -50,6 +50,8 @@ EXPO_ASC_ISSUER_ID ?=
 PUBLISH_TRACKS_SCRIPT ?= ./scripts/publish-tracks.sh
 MOBILE_RELEASE_ARGS ?=
 MOBILE_RELEASE_LOG_ROOT ?=
+MACOS_RELEASE_ARGS ?=
+NOTES_LANGUAGE ?= en
 
 IOS_ASC_KEY_PATH := $(or $(APP_STORE_CONNECT_API_KEY_PATH),$(ASC_KEY_PATH),$(EXPO_ASC_API_KEY_PATH))
 IOS_ASC_KEY_ID := $(or $(APP_STORE_CONNECT_API_KEY_ID),$(ASC_KEY_ID),$(EXPO_ASC_KEY_ID))
@@ -136,13 +138,21 @@ release-dmg-local: ## Build a signed macOS DMG; skip notarization.
 release-dmg-unsigned: ## Build an unsigned macOS DMG for local testing.
 	@./scripts/build_release_dmg.sh --skip-codesign --skip-notarize
 
+.PHONY: publish-macos test-macos-release
+
+publish-macos: ## Interactively prepare, notarize and publish a macOS release; supports --resume.
+	@python3 scripts/publish_macos.py $(MACOS_RELEASE_ARGS)
+
+test-macos-release: ## Test macOS release orchestration offline, without publishing.
+	@python3 scripts/tests/publish_macos_test.py
+
 .PHONY: update-prepare update-publish update-refresh update-renew test-updater test-updater-macos
 
 update-prepare: ## Prepare a signed update feed; pass DMG=/path/to/notarized.dmg.
-	@python3 scripts/publish_update.py --dmg "$(DMG)" $(if $(NOTES),--notes "$(NOTES)",)
+	@python3 scripts/publish_update.py --dmg "$(DMG)" $(if $(NOTES),--notes "$(NOTES)",) --notes-language "$(NOTES_LANGUAGE)"
 
 update-publish: ## Upload a verified DMG, then publish the signed stable feed.
-	@python3 scripts/publish_update.py --dmg "$(DMG)" $(if $(NOTES),--notes "$(NOTES)",) --publish
+	@python3 scripts/publish_update.py --dmg "$(DMG)" $(if $(NOTES),--notes "$(NOTES)",) --notes-language "$(NOTES_LANGUAGE)" --publish
 
 update-refresh: ## Renew and publish the existing signed feed without releasing a new app.
 	@python3 scripts/publish_update.py --refresh --publish
@@ -154,6 +164,7 @@ test-updater: ## Test the updater UI/receipts and offline publisher signatures.
 	@$(GRADLE) :composeApp:desktopTest
 	@python3 scripts/tests/updater_release_test.py
 	@python3 scripts/tests/macos_packaging_test.py
+	@python3 scripts/tests/publish_macos_test.py
 
 test-updater-macos: ## Run isolated signed/notarized upgrades through Cloudflare; requires release credentials.
 	@python3 scripts/test_macos_update.py $(UPDATER_ACCEPTANCE_ARGS)

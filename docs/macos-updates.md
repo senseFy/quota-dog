@@ -67,12 +67,91 @@ release by `scripts/updater_tools.py`. Archive SHA-256 values are verified befor
 extraction. The helper's Apache-2.0 license is included in the app and in
 `third_party/kmp-updater/LICENSE`. Never embed the upstream fixture helper.
 
-## Build and publish
+## Interactive release command
+
+```sh
+make publish-macos
+```
+
+Run from a clean `main` checkout after committing the implementation. The
+command currently supports **Apple Silicon**. It asks for a new version
+(default: next patch), the release notes language (`en` for English, `zh-CN` for
+Chinese, etc.), UTF-8 Markdown release notes and whether to publish to GitHub.
+At the notes input choice, press Enter for **1: type/paste text**; enter the
+notes, then a single `.` on its own line to finish. Choose **2: read a file**
+only when you have a notes file; a missing or unreadable file prompts again,
+and an empty path returns to the input choices. It increments
+the shared build number automatically; **do not bump the version separately**.
+The Android/iOS version source changes too, but this command only distributes macOS.
+
+The flow is:
+
+1. Check tools, JDK 21, signing identity, notary credentials, Cloudflare/GitHub
+   authentication and the current signed feed. Confirm the preparation plan.
+2. Commit `version.properties`, `CHANGELOG.md` and the website download link.
+3. Build/sign the app, notarize/staple it, package/sign the DMG, and notarize/staple
+   the DMG. Verify its identity, Apple tickets and manifest signing key.
+4. Show version/build, notes, source commit, artifact size/hash and destinations.
+   Ask for final publication confirmation (default: no).
+5. Push the source to `origin/main`, upload/verify the immutable R2 package and
+   signed stable feed, deploy the Worker/website, verify the page, and record
+   the public feed in GitHub.
+6. If selected, upload the same DMG to a GitHub draft, verify its downloaded
+   bytes, then publish it as Latest. The tag is `macos-vX.Y.Z-buildN`, which does
+   not match the generic unsigned `v*` release workflow. Finally, fast-forward
+   the local checkout to the public feed audit commit.
+
+The script also pushes any existing local commits ahead of `origin/main`.
+Credentials stay in the existing Keychain, CLI login/environment and private-key
+file; the script never copies key contents into its state or commits them.
+`JAVA_HOME` must point to a full JDK 21 if set; otherwise common installed and
+Gradle-cached JDK locations are checked. Requirements are listed below.
+
+```sh
+# Preview only: no writes, builds, credential checks or publication.
+python3 scripts/publish_macos.py --dry-run --version 1.0.13 \
+  --notes /path/to/notes.md --notes-language zh-CN --github-release yes
+
+# Commit/build/notarize/verify, then stop before pushing or publishing.
+make publish-macos MACOS_RELEASE_ARGS="--prepare-only"
+
+# Resume the exact saved version, notes, source and artifact.
+make publish-macos MACOS_RELEASE_ARGS="--resume build/release/macos/<run>"
+
+# Explicit noninteractive publication (both confirmations accepted).
+python3 scripts/publish_macos.py --version 1.0.13 --notes /path/to/notes.md \
+  --notes-language zh-CN --github-release yes --yes
+```
+
+Each run prints its resume command and saves checkpoints under ignored
+`build/release/macos/<run>/`. Keep this directory until publication is complete.
+Successful build/notarization steps are reused. Retries recheck the local DMG,
+public package/feed and website; a different existing artifact or different
+release notes are rejected instead of overwritten. GitHub drafts are resumed
+without replacing existing assets. A completed run is a no-op.
+
+Do not edit release metadata or switch source commits mid-run. If interrupted
+during the metadata commit, resume first: it can recover its own partial edits
+and a commit completed before its checkpoint was saved. Other edits stop the
+run for manual resolution. `--prepare-only` still creates a local release commit
+and submits binaries to Apple; it does not push, upload to R2 or deploy the site.
+
+Publication spans several services and is not atomic. If a later step fails,
+earlier published steps remain live; resume the same run. The command checks
+for active feed-renewal Actions jobs before publication, but this is not a
+distributed lock. Continue to use one publisher and avoid concurrent releases
+or feed renewal jobs. `--allow-existing` is an explicit publisher retry mode;
+ordinary `make update-publish` still rejects duplicate release/architecture pairs.
+
+## Individual build and publish commands
 
 Requirements: full JDK 21 (`JAVA_HOME`), Python 3.11+, OpenSSL 3, Xcode tools,
 Wrangler authenticated to the Cloudflare account, a Developer ID Application
 identity, and the `saytive-notary` Keychain profile (or existing `NOTARY_*`
 environment overrides). The signing and feed-upload credentials are independent.
+The interactive command additionally requires an authenticated `gh` CLI and
+Git push access to `senseFy/quota-dog`, including when GitHub Release is disabled
+(source pushes and public feed audit commits still use GitHub).
 
 1. Commit the implementation and use the normal version bump workflow to create
    a new version/build. All desktop architectures of one release use that same
@@ -98,6 +177,7 @@ environment overrides). The signing and feed-upload credentials are independent.
    release sequence, version and architecture. It also verifies the generated
    signature against the app's pinned public key. A wrong private key fails
    before any upload.
+   For Chinese notes, add `NOTES_LANGUAGE=zh-CN`; the default is `en`.
 
 4. Publish explicitly:
 

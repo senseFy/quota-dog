@@ -32,7 +32,7 @@ def main():
         previous = verify_feed(base64.b64decode(existing["content"]), config)
         if payload["sequence"] <= previous["sequence"]:
             raise RuntimeError("Refusing to record an older or conflicting feed")
-        body = dict(message="Record signed update feed renewal [skip ci]", branch="main",
+        body = dict(message="Record signed update feed [skip ci]", branch="main",
                     sha=existing["sha"], content=base64.b64encode(data).decode())
         result = subprocess.check_output(["gh", "api", "--method", "PUT", endpoint, "--input", "-"],
                                          input=json.dumps(body).encode())
