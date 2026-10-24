@@ -245,19 +245,25 @@ From a clean `main` checkout, run:
 make publish-macos
 ```
 
-The interactive command asks for the next version, release notes (file or pasted
-Markdown), notes language and whether to publish a GitHub Release. It commits
-the shared version/build, `CHANGELOG.md` and download page, builds and notarizes
-the Apple Silicon DMG, then shows the exact artifact before asking to publish.
-After confirmation it pushes the source, uploads and verifies the Cloudflare
-package/feed, deploys the website, records the feed and optionally publishes the
-same DMG to GitHub. Do not run `bump-version` separately first.
+The interactive command collects the next version, release notes (file or pasted
+Markdown), notes language and whether to publish a GitHub Release, then asks for
+one upfront confirmation (default: **yes**, press Enter to proceed). It
+automatically checks credentials, commits the shared version/build,
+`CHANGELOG.md` and download page, builds and notarizes the Apple
+Silicon DMG, pushes the source, uploads and verifies the Cloudflare package/feed,
+deploys the website, records the feed and optionally publishes the same DMG to
+GitHub. There are no further script prompts after the initial confirmation.
+Do not run `bump-version` separately first.
 
 ```bash
 make publish-macos MACOS_RELEASE_ARGS="--prepare-only" # stop before pushing/publishing
 make publish-macos MACOS_RELEASE_ARGS="--resume build/release/macos/<run>"
 make test-macos-release                               # offline release-flow tests
 ```
+
+Resuming an approved publication reuses its saved decision. A run created with
+`--prepare-only` asks for publication confirmation at the start of its first
+publishing resume, before any credential checks or artifact verification.
 
 See [the macOS publishing guide](docs/macos-updates.md#interactive-release-command)
 for preview/automation options, credentials and retry behavior.

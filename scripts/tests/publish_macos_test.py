@@ -49,7 +49,7 @@ class MacOSReleaseTests(unittest.TestCase):
         self.state = dict(schema=1, root=str(self.root), version="1.0.13", build=25,
                           notes="- 改进菜单栏退出行为。\n", language="zh-CN", github=False,
                           tag="macos-v1.0.13-build25", private_key="/unused/test.private-key",
-                          base=self.git("rev-parse", "HEAD"), done=[])
+                          base=self.git("rev-parse", "HEAD"), done=[], publication_approved=True)
         self.state["files"] = release.plan_files(self.state)
         release.save(self.directory, self.state)
         self.calls = []
@@ -65,9 +65,9 @@ class MacOSReleaseTests(unittest.TestCase):
         if command[0] == "git":
             return self.original_run(*command, **kwargs)
         if "scripts/build_release.sh" in command:
-            (self.directory / "artifacts/QuotaDog.app").mkdir(parents=True)
+            (Path(kwargs["env"]["QUOTADOG_RELEASES_DIR"]) / "QuotaDog.app").mkdir(parents=True)
         elif "scripts/build_release_dmg.sh" in command:
-            (self.directory / "artifacts/release.dmg").write_bytes(b"notarized-package-fixture")
+            (Path(kwargs["env"]["QUOTADOG_RELEASES_DIR"]) / "release.dmg").write_bytes(b"notarized-package-fixture")
         elif command[:2] == ["wrangler", "deploy"] and self.fail_deploy:
             raise RuntimeError("Simulated deployment interruption after feed publication")
 
@@ -76,11 +76,11 @@ class MacOSReleaseTests(unittest.TestCase):
         Path(destination).write_bytes((self.root / release.SITE).read_bytes())
         return True
 
-    def run_release(self, prepare_only=False, confirm=True):
+    def run_release(self, prepare_only=False):
         args = argparse.Namespace(prepare_only=prepare_only, yes=False)
         with patch.object(release, "run", self.fake_run), patch.object(release, "inspect_dmg", return_value=(25, "1.0.13", "macos-aarch64")), \
                 patch.object(release, "check_renewal"), patch.object(release, "fetch", self.fake_fetch), \
-                patch.object(release, "confirm", return_value=confirm):
+                patch.object(release, "confirm", side_effect=AssertionError("Unexpected mid-run prompt")):
             release.release(self.directory, self.state, args, os.environ.copy())
 
     def test_prepare_commits_unicode_notes_but_does_not_publish(self):
@@ -95,10 +95,109 @@ class MacOSReleaseTests(unittest.TestCase):
         self.assertEqual(publisher[publisher.index("--notes-language") + 1], "zh-CN")
         self.assertFalse(self.state["tag"].startswith("v"))
 
-    def test_declining_final_confirmation_keeps_prepared_artifact(self):
-        self.run_release(confirm=False)
-        self.assertTrue(Path(self.state["dmg"]).is_file())
-        self.assertFalse(any("--publish" in command or command[:2] == ["git", "push"] for command in self.calls))
+    def test_declining_upfront_confirmation_starts_no_work(self):
+        self.state["publication_approved"] = False
+        release.save(self.directory, self.state)
+        with patch.object(sys, "argv", ["publish_macos.py", "--resume", str(self.directory)]), \
+                patch.object(release, "confirm", return_value=False) as confirm, \
+                patch.object(release, "preflight", side_effect=AssertionError("Started preflight before confirmation")):
+            release.main()
+        confirm.assert_called_once()
+        self.assertEqual(self.git("rev-parse", "HEAD"), self.state["base"])
+        self.assertFalse((self.directory / "artifacts").exists())
+        self.assertFalse(json.loads((self.directory / "state.json").read_text())["publication_approved"])
+
+    def test_one_upfront_confirmation_runs_through_publication_and_resume(self):
+        notes = self.directory / "input.md"
+        notes.write_text(self.state["notes"], encoding="utf-8")
+        arguments = ["publish_macos.py", "--version", "1.0.13", "--notes", str(notes),
+                     "--notes-language", "zh-CN", "--github-release", "no"]
+        events = []
+        original_confirm = release.confirm
+
+        def confirm(*args):
+            events.append("confirm")
+            return original_confirm(*args)
+
+        def preflight(state):
+            self.assertTrue(state["publication_approved"])
+            self.assertEqual(events[0], "confirm")
+            events.append("preflight")
+            return os.environ.copy()
+
+        with patch.object(release, "confirm", side_effect=confirm) as confirmation, \
+                patch.object(release, "preflight", side_effect=preflight), patch.object(release, "check_feed"), \
+                patch.object(release, "run", self.fake_run), patch.object(release, "inspect_dmg", return_value=(25, "1.0.13", "macos-aarch64")), \
+                patch.object(release, "check_renewal"), patch.object(release, "fetch", self.fake_fetch), \
+                patch.object(sys.stdin, "isatty", return_value=True), patch("builtins.input", return_value="") as input_prompt:
+            self.fail_deploy = True
+            with patch.object(sys, "argv", arguments):
+                self.assertEqual(release.main(), 1)
+            confirmation.assert_called_once()
+            state_path = next(path for path in release.RUNS.glob("*/state.json") if path.parent != self.directory)
+            saved = json.loads(state_path.read_text())
+            self.assertTrue(saved["publication_approved"])
+            self.assertIn("Publish update feed", saved["done"])
+            source = saved["source"]
+            confirmation.side_effect = AssertionError("Confirmed resume must not prompt again")
+            self.fail_deploy = False
+            with patch.object(sys, "argv", ["publish_macos.py", "--resume", str(state_path.parent)]):
+                self.assertEqual(release.main(), 0)
+            saved = json.loads(state_path.read_text())
+            self.assertTrue(saved["complete"])
+            self.assertEqual(saved["source"], source)
+            input_prompt.assert_called_once()
+            self.assertIn("[yes]", input_prompt.call_args.args[0])
+        self.assertEqual(events, ["confirm", "preflight", "preflight"])
+        self.assertEqual(sum("scripts/build_release.sh" in command for command in self.calls), 1)
+        self.assertEqual(self.git("rev-list", "--count", "HEAD"), "2")
+
+    def test_prepared_release_requires_confirmation_at_start_before_publication(self):
+        self.state["publication_approved"] = False
+        self.run_release(prepare_only=True)
+        with patch.object(sys, "argv", ["publish_macos.py", "--resume", str(self.directory)]), \
+                patch.object(release, "confirm", side_effect=[True]) as confirm, \
+                patch.object(release, "preflight", return_value=os.environ.copy()) as preflight, \
+                patch.object(release, "run", self.fake_run), patch.object(release, "inspect_dmg", return_value=(25, "1.0.13", "macos-aarch64")), \
+                patch.object(release, "check_renewal"), patch.object(release, "fetch", self.fake_fetch):
+            self.assertEqual(release.main(), 0)
+        confirm.assert_called_once()
+        self.assertTrue(preflight.call_args.args[0]["publication_approved"])
+        self.assertEqual(sum("scripts/build_release.sh" in command for command in self.calls), 1)
+
+    def test_prepare_only_and_legacy_publication_decisions_are_preserved(self):
+        args = argparse.Namespace(prepare_only=False, yes=False)
+        state = dict(self.state)
+        state.pop("publication_approved")
+        state["done"] = ["Publish update feed"]
+        with patch.object(release, "confirm", side_effect=AssertionError("Already authorized")):
+            self.assertTrue(release.confirm_run(state, args))
+        self.assertTrue(state["publication_approved"])
+        args.prepare_only = True
+        with patch.object(release, "confirm", return_value=True):
+            self.assertTrue(release.confirm_run(state, args))
+        self.assertFalse(release.publication_approved(state))
+
+    def test_failed_preflight_retains_the_confirmed_plan_for_resume(self):
+        self.state["publication_approved"] = False
+        release.save(self.directory, self.state)
+        with patch.object(sys, "argv", ["publish_macos.py", "--resume", str(self.directory)]), \
+                patch.object(release, "confirm", side_effect=[True]) as confirm, \
+                patch.object(release, "preflight", side_effect=RuntimeError("Credentials unavailable")):
+            self.assertEqual(release.main(), 1)
+            saved = json.loads((self.directory / "state.json").read_text())
+            self.assertTrue(saved["publication_approved"])
+            self.assertEqual(saved["notes"], self.state["notes"])
+            self.assertEqual(release.main(), 1)
+        confirm.assert_called_once()
+        self.assertEqual(self.git("rev-parse", "HEAD"), self.state["base"])
+        self.assertFalse((self.directory / "artifacts").exists())
+
+    def test_child_commands_have_no_interactive_stdin(self):
+        result = self.original_run(sys.executable, "-c",
+            "import os, sys; print(repr(sys.stdin.read())); print(os.environ['GIT_TERMINAL_PROMPT']); print(os.environ['GH_PROMPT_DISABLED'])",
+            capture=True)
+        self.assertEqual(result.splitlines(), ["''", "0", "1"])
 
     def test_resume_after_upload_failure_reuses_commit_and_dmg(self):
         self.fail_deploy = True

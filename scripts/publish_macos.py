@@ -23,16 +23,22 @@ RUNS = ROOT / "build/release/macos"
 DEFAULT_KEY = Path.home() / ".config/quotadog/updater/quotadog-2026.private-key"
 
 
+def command_environment(env=None):
+    return dict(os.environ if env is None else env, GIT_TERMINAL_PROMPT="0", GH_PROMPT_DISABLED="1")
+
+
 def run(*command, env=None, capture=False):
     command = [str(part) for part in command]
     print("+ " + shlex.join(command), flush=True)
-    result = subprocess.run(command, cwd=ROOT, env=env, check=True, text=True,
+    result = subprocess.run(command, cwd=ROOT, env=command_environment(env), check=True, text=True,
+                            stdin=subprocess.DEVNULL,
                             stdout=subprocess.PIPE if capture else None)
     return result.stdout.strip() if capture else None
 
 
 def git(*args):
-    return subprocess.check_output(["git", *args], cwd=ROOT, text=True).strip()
+    return subprocess.check_output(["git", *args], cwd=ROOT, env=command_environment(),
+                                   stdin=subprocess.DEVNULL, text=True).strip()
 
 
 def ancestor(older, newer):
@@ -70,7 +76,30 @@ def yes_no(value):
 
 
 def confirm(label, yes=False):
-    return yes or yes_no(ask(label + " (yes/no)", "no", yes_no))
+    return yes or yes_no(ask(label + " (yes/no)", "yes", yes_no))
+
+
+def publication_approved(state):
+    # Older runs recorded completed publication steps instead of the decision.
+    legacy_approval = state.get("publication_started", False) or any(
+        step in state.get("done", []) for step in ("Publish update feed", "Deploy website", "Publish GitHub Release")
+    )
+    return state.get("publication_approved", legacy_approval)
+
+
+def confirm_run(state, args):
+    if args.prepare_only:
+        # Keep this choice when resuming too: preparing must not authorize a later publication.
+        if not confirm("Commit, build and notarize only, without publishing?", args.yes):
+            return False
+        state["publication_approved"] = False
+        return True
+    if publication_approved(state):
+        print("Reusing this run's confirmed publication plan; no further input is required.", flush=True)
+    elif not confirm("Commit, build, notarize and publish this release automatically?", args.yes):
+        return False
+    state["publication_approved"] = True
+    return True
 
 
 def normalize_notes(notes):
@@ -414,7 +443,7 @@ def publication_status(state, stream=None):
         print("  Stopped at: " + state["active_step"], file=stream)
 
 
-def summary(state, directory=None):
+def summary(state, directory=None, prepare_only=False):
     config = properties(ROOT / "updater.properties")
     print(f"\nQuotaDog {state['version']} (build {state['build']}, Apple Silicon)")
     if state.get("complete"):
@@ -422,7 +451,12 @@ def summary(state, directory=None):
     elif state.get("source"):
         print("Release metadata is committed. This run reuses the prepared source and completed build steps.")
     else:
-        print("Shared version/build, CHANGELOG.md and the website will be committed and pushed to origin/main.")
+        print("Shared version/build, CHANGELOG.md and the website will be committed locally.")
+    if not state.get("complete"):
+        if prepare_only:
+            print("Mode: prepare only. Build and notarize; stop before pushing or publishing.")
+        else:
+            print("Mode: automatic publication. Push source to origin/main, publish the update feed and deploy the website.")
     print(f"Update origin: {config['baseUrl']}\nNotes language: {state['language']}")
     print("GitHub Release: " + (state["tag"] if state["github"] else "disabled"))
     print("\n" + state["notes"])
@@ -433,6 +467,8 @@ def summary(state, directory=None):
 
 
 def release(directory, state, args, env):
+    if not args.prepare_only and not publication_approved(state):
+        raise RuntimeError("Confirm the publication plan before starting the release")
     prepare_commit(directory, state)
     notes = directory / "notes.md"
     notes.write_text(state["notes"], encoding="utf-8")
@@ -477,16 +513,13 @@ def release(directory, state, args, env):
                  "--notes-language", state["language"], "--private-key", state["private_key"], "--allow-existing"]
     # Always recheck against the live feed, including when resuming a partially published run.
     run(*publisher, env=env)
-    summary(state, directory)
+    summary(state, directory, prepare_only=args.prepare_only)
     if args.prepare_only:
         print("Prepared and verified. This invocation stopped before pushing or deploying.")
         return
-    if not confirm("Publish this DMG, update feed, website and source now?", args.yes):
-        print("Publication deferred; the prepared release is available to resume.")
-        return
     check_source(state)
     if digest(dmg) != state["sha256"] or dmg.stat().st_size != state["size"]:
-        raise RuntimeError("DMG changed while awaiting confirmation; it will not be published")
+        raise RuntimeError("DMG changed after verification; it will not be published")
     check_renewal()
     state["publication_started"] = True
     save(directory, state)
@@ -527,7 +560,7 @@ def main():
     parser.add_argument("--resume", type=Path, help="Resume a saved run directory without another version bump")
     parser.add_argument("--dry-run", action="store_true", help="Print the plan only; no writes, credential checks or builds")
     parser.add_argument("--prepare-only", action="store_true", help="Commit, build, notarize and verify; stop before pushing or publishing")
-    parser.add_argument("--yes", action="store_true", help="Accept preparation and final publication; all input fields must be explicit in non-TTY runs")
+    parser.add_argument("--yes", action="store_true", help="Accept the upfront plan; all input fields must be explicit in non-TTY runs")
     args = parser.parse_args()
     if args.resume and any((args.version, args.notes, args.notes_language, args.github_release, args.private_key != DEFAULT_KEY)):
         parser.error("--resume uses the saved version, notes, GitHub choice and key path; omit those options")
@@ -539,7 +572,7 @@ def main():
         state = json.loads((directory / "state.json").read_text(encoding="utf-8")) if directory else collect(args)
         if directory and (state.get("schema") != 1 or state.get("root") != str(ROOT)):
             raise RuntimeError("This release state belongs to another checkout or script version")
-        summary(state, directory)
+        summary(state, directory, prepare_only=args.prepare_only)
         if args.dry_run:
             if not directory:
                 plan_files(state)
@@ -556,16 +589,18 @@ def main():
                 assert_clean()
             elif "source" in state:
                 check_source(state)
-            env = preflight(state)
+            if not confirm_run(state, args):
+                print("No release work started.")
+                return
             if not directory:
-                check_feed(state)
-                if not confirm("Commit the release metadata and build the notarized DMG?", args.yes):
-                    print("No release prepared.")
-                    return
                 directory = RUNS / (time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6])
                 directory.mkdir(mode=0o700)
                 state.update(schema=1, root=str(ROOT), base=git("rev-parse", "HEAD"), files=plan_files(state), done=[])
-                save(directory, state)
+            save(directory, state)
+            print("Starting preparation only." if args.prepare_only else "Starting automatic publication. No further input is required.", flush=True)
+            env = preflight(state)
+            if "source" not in state:
+                check_feed(state)
             release(directory, state, args, env)
     except (RuntimeError, OSError, ValueError, KeyError, argparse.ArgumentTypeError, subprocess.CalledProcessError, EOFError, KeyboardInterrupt) as error:
         print(f"\nRelease stopped: {error or 'interrupted'}", file=sys.stderr)

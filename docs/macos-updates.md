@@ -86,13 +86,17 @@ The Android/iOS version source changes too, but this command only distributes ma
 
 The flow is:
 
-1. Check tools, JDK 21, signing identity, notary credentials, Cloudflare/GitHub
-   authentication and the current signed feed. Confirm the preparation plan.
-2. Commit `version.properties`, `CHANGELOG.md` and the website download link.
+1. Collect all inputs, show the destinations and release plan, and ask once
+   whether to build and publish automatically (default: yes; Enter starts the
+   run, `no` cancels). GitHub Release also defaults to yes. This happens before
+   any credential checks, downloads or builds. Save that decision with the run.
+2. Check tools, JDK 21, signing identity, notary credentials, Cloudflare/GitHub
+   authentication and the current signed feed. Commit `version.properties`,
+   `CHANGELOG.md` and the website download link.
 3. Build/sign the app, notarize/staple it, package/sign the DMG, and notarize/staple
    the DMG. Verify its identity, Apple tickets and manifest signing key.
-4. Show version/build, notes, source commit, artifact size/hash and destinations.
-   Ask for final publication confirmation (default: no).
+4. Show version/build, notes, source commit and artifact size/hash. Continue
+   automatically after all artifact and signature checks pass.
 5. Push the source to `origin/main`, upload/verify the immutable R2 package and
    signed stable feed, deploy the Worker/website, verify the page, and record
    the public feed in GitHub.
@@ -118,13 +122,21 @@ make publish-macos MACOS_RELEASE_ARGS="--prepare-only"
 # Resume the exact saved version, notes, source and artifact.
 make publish-macos MACOS_RELEASE_ARGS="--resume build/release/macos/<run>"
 
-# Explicit noninteractive publication (both confirmations accepted).
+# Explicit noninteractive publication (the upfront confirmation accepted).
 python3 scripts/publish_macos.py --version 1.0.13 --notes /path/to/notes.md \
   --notes-language zh-CN --github-release yes --yes
 ```
 
 Each run saves checkpoints under ignored `build/release/macos/<run>/`;
 incomplete runs also print their resume command. Keep this directory until publication is complete.
+The publication decision is saved before credential checks, so a failed preflight
+also retains the inputs. `--resume` reuses an approved publication without asking
+again. A prepared-only run has no publication approval: its first publishing
+resume asks once at the start, before verification. To continue preparing without
+publishing, keep `--prepare-only` on the resume command. Explicitly selecting this
+mode clears any previous publication approval for that run.
+Child commands receive no interactive stdin, and Git/GitHub terminal prompts are
+disabled; missing credentials cause a failure instead of a mid-run login question.
 Successful build/notarization steps are reused. Retries recheck the local DMG,
 public package/feed and website; a different existing artifact or different
 release notes are rejected instead of overwritten. GitHub drafts are resumed
