@@ -1,0 +1,97 @@
+# QuotaDog's release manifest for releasekit. The engine (pipx-installed from
+# the releasekit repo) owns the pipeline; this file owns the facts.
+schema = 1
+engine = ">=0.0.1"
+runs_dir = "build/release/macos"
+
+[product]
+name = "QuotaDog"
+app_id = "saien.quotadog"
+team_id = "45V6QJP3A2"
+repo = "senseFy/quota-dog"
+
+[version]
+source = "properties"
+file = "version.properties"
+key = "VERSION_NAME"
+code_key = "VERSION_CODE"
+sequence = "version-code"
+app_version = "same"
+
+[prepare]
+commit = true
+push = true
+branch = "main"
+paths = ["version.properties", "CHANGELOG.md",
+         "infra/cloudflare/public/index.html"]
+# The website download link only changes when a release actually ships, so it
+# is a release command: `releasekit bump` touches version.properties alone.
+release_commands = ["python3 scripts/prepare-website.py"]
+changelog = "CHANGELOG.md"
+changelog_heading = "## {version} ({code}) — {date}"
+message = "Prepare macOS {version} release ({code})"
+# The published-feed audit record lands on main from the post-publish hook.
+mutable_paths = ["infra/cloudflare/published/stable.json"]
+
+[build]
+command = "QUOTADOG_MAC_SIGN=0 ./gradlew :composeApp:createReleaseDistributable --console=plain && python3 scripts/release-app-prepare.py"
+app = "composeApp/build/compose/binaries/main-release/app/QuotaDog.app"
+java = "jdk21"
+java_env = ["JAVA_HOME"]
+
+[sign]
+app = "developer-id"
+identity = "auto"
+entitlements = "scripts/macos-entitlements.plist"
+unsigned_names = ["kmp-updater-helper"]
+forbidden_files = ["Contents/Helpers/kmp-updater-fixture-helper"]
+notary_profile = "saytive-notary"
+
+[package]
+layout = "plain"
+volume = "QuotaDog"
+filename = "{name}-{version}-macos-{arch}.dmg"
+minimum_os = "13.0"
+
+[verify]
+
+[feed]
+driver = "kmp-updater"
+settings = "updater.properties"
+# The client reads its channel metadata from a properties file baked into the
+# application JAR by the Gradle build; there is no bundle-level settings file.
+app_settings = ""
+app_helper = "Contents/Helpers/kmp-updater-helper"
+app_license = "Contents/Resources/ThirdParty/kmp-updater-LICENSE.txt"
+private_key = "~/.config/quotadog/updater/quotadog-2026.private-key"
+expires_days = 30
+renew_before_days = 10
+history = "accumulate"
+
+[publish]
+bucket = "quotadog-releases"
+base_url = "https://quotadog.saien.pro/updates"
+artifact_key = "releases/{sequence}/{filename}"
+feed_key = "feeds/stable.json"
+manifest_key = ""
+artifact_cache = "public, max-age=31536000, immutable"
+feed_cache = "no-store, max-age=0"
+token_env = "CLOUDFLARE_API_TOKEN"
+account_env = "CLOUDFLARE_ACCOUNT_ID"
+state_dir = "~/.config/quotadog/updater"
+max_artifact_bytes = 314572800
+wrangler_config = "infra/cloudflare/wrangler.jsonc"
+
+[notes]
+mode = "required"
+default_language = "en"
+
+[github]
+enabled = true
+repo = "senseFy/quota-dog"
+tag = "macos-v{version}-build{code}"
+title = "{name} {version} (macOS)"
+ask = true
+
+[hooks]
+post_publish = ["python3 scripts/deploy-website.py"]

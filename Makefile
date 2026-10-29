@@ -138,10 +138,34 @@ release-dmg-local: ## Build a signed macOS DMG; skip notarization.
 release-dmg-unsigned: ## Build an unsigned macOS DMG for local testing.
 	@./scripts/build_release_dmg.sh --skip-codesign --skip-notarize
 
-.PHONY: publish-macos test-macos-release
+RELEASEKIT ?= releasekit
 
-publish-macos: ## Interactively prepare, notarize and publish a macOS release; supports --resume.
-	@python3 scripts/publish_macos.py $(MACOS_RELEASE_ARGS)
+.PHONY: release-macos release-macos-prepare release-macos-dry-run release-macos-resume release-macos-check release-macos-renew release-macos-renew-if-due release-macos-status test-macos-release
+
+release-macos: ## Interactive, resumable macOS release via releasekit (VERSION=x.y.z, ARGS for more flags).
+	@$(RELEASEKIT) run $(if $(VERSION),--version "$(VERSION)") $(ARGS)
+
+release-macos-prepare: ## Build, sign, notarize and verify without publishing (VERSION=x.y.z, ARGS).
+	@$(RELEASEKIT) run --prepare-only $(if $(VERSION),--version "$(VERSION)") $(ARGS)
+
+release-macos-dry-run: ## Print the release plan without changing anything (VERSION=x.y.z).
+	@$(RELEASEKIT) run --dry-run $(if $(VERSION),--version "$(VERSION)") $(ARGS)
+
+release-macos-resume: ## Resume an interrupted or prepared release run (MACOS_RELEASE_RUN=<run-dir> required).
+	@[ -n "$(MACOS_RELEASE_RUN)" ] || { echo "release-macos-resume resumes a run directory; pass MACOS_RELEASE_RUN=build/release/macos/<dir>" >&2; exit 2; }
+	@$(RELEASEKIT) run --resume "$(MACOS_RELEASE_RUN)"
+
+release-macos-check: ## Validate the releasekit manifest, toolchain and credentials.
+	@$(RELEASEKIT) check
+
+release-macos-renew: ## Re-sign the update feed without shipping a new build.
+	@$(RELEASEKIT) renew
+
+release-macos-renew-if-due: ## Renew only inside the renewal window; safe for daily scheduling.
+	@$(RELEASEKIT) renew --if-due
+
+release-macos-status: ## Show the latest release run's publication state.
+	@$(RELEASEKIT) status
 
 test-macos-release: ## Test macOS release orchestration offline, without publishing.
 	@python3 scripts/tests/publish_macos_test.py
@@ -155,10 +179,10 @@ update-publish: ## Upload a verified DMG, then publish the signed stable feed.
 	@python3 scripts/publish_update.py --dmg "$(DMG)" $(if $(NOTES),--notes "$(NOTES)",) --notes-language "$(NOTES_LANGUAGE)" --publish
 
 update-refresh: ## Renew and publish the existing signed feed without releasing a new app.
-	@python3 scripts/publish_update.py --refresh --publish
+	@$(RELEASEKIT) renew
 
-update-renew: ## Renew the existing feed only when it expires within 10 days; safe for daily scheduling.
-	@python3 scripts/publish_update.py --renew-if-due --publish
+update-renew: ## Renew the existing feed only when it expires within the renewal window.
+	@$(RELEASEKIT) renew --if-due
 
 test-updater: ## Test the updater UI/receipts and offline publisher signatures.
 	@$(GRADLE) :composeApp:desktopTest
@@ -172,14 +196,9 @@ test-updater-macos: ## Run isolated signed/notarized upgrades through Cloudflare
 version-current: ## Print VERSION_NAME and VERSION_CODE from version.properties.
 	@./scripts/bump_version.sh --print-current
 
-bump-version: ## Bump the patch version and shared store build; COMMIT=no skips the commit.
-ifeq ($(COMMIT),yes)
-	@$(BUMP_VERSION_SCRIPT) "$(CURDIR)"
-else ifeq ($(COMMIT),no)
-	@$(BUMP_VERSION_SCRIPT) --no-commit "$(CURDIR)"
-else
-	@echo "COMMIT must be yes or no." >&2; exit 2
-endif
+bump-version: ## Bump the patch version and shared build; VERSION=x.y.z for explicit, COMMIT=no to skip commit.
+	@if [ "$(COMMIT)" != "yes" ] && [ "$(COMMIT)" != "no" ]; then echo "COMMIT must be yes or no." >&2; exit 2; fi
+	@$(RELEASEKIT) bump $(if $(VERSION),--version "$(VERSION)") $(if $(filter no,$(COMMIT)),--no-commit)
 
 set-version: ## Set the product version (VERSION=x.y.z) without changing the store build.
 	@test -n "$(VERSION)" || { echo "VERSION is required. Example: make set-version VERSION=1.2.0" >&2; exit 1; }
