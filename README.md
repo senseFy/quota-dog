@@ -242,7 +242,7 @@ Optional env vars: `RELEASE_VERSION`, `CODESIGN_IDENTITY`, `NOTARY_PROFILE`,
 From a clean `main` checkout, run:
 
 ```bash
-make publish-macos
+make release-macos
 ```
 
 The interactive command collects the next version, release notes (file or pasted
@@ -253,12 +253,12 @@ automatically checks credentials, commits the shared version/build,
 Silicon DMG, pushes the source, uploads and verifies the Cloudflare package/feed,
 deploys the website, records the feed and optionally publishes the same DMG to
 GitHub. There are no further script prompts after the initial confirmation.
-Do not run `bump-version` separately first.
+Do not run `bump-version` separately first. The pipeline is driven by
+[releasekit](https://github.com/senseFy/releasekit) and [`release.toml`](release.toml).
 
 ```bash
-make publish-macos MACOS_RELEASE_ARGS="--prepare-only" # stop before pushing/publishing
-make publish-macos MACOS_RELEASE_ARGS="--resume build/release/macos/<run>"
-make test-macos-release                               # offline release-flow tests
+make release-macos MACOS_RELEASE_ARGS="--prepare-only"   # stop before pushing/publishing
+make release-macos-resume MACOS_RELEASE_RUN=build/release/macos/<run>
 ```
 
 Resuming an approved publication reuses its saved decision. A run created with
@@ -287,7 +287,7 @@ and attaches:
 - Desktop: macOS `*.dmg`, Windows `*.msi`, Linux `*.deb`
 
 The CI macOS DMG is an **unsigned** Compose Desktop package for convenience.
-For the signed production installer, use `make publish-macos`; its separate
+For the signed production installer, use `make release-macos`; its separate
 `macos-vX.Y.Z-buildN` tag avoids triggering this unsigned packaging workflow.
 
 iOS is intentionally not published this way — distribute via TestFlight / App

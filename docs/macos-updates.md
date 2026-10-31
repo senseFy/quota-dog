@@ -70,10 +70,12 @@ extraction. The helper's Apache-2.0 license is included in the app and in
 ## Interactive release command
 
 ```sh
-make publish-macos
+make release-macos
 ```
 
-Run from a clean `main` checkout after committing the implementation. The
+The pipeline is driven by [releasekit](https://github.com/senseFy/releasekit);
+product-specific facts live in [`release.toml`](../release.toml). Run from a
+clean `main` checkout after committing the implementation. The
 command currently supports **Apple Silicon**. It asks for a new version
 (default: next patch), the release notes language (`en` for English, `zh-CN` for
 Chinese, etc.), UTF-8 Markdown release notes and whether to publish to GitHub.
@@ -113,18 +115,18 @@ Gradle-cached JDK locations are checked. Requirements are listed below.
 
 ```sh
 # Preview only: no writes, builds, credential checks or publication.
-python3 scripts/publish_macos.py --dry-run --version 1.0.13 \
-  --notes /path/to/notes.md --notes-language zh-CN --github-release yes
+releasekit run --dry-run --version 1.0.13 \
+  --notes /path/to/notes.md --notes-language zh-CN --github
 
 # Commit/build/notarize/verify, then stop before pushing or publishing.
-make publish-macos MACOS_RELEASE_ARGS="--prepare-only"
+make release-macos MACOS_RELEASE_ARGS="--prepare-only"
 
 # Resume the exact saved version, notes, source and artifact.
-make publish-macos MACOS_RELEASE_ARGS="--resume build/release/macos/<run>"
+make release-macos-resume MACOS_RELEASE_RUN=build/release/macos/<run>
 
 # Explicit noninteractive publication (the upfront confirmation accepted).
-python3 scripts/publish_macos.py --version 1.0.13 --notes /path/to/notes.md \
-  --notes-language zh-CN --github-release yes --yes
+releasekit run --version 1.0.13 --notes /path/to/notes.md \
+  --notes-language zh-CN --github --yes
 ```
 
 Each run saves checkpoints under ignored `build/release/macos/<run>/`;
@@ -159,7 +161,7 @@ is already available even if GitHub Release is not yet confirmed. The command ch
 for active feed-renewal Actions jobs before publication, but this is not a
 distributed lock. Continue to use one publisher and avoid concurrent releases
 or feed renewal jobs. `--allow-existing` is an explicit publisher retry mode;
-ordinary `make update-publish` still rejects duplicate release/architecture pairs.
+ordinary `publish_update.py --publish` still rejects duplicate release/architecture pairs.
 
 ## Individual build and publish commands
 
@@ -187,7 +189,7 @@ Git push access to `senseFy/quota-dog`, including when GitHub Release is disable
 3. Prepare a signed feed without uploading anything:
 
    ```sh
-   make update-prepare DMG=/absolute/path/to/QuotaDog.dmg NOTES=/path/to/notes.txt
+   python3 scripts/publish_update.py --dmg /absolute/path/to/QuotaDog.dmg --notes /path/to/notes.txt
    ```
 
    Review the payload and signed envelope under `build/update-publication/`.
@@ -195,12 +197,12 @@ Git push access to `senseFy/quota-dog`, including when GitHub Release is disable
    release sequence, version and architecture. It also verifies the generated
    signature against the app's pinned public key. A wrong private key fails
    before any upload.
-   For Chinese notes, add `NOTES_LANGUAGE=zh-CN`; the default is `en`.
+   For Chinese notes, add `--notes-language zh-CN`; the default is `en`.
 
 4. Publish explicitly:
 
    ```sh
-   make update-publish DMG=/absolute/path/to/QuotaDog.dmg NOTES=/path/to/notes.txt
+   python3 scripts/publish_update.py --dmg /absolute/path/to/QuotaDog.dmg --notes /path/to/notes.txt --publish
    ```
 
    The publisher uploads the immutable package first, downloads it to verify
