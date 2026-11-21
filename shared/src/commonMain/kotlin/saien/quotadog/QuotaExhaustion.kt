@@ -18,6 +18,7 @@ fun AccountUiState.isQuotaExhausted(): Boolean {
         ProviderId.CURSOR -> windows.cursorQuotaExhausted()
         ProviderId.ANTIGRAVITY -> windows.antigravityQuotaExhausted()
         ProviderId.DROID -> windows.droidQuotaExhausted()
+        ProviderId.AMP -> windows.ampQuotaExhausted()
     }
 }
 
@@ -65,6 +66,16 @@ private fun List<UsageWindow>.droidQuotaExhausted(): Boolean {
     val standard = filter { it.id.startsWith("droid-standard") }
     val core = filter { it.id.startsWith("droid-core") }
     return standard.any { it.isExhausted } && (core.isEmpty() || core.any { it.isExhausted })
+}
+
+/**
+ * Amp Free and Amp Tier Agent usage are separate agent pools, while Orb usage only covers
+ * cloud container runtime. Agent quota is spent only once all agent pools are exhausted.
+ */
+private fun List<UsageWindow>.ampQuotaExhausted(): Boolean {
+    if (isEmpty()) return false
+    val agentPools = filter { it.id != "amp-orb" }.ifEmpty { this }
+    return agentPools.all { it.isExhausted }
 }
 
 private val CLAUDE_MODEL_WINDOW_IDS = setOf("seven_day_sonnet", "seven_day_opus")

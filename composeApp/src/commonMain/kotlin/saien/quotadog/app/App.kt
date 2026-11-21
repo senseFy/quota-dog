@@ -118,6 +118,8 @@ import saien.quotadog.app.components.rememberQdSnackbarController
 import saien.quotadog.app.theme.QdTheme
 import saien.quotadog.app.theme.QuotaDogTheme
 import saien.quotadog.app.theme.rememberSystemDarkTheme
+import saien.quotadog.ampAuthFileHint
+import saien.quotadog.ampCliImportAvailable
 import saien.quotadog.antigravityAuthHint
 import saien.quotadog.antigravityCliImportAvailable
 import saien.quotadog.availableProviders
@@ -257,6 +259,7 @@ private fun QuotaDogScreen(
     var showGrokMethodPicker by remember { mutableStateOf(false) }
     var showAntigravityMethodPicker by remember { mutableStateOf(false) }
     var showDroidMethodPicker by remember { mutableStateOf(false) }
+    var showAmpMethodPicker by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
     var manualReorderEditing by remember { mutableStateOf(false) }
     var selectedProvider by remember { mutableStateOf<ProviderId?>(null) }
@@ -466,6 +469,9 @@ private fun QuotaDogScreen(
                     } else if (provider == ProviderId.DROID && droidCliImportAvailable()) {
                         showProviderPicker = false
                         showDroidMethodPicker = true
+                    } else if (provider == ProviderId.AMP && ampCliImportAvailable()) {
+                        showProviderPicker = false
+                        showAmpMethodPicker = true
                     } else {
                         showProviderPicker = false
                         store.startLogin(provider)
@@ -473,6 +479,7 @@ private fun QuotaDogScreen(
                             text = when (provider) {
                                 ProviderId.GROK -> "Opening xAI sign-in..."
                                 ProviderId.DROID -> "Opening Factory sign-in..."
+                                ProviderId.AMP -> "Opening Amp sign-in..."
                                 ProviderId.CURSOR -> "Importing Cursor app or CLI credentials..."
                                 ProviderId.ANTIGRAVITY -> "Opening Google sign-in for Antigravity..."
                                 ProviderId.DEVIN -> "Importing Devin CLI credentials..."
@@ -569,6 +576,36 @@ private fun QuotaDogScreen(
                     store.startImportDroid()
                     snackbar.show(
                         text = "Importing droid CLI credentials...",
+                        tone = QdSnackbarTone.Info,
+                    )
+                },
+            )
+        }
+
+        QdBottomSheet(
+            visible = showAmpMethodPicker,
+            onDismiss = { showAmpMethodPicker = false },
+        ) {
+            AuthMethodPickerContent(
+                title = "Add Amp",
+                description = "Sign in with Amp, or import credentials from the Amp CLI on this computer.",
+                oauthTitle = "Sign in with Amp",
+                oauthSubtitle = "Same device-code login as `amp login --oauth`",
+                importTitle = "Import from Amp CLI",
+                importSubtitle = "Read credentials from ${ampAuthFileHint()}",
+                onSelectOauth = {
+                    showAmpMethodPicker = false
+                    store.startAmpDeviceLogin()
+                    snackbar.show(
+                        text = "Opening Amp sign-in...",
+                        tone = QdSnackbarTone.Info,
+                    )
+                },
+                onSelectCliImport = {
+                    showAmpMethodPicker = false
+                    store.startImportAmp()
+                    snackbar.show(
+                        text = "Importing Amp CLI credentials...",
                         tone = QdSnackbarTone.Info,
                     )
                 },
@@ -1990,6 +2027,7 @@ private fun ProviderId.subtitle(): String = when (this) {
     ProviderId.ANTIGRAVITY -> "Google Antigravity quota windows"
     ProviderId.DEVIN -> "Devin daily / weekly quota (CLI import)"
     ProviderId.DROID -> "Factory Droid quota windows"
+    ProviderId.AMP -> "Amp Free, tier usage, and credits"
 }
 
 private fun UsageWindow.displayRatio(mode: UsageDisplayMode): Double = when (mode) {

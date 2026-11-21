@@ -146,6 +146,36 @@ actual fun droidAuthFileHint(): String = "${droidHomeDir().absolutePath} (droid 
 
 actual fun droidCliImportAvailable(): Boolean = true
 
+actual fun loadAmpCredentialsFromCli(): OAuthTokenBundle {
+    val preferredUrl = System.getenv("AMP_URL")?.takeIf { it.isNotBlank() }
+    val file = ampSecretsFile()
+    if (file.exists()) {
+        return runCatching {
+            AmpAuthParser.parseSecretsJson(file.readText(), preferredServerUrl = preferredUrl)
+        }.getOrElse { error ->
+            when (error) {
+                is ProviderException -> throw error
+                else -> throw ProviderException(
+                    AuthState.Error,
+                    "Failed to read Amp credentials from ${file.absolutePath}.",
+                )
+            }
+        }
+    }
+    val envKey = System.getenv("AMP_API_KEY")?.trim()?.takeIf { it.isNotEmpty() }
+    if (envKey != null) {
+        return AmpAuthParser.fromApiKey(envKey, serverUrl = preferredUrl)
+    }
+    throw ProviderException(
+        AuthState.NotConfigured,
+        "Amp credentials not found at ${file.absolutePath}. Run `amp login` first.",
+    )
+}
+
+actual fun ampAuthFileHint(): String = ampSecretsFile().absolutePath
+
+actual fun ampCliImportAvailable(): Boolean = true
+
 private class DroidCredentialCandidate(
     val label: String,
     val read: () -> OAuthTokenBundle,
@@ -249,6 +279,22 @@ private fun droidKeychainEncryptionKey(): String {
 private fun droidHomeDir(): File {
     System.getenv("DROID_HOME")?.takeIf { it.isNotBlank() }?.let { return File(it) }
     return File(System.getProperty("user.home"), ".factory")
+}
+
+private fun ampSecretsFile(): File {
+    System.getenv("AMP_SECRETS_FILE")?.takeIf { it.isNotBlank() }?.let { return File(it) }
+    val home = System.getProperty("user.home")
+    val os = System.getProperty("os.name").orEmpty().lowercase()
+    return if (os.contains("win")) {
+        val localAppData = System.getenv("LOCALAPPDATA")?.takeIf { it.isNotBlank() }
+            ?: System.getenv("APPDATA")?.takeIf { it.isNotBlank() }
+            ?: File(home, "AppData/Local").absolutePath
+        File(localAppData, "amp/secrets.json")
+    } else {
+        val dataHome = System.getenv("XDG_DATA_HOME")?.takeIf { it.isNotBlank() }
+            ?: File(home, ".local/share").absolutePath
+        File(dataHome, "amp/secrets.json")
+    }
 }
 
 private fun devinCredentialsFile(): File {

@@ -13,6 +13,7 @@ import org.jetbrains.compose.resources.painterResource
 import saien.quotadog.ProviderId
 import saien.quotadog.app.theme.QdTheme
 import quotadog.composeapp.generated.resources.Res
+import quotadog.composeapp.generated.resources.provider_amp
 import quotadog.composeapp.generated.resources.provider_antigravity
 import quotadog.composeapp.generated.resources.provider_claudecode
 import quotadog.composeapp.generated.resources.provider_codex
@@ -39,6 +40,7 @@ fun QdProviderAvatar(
         ProviderId.ANTIGRAVITY -> colors.antigravityAccent
         ProviderId.DEVIN -> colors.devinAccent
         ProviderId.DROID -> colors.droidAccent
+        ProviderId.AMP -> colors.ampAccent
     }
     val icon = when (provider) {
         ProviderId.CODEX -> Res.drawable.provider_codex
@@ -48,6 +50,7 @@ fun QdProviderAvatar(
         ProviderId.ANTIGRAVITY -> Res.drawable.provider_antigravity
         ProviderId.DEVIN -> Res.drawable.provider_devin
         ProviderId.DROID -> Res.drawable.provider_droid
+        ProviderId.AMP -> Res.drawable.provider_amp
     }
     val iconScale = when (provider) {
         ProviderId.CODEX -> 0.7f
@@ -57,6 +60,7 @@ fun QdProviderAvatar(
         ProviderId.ANTIGRAVITY -> 0.74f
         ProviderId.DEVIN -> 0.74f
         ProviderId.DROID -> 0.78f
+        ProviderId.AMP -> 0.84f
     }
     Box(
         modifier = modifier.size(size),

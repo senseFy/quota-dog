@@ -27,3 +27,9 @@ expect fun loadDroidCredentialsFromCli(): OAuthTokenBundle
 expect fun droidAuthFileHint(): String
 
 expect fun droidCliImportAvailable(): Boolean
+
+expect fun loadAmpCredentialsFromCli(): OAuthTokenBundle
+
+expect fun ampAuthFileHint(): String
+
+expect fun ampCliImportAvailable(): Boolean

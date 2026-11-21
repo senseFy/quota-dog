@@ -70,6 +70,14 @@ class QuotaExhaustionTest {
     }
 
     @Test
+    fun ampIsSpentOnlyWhenAllAgentPoolsAreExhausted() {
+        assertFalse(spent(ProviderId.AMP, "amp-agent" to 0.2, "amp-orb" to 1.0, "amp-free" to 1.0))
+        assertFalse(spent(ProviderId.AMP, "amp-agent" to 1.0, "amp-free" to 0.3))
+        assertTrue(spent(ProviderId.AMP, "amp-agent" to 1.0, "amp-orb" to 0.1, "amp-free" to 1.0))
+        assertTrue(spent(ProviderId.AMP, "amp-free" to 1.0))
+    }
+
+    @Test
     fun spentWindowResetIsTheEarliestResetTheSnapshotPredates() {
         val account = account(
             ProviderId.CODEX,

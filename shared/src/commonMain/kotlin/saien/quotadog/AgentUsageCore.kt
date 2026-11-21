@@ -48,6 +48,7 @@ enum class ProviderId(val displayName: String) {
     ANTIGRAVITY("Antigravity"),
     DEVIN("Devin"),
     DROID("Droid"),
+    AMP("Amp"),
 }
 
 enum class AuthState {
@@ -250,6 +251,10 @@ private object ProviderSpecs {
             AuthState.NotConfigured,
             "Droid uses device-code sign-in or droid CLI import instead of browser OAuth."
         )
+        ProviderId.AMP -> throw ProviderException(
+            AuthState.NotConfigured,
+            "Amp uses device-code sign-in or Amp CLI import instead of browser OAuth."
+        )
     }
 }
 
@@ -299,7 +304,7 @@ class QuotaDogClient(
                     parameters.append("access_type", "offline")
                     parameters.append("prompt", "select_account consent")
                 }
-                ProviderId.GROK, ProviderId.CURSOR, ProviderId.DEVIN, ProviderId.DROID -> Unit
+                ProviderId.GROK, ProviderId.CURSOR, ProviderId.DEVIN, ProviderId.DROID, ProviderId.AMP -> Unit
             }
         }.buildString()
         if (openBrowser) browserLauncher.open(url)
@@ -330,6 +335,21 @@ class QuotaDogClient(
     internal suspend fun completeDroidDeviceLogin(device: DroidDeviceCode): AccountKey {
         val token = DroidOAuth.waitForAuthorization(httpClient, device)
         return tokenStore.save(ProviderId.DROID, token)
+    }
+
+    internal suspend fun startAmpDeviceLogin(): AmpDeviceCode {
+        return AmpOAuth.requestDeviceCode(httpClient)
+    }
+
+    internal suspend fun completeAmpDeviceLogin(device: AmpDeviceCode): AccountKey {
+        var token = AmpOAuth.waitForAuthorization(httpClient, device)
+        if (token.email.isNullOrBlank()) {
+            val email = resolveAmpEmail(token)
+            if (!email.isNullOrBlank()) {
+                token = token.copy(email = email)
+            }
+        }
+        return tokenStore.save(ProviderId.AMP, token)
     }
 
     suspend fun waitForLocalCallback(providerId: ProviderId, timeoutMillis: Long = 300_000): String? {
@@ -428,6 +448,29 @@ class QuotaDogClient(
         return tokenStore.save(ProviderId.DROID, token)
     }
 
+    suspend fun importAmpAccount(): AccountKey {
+        var token = loadAmpCredentialsFromCli()
+        if (token.email.isNullOrBlank()) {
+            val email = resolveAmpEmail(token)
+            if (!email.isNullOrBlank()) {
+                token = token.copy(email = email)
+            }
+        }
+        return tokenStore.save(ProviderId.AMP, token)
+    }
+
+    private suspend fun resolveAmpEmail(token: OAuthTokenBundle): String? {
+        val fetched = runCatching {
+            AmpUsageFetcher.fetch(httpClient, token.accessToken, token.apiServerUrl)
+        }
+        if (fetched.isSuccess) {
+            return fetched.getOrNull()?.email
+        }
+        return runCatching {
+            AmpUsageFetcher.fetchUserEmail(httpClient, token.accessToken, token.apiServerUrl)
+        }.getOrNull()
+    }
+
     suspend fun refreshUsage(accountKey: AccountKey): ProviderUsageSnapshot {
         val token = ensureFreshToken(accountKey)
         return when (accountKey.providerId) {
@@ -438,6 +481,7 @@ class QuotaDogClient(
             ProviderId.ANTIGRAVITY -> fetchAntigravityUsage(token)
             ProviderId.DEVIN -> fetchDevinUsage(token)
             ProviderId.DROID -> fetchDroidUsage(token)
+            ProviderId.AMP -> fetchAmpUsage(token)
         }
     }
 
@@ -448,6 +492,7 @@ class QuotaDogClient(
             ProviderId.ANTIGRAVITY -> ensureFreshAntigravityToken(accountKey)
             ProviderId.DEVIN -> ensureFreshDevinToken(accountKey)
             ProviderId.DROID -> ensureFreshDroidToken(accountKey)
+            ProviderId.AMP -> ensureFreshAmpToken(accountKey)
             ProviderId.CODEX, ProviderId.CLAUDE_CODE -> {
                 val token = tokenStore.load(accountKey)
                     ?: throw ProviderException(AuthState.NotConfigured, "Not signed in to ${accountKey.providerId.displayName}")
@@ -654,6 +699,31 @@ class QuotaDogClient(
         )
     }
 
+    private suspend fun ensureFreshAmpToken(accountKey: AccountKey): OAuthTokenBundle {
+        val stored = tokenStore.load(accountKey)
+            ?: throw ProviderException(AuthState.NotConfigured, "Not signed in to ${accountKey.providerId.displayName}")
+        if (!stored.isExpired()) return stored
+        if (ampCliImportAvailable()) {
+            val reloaded = runCatching { loadAmpCredentialsFromCli() }.getOrNull()
+            if (reloaded != null && !reloaded.isExpired()) {
+                val email = reloaded.email
+                    ?: runCatching {
+                        AmpUsageFetcher.fetchUserEmail(httpClient, reloaded.accessToken, reloaded.apiServerUrl)
+                    }.getOrNull()
+                val withEmail = if (!email.isNullOrBlank()) reloaded.copy(email = email) else reloaded
+                if (accountKeyForToken(ProviderId.AMP, withEmail) == accountKey) {
+                    val merged = withEmail.withIdentityFrom(stored)
+                    tokenStore.save(accountKey, merged)
+                    return merged
+                }
+            }
+        }
+        throw ProviderException(
+            AuthState.RequiresRelogin,
+            "Amp credentials expired. Sign in with Amp again or re-import from `amp login`.",
+        )
+    }
+
     private suspend fun exchangeCode(
         providerId: ProviderId,
         code: String,
@@ -718,6 +788,10 @@ class QuotaDogClient(
                 AuthState.NotConfigured,
                 "Droid does not use browser OAuth. Sign in with Factory or import droid CLI credentials instead."
             )
+            ProviderId.AMP -> throw ProviderException(
+                AuthState.NotConfigured,
+                "Amp does not use browser OAuth callbacks. Sign in with Amp or import Amp CLI credentials instead."
+            )
         }
     }
 
@@ -760,6 +834,10 @@ class QuotaDogClient(
                 "Devin API keys do not expire. Run `devin auth login`, then re-import."
             )
             ProviderId.DROID -> DroidOAuth.refresh(httpClient, refreshToken)
+            ProviderId.AMP -> throw ProviderException(
+                AuthState.RequiresRelogin,
+                "Amp API keys do not refresh automatically. Sign in with Amp again or re-import from `amp login`."
+            )
         }
     }
 
@@ -926,6 +1004,30 @@ class QuotaDogClient(
         )
     }
 
+    private suspend fun fetchAmpUsage(token: OAuthTokenBundle): ProviderUsageSnapshot {
+        val usage = AmpUsageFetcher.fetch(httpClient, token.accessToken, token.apiServerUrl)
+        return ProviderUsageSnapshot(
+            providerId = ProviderId.AMP,
+            authState = AuthState.LoggedIn,
+            windows = usage.windows,
+            collectedAt = Clock.System.now(),
+            accountEmail = usage.email ?: token.email,
+            message = buildString {
+                usage.individualCreditsDollars?.let { dollars ->
+                    append("Individual credits: ${formatDevinDollars(dollars)}")
+                    append(" · ")
+                }
+                usage.workspaceCreditsDollars?.let { dollars ->
+                    val label = usage.workspaceName?.let { "$it credits" } ?: "Workspace credits"
+                    append("$label: ${formatDevinDollars(dollars)}")
+                    append(" · ")
+                }
+                append("Source: Amp")
+            },
+            planLabel = formatSubscriptionPlanLabel(usage.planName),
+        )
+    }
+
     private suspend fun fetchClaudeUsage(token: OAuthTokenBundle): ProviderUsageSnapshot {
         val text = httpClient.get("https://api.anthropic.com/api/oauth/usage") {
             header("Authorization", "Bearer ${token.accessToken}")
@@ -980,6 +1082,7 @@ class QuotaDogStore(
     private var detectStarted = false
     private var grokDeviceLoginJob: Job? = null
     private var droidDeviceLoginJob: Job? = null
+    private var ampDeviceLoginJob: Job? = null
     private val _state = MutableStateFlow(DashboardState())
     val state: StateFlow<DashboardState> = _state
 
@@ -1001,6 +1104,10 @@ class QuotaDogStore(
             }
             ProviderId.DROID -> {
                 startDroidDeviceLogin()
+                return
+            }
+            ProviderId.AMP -> {
+                startAmpDeviceLogin()
                 return
             }
             else -> Unit
@@ -1034,6 +1141,19 @@ class QuotaDogStore(
         }
     }
 
+    fun startAmpDeviceLogin() {
+        ampDeviceLoginJob?.cancel()
+        ampDeviceLoginJob = storeScope.launch {
+            try {
+                beginAmpDeviceLoginAndWait()
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Throwable) {
+                platformDebugLog("store action failed label=ampDeviceLogin")
+            }
+        }
+    }
+
     fun startImportGrok() {
         launchSafely("importGrok") { importGrokAccountAndRefresh() }
     }
@@ -1044,6 +1164,10 @@ class QuotaDogStore(
 
     fun startImportDroid() {
         launchSafely("importDroid") { importDroidAccountAndRefresh() }
+    }
+
+    fun startImportAmp() {
+        launchSafely("importAmp") { importAmpAccountAndRefresh() }
     }
 
     fun startCompleteLogin(accountKey: AccountKey, callbackUri: String) {
@@ -1091,6 +1215,7 @@ class QuotaDogStore(
                 ProviderId.ANTIGRAVITY -> launchSafely("importAntigravity") { importAntigravityAccountAndRefresh() }
                 ProviderId.DEVIN -> launchSafely("importDevin") { importDevinAccountAndRefresh() }
                 ProviderId.DROID -> launchSafely("importDroid") { importDroidAccountAndRefresh() }
+                ProviderId.AMP -> launchSafely("importAmp") { importAmpAccountAndRefresh() }
                 ProviderId.CODEX, ProviderId.CLAUDE_CODE -> launchSafely("refresh:${accountKey.providerId.name}") {
                     refresh(accountKey)
                 }
@@ -1159,6 +1284,10 @@ class QuotaDogStore(
             }
             ProviderId.DROID -> {
                 beginDroidDeviceLoginAndWait()
+                return
+            }
+            ProviderId.AMP -> {
+                beginAmpDeviceLoginAndWait()
                 return
             }
             ProviderId.CODEX, ProviderId.CLAUDE_CODE, ProviderId.ANTIGRAVITY -> Unit
@@ -1408,6 +1537,81 @@ class QuotaDogStore(
         }
     }
 
+    private suspend fun beginAmpDeviceLoginAndWait() {
+        val pendingKey = AccountKey.pending(ProviderId.AMP, "device")
+        var deviceUi: DeviceCodeLoginStart? = null
+        try {
+            update(pendingKey) {
+                it.copy(
+                    added = true,
+                    authState = AuthState.Unknown,
+                    busy = true,
+                    loginStart = null,
+                    deviceLogin = null,
+                    message = "Starting Amp sign-in...",
+                )
+            }
+            val device = client.startAmpDeviceLogin()
+            deviceUi = DeviceCodeLoginStart(
+                userCode = device.userCode,
+                verificationUri = device.verificationUri,
+                verificationUriComplete = device.verificationUriComplete,
+            )
+            update(pendingKey) {
+                it.copy(
+                    added = true,
+                    busy = true,
+                    deviceLogin = deviceUi,
+                    message = "Approve access in the browser. If asked, enter ${device.userCode}.",
+                )
+            }
+            val opened = client.openUrl(device.authorizationUrl)
+            if (!opened) {
+                update(pendingKey) {
+                    it.copy(
+                        added = true,
+                        busy = true,
+                        deviceLogin = deviceUi,
+                        message = "Could not open the browser. Visit ${device.authorizationUrl} and enter ${device.userCode}.",
+                    )
+                }
+            }
+            val accountKey = client.completeAmpDeviceLogin(device)
+            if (state.value.accounts[pendingKey] == null) return
+            replacePendingWithAccount(
+                pendingKey = pendingKey,
+                accountKey = accountKey,
+                message = "Sign-in successful, refreshing usage...",
+            )
+            onLocalDataChanged?.invoke()
+            refresh(accountKey)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: ProviderException) {
+            platformDebugLog("store ampDeviceLogin provider error state=${error.state} status=${error.statusCode}")
+            update(pendingKey) {
+                it.copy(
+                    added = true,
+                    authState = error.state,
+                    busy = false,
+                    deviceLogin = deviceUi,
+                    message = safeUserMessage(error, "Amp sign-in failed. Please try again."),
+                )
+            }
+        } catch (error: Throwable) {
+            platformDebugLog("store ampDeviceLogin unexpected error")
+            update(pendingKey) {
+                it.copy(
+                    added = true,
+                    authState = AuthState.Error,
+                    busy = false,
+                    deviceLogin = deviceUi,
+                    message = safeUserMessage(error, "Amp sign-in failed. Please try again."),
+                )
+            }
+        }
+    }
+
     private suspend fun importGrokAccountAndRefresh() {
         val pendingKey = AccountKey.pending(ProviderId.GROK, "import")
         update(pendingKey) {
@@ -1618,6 +1822,50 @@ class QuotaDogStore(
         }
     }
 
+    internal suspend fun importAmpAccountAndRefresh() {
+        val pendingKey = AccountKey.pending(ProviderId.AMP, "import")
+        update(pendingKey) {
+            it.copy(
+                added = true,
+                authState = AuthState.Unknown,
+                busy = true,
+                message = "Reading Amp CLI credentials from ${ampAuthFileHint()}...",
+            )
+        }
+        try {
+            val accountKey = client.importAmpAccount()
+            replacePendingWithAccount(
+                pendingKey = pendingKey,
+                accountKey = accountKey,
+                message = "Imported Amp credentials, refreshing usage...",
+            )
+            onLocalDataChanged?.invoke()
+            refresh(accountKey)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: ProviderException) {
+            platformDebugLog("store importAmp provider error state=${error.state} status=${error.statusCode}")
+            update(pendingKey) {
+                it.copy(
+                    added = true,
+                    authState = error.state,
+                    busy = false,
+                    message = safeUserMessage(error, "Could not import Amp credentials."),
+                )
+            }
+        } catch (error: Throwable) {
+            platformDebugLog("store importAmp unexpected error")
+            update(pendingKey) {
+                it.copy(
+                    added = true,
+                    authState = AuthState.Error,
+                    busy = false,
+                    message = safeUserMessage(error, "Could not import Amp credentials."),
+                )
+            }
+        }
+    }
+
     suspend fun completeLogin(accountKey: AccountKey, callbackUri: String) {
         val start = state.value.accounts[accountKey]?.loginStart
             ?: throw ProviderException(AuthState.Error, "No pending sign-in flow to complete")
@@ -1673,9 +1921,18 @@ class QuotaDogStore(
     }
 
     suspend fun delete(accountKey: AccountKey) {
-        if (accountKey.providerId == ProviderId.GROK && accountKey.isPending) {
-            grokDeviceLoginJob?.cancel()
-            grokDeviceLoginJob = null
+        if (accountKey.isPending) {
+            when (accountKey.providerId) {
+                ProviderId.GROK -> {
+                    grokDeviceLoginJob?.cancel()
+                    grokDeviceLoginJob = null
+                }
+                ProviderId.AMP -> {
+                    ampDeviceLoginJob?.cancel()
+                    ampDeviceLoginJob = null
+                }
+                else -> Unit
+            }
         }
         client.logout(accountKey)
         usageSnapshotStore.delete(accountKey)
@@ -1802,6 +2059,8 @@ private fun inferWindowDurationSeconds(id: String, label: String): Long? {
         "antigravity-gemini-weekly",
         "antigravity-claude-gpt-weekly",
         "antigravity-gemini-argon-weekly" -> SEVEN_DAY_SECONDS
+        "amp-free" -> DAY_SECONDS
+        "amp-agent", "amp-orb" -> THIRTY_DAY_SECONDS
         "credits" -> when {
             label.contains("weekly", ignoreCase = true) -> SEVEN_DAY_SECONDS
             label.contains("monthly", ignoreCase = true) -> THIRTY_DAY_SECONDS
@@ -1854,6 +2113,7 @@ private fun formatCursorCents(cents: Int): String {
 }
 
 private const val FIVE_HOUR_SECONDS = 5L * 60L * 60L
+private const val DAY_SECONDS = 24L * 60L * 60L
 private const val SEVEN_DAY_SECONDS = 7L * 24L * 60L * 60L
 private const val THIRTY_DAY_SECONDS = 30L * 24L * 60L * 60L
 

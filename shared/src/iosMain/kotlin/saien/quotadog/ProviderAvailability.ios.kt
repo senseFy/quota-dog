@@ -6,6 +6,7 @@ actual fun availableProviders(): List<ProviderId> = listOf(
     ProviderId.GROK,
     ProviderId.ANTIGRAVITY,
     ProviderId.DROID,
+    ProviderId.AMP,
 )
 
 actual fun loadGrokCredentialsFromCli(): OAuthTokenBundle {
@@ -59,3 +60,14 @@ actual fun loadDroidCredentialsFromCli(): OAuthTokenBundle {
 actual fun droidAuthFileHint(): String = "~/.factory"
 
 actual fun droidCliImportAvailable(): Boolean = false
+
+actual fun loadAmpCredentialsFromCli(): OAuthTokenBundle {
+    throw ProviderException(
+        AuthState.NotConfigured,
+        "Amp CLI import is only available on the desktop app. Sign in with Amp instead."
+    )
+}
+
+actual fun ampAuthFileHint(): String = "~/.local/share/amp/secrets.json"
+
+actual fun ampCliImportAvailable(): Boolean = false

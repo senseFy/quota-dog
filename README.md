@@ -1,6 +1,6 @@
 # QuotaDog
 
-QuotaDog is a local, cross-platform dashboard for viewing Codex, Claude Code, Grok, Cursor, Antigravity, Devin, and Factory Droid CLI quota windows.
+QuotaDog is a local, cross-platform dashboard for viewing Codex, Claude Code, Grok, Cursor, Antigravity, Devin, Factory Droid, and Amp CLI quota windows.
 
 It reads provider usage data directly from your account and does not proxy model traffic or bypass provider limits.
 
@@ -10,7 +10,7 @@ QuotaDog is built with Kotlin Multiplatform and Compose Multiplatform, with app 
 
 The app currently focuses on a small workflow:
 
-- Sign in to Codex, Claude Code, or Antigravity through browser-based OAuth (or import Antigravity CLI credentials from the macOS Keychain), sign in to Grok with xAI device-code OAuth (or import Grok CLI credentials on desktop), sign in to Droid with Factory device-code OAuth (or import droid CLI credentials on desktop), import Cursor credentials from the local Cursor app on desktop, or import Devin credentials from the Devin CLI credentials file.
+- Sign in to Codex, Claude Code, or Antigravity through browser-based OAuth (or import Antigravity CLI credentials from the macOS Keychain), sign in to Grok with xAI device-code OAuth (or import Grok CLI credentials on desktop), sign in to Droid with Factory device-code OAuth (or import droid CLI credentials on desktop), sign in to Amp with device-code OAuth (or import Amp CLI credentials on desktop), import Cursor credentials from the local Cursor app on desktop, or import Devin credentials from the Devin CLI credentials file.
 - View usage windows, quota progress, and reset timing.
 - Refresh accounts, remove local account data, and optionally mask account emails in the UI.
 - Optionally sync encrypted account tokens, cached usage, and preferences through a user-provided Dropbox app folder.

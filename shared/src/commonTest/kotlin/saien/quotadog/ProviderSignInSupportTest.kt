@@ -26,8 +26,8 @@ class ProviderSignInSupportTest {
     }
 
     @Test
-    fun grokAntigravityAndDroidSupportBothMethods() {
-        for (provider in listOf(ProviderId.GROK, ProviderId.ANTIGRAVITY, ProviderId.DROID)) {
+    fun grokAntigravityDroidAndAmpSupportBothMethods() {
+        for (provider in listOf(ProviderId.GROK, ProviderId.ANTIGRAVITY, ProviderId.DROID, ProviderId.AMP)) {
             assertEquals(
                 setOf(ProviderSignInMethod.OAuth, ProviderSignInMethod.CliImport),
                 provider.supportedSignInMethods(),
@@ -41,6 +41,7 @@ class ProviderSignInSupportTest {
         assertEquals(grokCliImportAvailable(), ProviderId.GROK.cliImportAvailable())
         assertEquals(antigravityCliImportAvailable(), ProviderId.ANTIGRAVITY.cliImportAvailable())
         assertEquals(droidCliImportAvailable(), ProviderId.DROID.cliImportAvailable())
+        assertEquals(ampCliImportAvailable(), ProviderId.AMP.cliImportAvailable())
     }
 
     @Test

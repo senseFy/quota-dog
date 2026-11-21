@@ -109,6 +109,7 @@ actual class PlatformOAuthCallbackServer actual constructor() : OAuthCallbackSer
             )
             ProviderId.DEVIN -> throw IllegalArgumentException("Devin does not use browser OAuth callbacks.")
             ProviderId.DROID -> throw IllegalArgumentException("Droid does not use browser OAuth callbacks.")
+            ProviderId.AMP -> throw IllegalArgumentException("Amp does not use browser OAuth callbacks.")
         }
         return waitForCallback(config.port, config.path, timeoutMillis)
     }
