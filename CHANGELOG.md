@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.15 (27) — 2026-11-21
+
+Support google gemini & ampcode
+
 ## 1.0.14 (26) — 2026-10-30
 
 Performance optimizations and stability improvements.
