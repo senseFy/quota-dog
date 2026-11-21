@@ -14,14 +14,17 @@ enum class ProviderSignInMethod {
 /**
  * Sign-in methods this provider supports at all, independent of the current platform.
  *
- * Codex and Claude Code only speak OAuth. Cursor, Antigravity, and Devin only expose local
- * credential import. Grok and Droid support both, and the picker offers a method choice for
- * them when the local CLI store is reachable.
+ * Codex and Claude Code only speak OAuth. Cursor and Devin only expose local credential
+ * import. Grok, Antigravity, and Droid support both, and the picker offers a method choice
+ * for them when the local CLI store is reachable.
  */
 fun ProviderId.supportedSignInMethods(): Set<ProviderSignInMethod> = when (this) {
     ProviderId.CODEX, ProviderId.CLAUDE_CODE -> setOf(ProviderSignInMethod.OAuth)
-    ProviderId.CURSOR, ProviderId.ANTIGRAVITY, ProviderId.DEVIN -> setOf(ProviderSignInMethod.CliImport)
-    ProviderId.GROK, ProviderId.DROID -> setOf(ProviderSignInMethod.OAuth, ProviderSignInMethod.CliImport)
+    ProviderId.CURSOR, ProviderId.DEVIN -> setOf(ProviderSignInMethod.CliImport)
+    ProviderId.GROK, ProviderId.ANTIGRAVITY, ProviderId.DROID -> setOf(
+        ProviderSignInMethod.OAuth,
+        ProviderSignInMethod.CliImport,
+    )
 }
 
 /** Whether browser / device-code sign-in works for this provider on the current platform. */
@@ -30,13 +33,15 @@ fun ProviderId.oauthAvailable(): Boolean = ProviderSignInMethod.OAuth in support
 /**
  * Whether local CLI/app credential import works for this provider on the current platform.
  *
- * Grok and Droid keep their credential stores outside the sandbox on desktop only, so the
- * support columns and method picker defer to the platform checks for those two.
+ * Grok, Antigravity, and Droid keep their CLI credential stores outside the mobile sandbox
+ * (and Antigravity's CLI store uses macOS Keychain), so the support columns and method picker
+ * defer to the platform checks for those three.
  */
 fun ProviderId.cliImportAvailable(): Boolean = when (this) {
     ProviderId.GROK -> grokCliImportAvailable()
+    ProviderId.ANTIGRAVITY -> antigravityCliImportAvailable()
     ProviderId.DROID -> droidCliImportAvailable()
-    // Cursor, Antigravity, and Devin keep their credentials where the sandbox allows, so they
-    // are offered only where availableProviders() lists them (desktop).
+    // Cursor and Devin keep their credentials where the sandbox allows, so they are offered
+    // only where availableProviders() lists them (desktop).
     else -> this in availableProviders() && ProviderSignInMethod.CliImport in supportedSignInMethods()
 }

@@ -107,6 +107,84 @@ class AntigravityUsageTest {
         assertEquals(0.1, windows.first { it.id.contains("claude") }.usedRatio, absoluteTolerance = 1e-9)
     }
 
+    @Test
+    fun preservesArgonGroupAndTreatsOmittedRemainingFractionWithResetTimeAsExhausted() {
+        val root = json.parseToJsonElement(
+            """
+            {
+              "groups": [
+                {
+                  "displayName": "Gemini Models",
+                  "buckets": [
+                    {
+                      "bucketId": "gemini-5h",
+                      "displayName": "Five Hour Limit Remaining",
+                      "window": "5h",
+                      "resetTime": "2026-11-21T16:33:06Z"
+                    },
+                    {
+                      "bucketId": "gemini-weekly",
+                      "displayName": "Weekly Limit Remaining",
+                      "window": "weekly",
+                      "resetTime": "2026-11-28T11:33:06Z",
+                      "remainingFraction": 0.9
+                    }
+                  ]
+                },
+                {
+                  "displayName": "Gemini 4 Argon",
+                  "buckets": [
+                    {
+                      "bucketId": "gemini-argon-wtu-weekly",
+                      "displayName": "Gemini 4 Argon Weekly Limit",
+                      "window": "weekly",
+                      "resetTime": "2026-11-28T12:21:10Z",
+                      "remainingFraction": 1
+                    }
+                  ]
+                }
+              ]
+            }
+            """.trimIndent(),
+        ).jsonObjectLike()
+
+        val windows = AntigravityUsageFetcher.parseQuotaSummary(root)
+
+        assertEquals(3, windows.size)
+        assertEquals("antigravity-gemini-session", windows[0].id)
+        assertEquals(1.0, windows[0].usedRatio, absoluteTolerance = 1e-9)
+        assertEquals("antigravity-gemini-weekly", windows[1].id)
+        assertEquals(0.1, windows[1].usedRatio, absoluteTolerance = 1e-9)
+        assertEquals("antigravity-gemini-argon-weekly", windows[2].id)
+        assertEquals("Gemini 4 Argon · Weekly", windows[2].label)
+        assertEquals(0.0, windows[2].usedRatio, absoluteTolerance = 1e-9)
+    }
+
+    @Test
+    fun prefersPaidTierOverCurrentTierForPlanLabel() {
+        val root = json.parseToJsonElement(
+            """
+            {
+              "currentTier": { "id": "free-tier", "name": "Free" },
+              "paidTier": { "id": "g1-pro-tier", "name": "Google AI Pro" }
+            }
+            """.trimIndent(),
+        ).jsonObjectLike()
+
+        assertEquals("Google AI Pro", AntigravityUsageFetcher.extractPlanLabel(root))
+
+        val idOnly = json.parseToJsonElement(
+            """
+            {
+              "currentTier": { "id": "free-tier" },
+              "paidTier": { "id": "g1-pro-tier" }
+            }
+            """.trimIndent(),
+        ).jsonObjectLike()
+
+        assertEquals("Google AI Pro", formatAntigravityPlanLabel(AntigravityUsageFetcher.extractPlanLabel(idOnly)))
+    }
+
     private fun kotlinx.serialization.json.JsonElement.jsonObjectLike() =
         this as kotlinx.serialization.json.JsonObject
 }

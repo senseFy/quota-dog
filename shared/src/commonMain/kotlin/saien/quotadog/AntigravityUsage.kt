@@ -38,13 +38,25 @@ internal data class AntigravityUsageSnapshot(
  * Fallback: `fetchAvailableModels` (per-model remainingFraction)
  */
 internal object AntigravityUsageFetcher {
-    private const val QUOTA_SUMMARY_URL =
-        "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary"
-    private const val AVAILABLE_MODELS_URL =
-        "https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels"
-    private const val LOAD_CODE_ASSIST_URL =
-        "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist"
-    private const val TOKEN_URL = "https://oauth2.googleapis.com/token"
+    private const val DAILY_CLOUD_CODE_BASE_URL = "https://daily-cloudcode-pa.googleapis.com"
+    private const val PROD_CLOUD_CODE_BASE_URL = "https://cloudcode-pa.googleapis.com"
+    private val CLOUD_CODE_BASE_URLS = listOf(DAILY_CLOUD_CODE_BASE_URL, PROD_CLOUD_CODE_BASE_URL)
+    private const val LOAD_CODE_ASSIST_PATH = "/v1internal:loadCodeAssist"
+    private const val QUOTA_SUMMARY_PATH = "/v1internal:retrieveUserQuotaSummary"
+    private const val AVAILABLE_MODELS_PATH = "/v1internal:fetchAvailableModels"
+    internal const val OAUTH_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
+    internal const val OAUTH_TOKEN_URL = "https://oauth2.googleapis.com/token"
+    internal const val OAUTH_CALLBACK_PORT = 51121
+    internal const val OAUTH_CALLBACK_PATH = "/oauth-callback"
+    internal const val OAUTH_REDIRECT_URI = "http://localhost:$OAUTH_CALLBACK_PORT$OAUTH_CALLBACK_PATH"
+    internal const val OAUTH_SCOPE =
+        "https://www.googleapis.com/auth/cloud-platform " +
+            "https://www.googleapis.com/auth/userinfo.email " +
+            "https://www.googleapis.com/auth/userinfo.profile " +
+            "https://www.googleapis.com/auth/cclog " +
+            "https://www.googleapis.com/auth/experimentsandconfigs"
+
+    private const val TOKEN_URL = OAUTH_TOKEN_URL
     private const val USERINFO_URL = "https://www.googleapis.com/oauth2/v2/userinfo"
 
     // Public OAuth client embedded by Antigravity / CLIProxy-compatible tools.
@@ -52,22 +64,24 @@ internal object AntigravityUsageFetcher {
         "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com"
     internal const val OAUTH_CLIENT_SECRET = "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"
 
-    private const val USER_AGENT = "antigravity/1.11.3 Darwin/arm64"
+    // Cloud Code gates Gemini quota buckets on a recent Antigravity Hub User-Agent.
+    private const val USER_AGENT = "antigravity/hub/2.24.0"
     private val json = Json { ignoreUnknownKeys = true }
 
     suspend fun fetch(httpClient: HttpClient, accessToken: String): AntigravityUsageSnapshot {
-        val codeAssist = postCloudCode(
-            httpClient = httpClient,
-            url = LOAD_CODE_ASSIST_URL,
-            accessToken = accessToken,
-            payload = """{"metadata":{"ideType":"ANTIGRAVITY"}}""",
-            allowFailure = true,
-        )
+        val codeAssist = CLOUD_CODE_BASE_URLS.firstNotNullOfOrNull { baseUrl ->
+            postCloudCode(
+                httpClient = httpClient,
+                url = "$baseUrl$LOAD_CODE_ASSIST_PATH",
+                accessToken = accessToken,
+                payload = """{"metadata":{"ideType":"ANTIGRAVITY"}}""",
+                allowFailure = true,
+            )
+        }
         val projectId = codeAssist?.stringField("cloudaicompanionProject")
             ?: codeAssist?.stringField("cloudaiCompanionProject")
             ?: codeAssist?.stringField("project")
-        val planLabel = codeAssist?.get("currentTier")?.jsonObject?.stringField("name")
-            ?: codeAssist?.get("currentTier")?.jsonObject?.stringField("id")
+        val planLabel = extractPlanLabel(codeAssist)
         val summaryWindows = fetchQuotaSummaryWindows(httpClient, accessToken, projectId)
         val windows = if (!summaryWindows.isNullOrEmpty()) {
             summaryWindows
@@ -87,6 +101,15 @@ internal object AntigravityUsageFetcher {
         )
     }
 
+    internal fun extractPlanLabel(codeAssist: JsonObject?): String? {
+        val paidTier = codeAssist?.get("paidTier") as? JsonObject
+        val currentTier = codeAssist?.get("currentTier") as? JsonObject
+        return paidTier?.stringField("name")
+            ?: paidTier?.stringField("id")
+            ?: currentTier?.stringField("name")
+            ?: currentTier?.stringField("id")
+    }
+
     suspend fun fetchUserEmail(httpClient: HttpClient, accessToken: String): String? {
         val response = httpClient.get(USERINFO_URL) {
             header("Authorization", "Bearer $accessToken")
@@ -99,6 +122,40 @@ internal object AntigravityUsageFetcher {
             json.parseToJsonElement(response.bodyAsText()).jsonObject
         }.getOrNull() ?: return null
         return root["email"]?.jsonPrimitive?.contentOrNull?.trim()?.takeIf { it.isNotEmpty() }
+    }
+
+    suspend fun exchangeAuthorizationCode(
+        httpClient: HttpClient,
+        code: String,
+        codeVerifier: String,
+        redirectUri: String = OAUTH_REDIRECT_URI,
+    ): OAuthTokenBundle {
+        val response = httpClient.post(TOKEN_URL) {
+            contentType(ContentType.Application.FormUrlEncoded)
+            header("User-Agent", USER_AGENT)
+            setBody(
+                FormDataContent(
+                    Parameters.build {
+                        append("client_id", OAUTH_CLIENT_ID)
+                        append("client_secret", OAUTH_CLIENT_SECRET)
+                        append("code", code)
+                        append("redirect_uri", redirectUri)
+                        append("code_verifier", codeVerifier)
+                        append("grant_type", "authorization_code")
+                    },
+                ),
+            )
+        }
+        val bundle = parseTokenResponse(
+            status = response.status.value,
+            body = response.bodyAsText(),
+            fallbackRefreshToken = "",
+            contextLabel = "token exchange",
+        )
+        val email = bundle.email ?: runCatching {
+            fetchUserEmail(httpClient, bundle.accessToken)
+        }.getOrNull()
+        return if (!email.isNullOrBlank()) bundle.copy(email = email) else bundle
     }
 
     suspend fun refreshAccessToken(
@@ -119,38 +176,56 @@ internal object AntigravityUsageFetcher {
                 ),
             )
         }
-        val status = response.status.value
-        val body = response.bodyAsText()
-        if (status == 401 || status == 403) {
+        return parseTokenResponse(
+            status = response.status.value,
+            body = response.bodyAsText(),
+            fallbackRefreshToken = refreshToken,
+            contextLabel = "token refresh",
+        )
+    }
+
+    internal fun parseTokenResponse(
+        status: Int,
+        body: String,
+        fallbackRefreshToken: String = "",
+        contextLabel: String = "token exchange",
+        nowEpochMillis: Long = Clock.System.now().toEpochMilliseconds(),
+    ): OAuthTokenBundle {
+        val errorCode = runCatching {
+            json.parseToJsonElement(body).jsonObject.stringField("error")
+        }.getOrNull()
+        if (status == 401 || status == 403 || (status == 400 && errorCode == "invalid_grant")) {
             throw ProviderException(
                 AuthState.RequiresRelogin,
-                "Antigravity rejected the refresh token. Run `agy` and sign in again.",
+                "Antigravity rejected the Google session. Sign in with Google again or re-import from `agy`.",
                 status,
             )
         }
-        if (!response.status.isSuccess()) {
+        if (status !in 200..299) {
             val preview = body.take(160).ifBlank { "(empty body)" }
             throw ProviderException(
                 AuthState.Error,
-                "Antigravity token refresh failed: HTTP $status: $preview",
+                "Antigravity $contextLabel failed: HTTP $status: $preview",
                 status,
             )
         }
         val root = runCatching { json.parseToJsonElement(body).jsonObject }.getOrElse {
-            throw ProviderException(AuthState.Error, "Antigravity token refresh returned invalid JSON.")
+            throw ProviderException(AuthState.Error, "Antigravity $contextLabel returned invalid JSON.")
         }
         val accessToken = root["access_token"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
         if (accessToken.isEmpty()) {
-            throw ProviderException(AuthState.Error, "Antigravity token refresh missing access_token.")
+            throw ProviderException(AuthState.Error, "Antigravity $contextLabel missing access_token.")
         }
         val expiresIn = root["expires_in"]?.jsonPrimitive?.contentOrNull?.toLongOrNull() ?: 3600L
         val nextRefresh = root["refresh_token"]?.jsonPrimitive?.contentOrNull?.trim()
             ?.takeIf { it.isNotEmpty() }
-            ?: refreshToken
+            ?: fallbackRefreshToken
+        val idToken = root["id_token"]?.jsonPrimitive?.contentOrNull?.trim()?.takeIf { it.isNotEmpty() }
         return OAuthTokenBundle(
             accessToken = accessToken,
             refreshToken = nextRefresh,
-            expiresAtEpochMillis = Clock.System.now().toEpochMilliseconds() + expiresIn * 1_000L,
+            idToken = idToken,
+            expiresAtEpochMillis = nowEpochMillis + expiresIn * 1_000L,
         )
     }
 
@@ -163,16 +238,18 @@ internal object AntigravityUsageFetcher {
             if (!projectId.isNullOrBlank()) add("""{"project":${jsonPrimitive(projectId)}}""")
             add("{}")
         }
-        for (payload in payloads) {
-            val root = postCloudCode(
-                httpClient = httpClient,
-                url = QUOTA_SUMMARY_URL,
-                accessToken = accessToken,
-                payload = payload,
-                allowFailure = true,
-            ) ?: continue
-            val windows = parseQuotaSummary(root)
-            if (windows.isNotEmpty()) return windows
+        for (baseUrl in CLOUD_CODE_BASE_URLS) {
+            for (payload in payloads) {
+                val root = postCloudCode(
+                    httpClient = httpClient,
+                    url = "$baseUrl$QUOTA_SUMMARY_PATH",
+                    accessToken = accessToken,
+                    payload = payload,
+                    allowFailure = true,
+                ) ?: continue
+                val windows = parseQuotaSummary(root)
+                if (windows.isNotEmpty()) return windows
+            }
         }
         return null
     }
@@ -187,14 +264,19 @@ internal object AntigravityUsageFetcher {
         } else {
             "{}"
         }
-        val root = postCloudCode(
-            httpClient = httpClient,
-            url = AVAILABLE_MODELS_URL,
-            accessToken = accessToken,
-            payload = payload,
-            allowFailure = false,
-        ) ?: return emptyList()
-        return parseAvailableModels(root)
+        CLOUD_CODE_BASE_URLS.forEachIndexed { index, baseUrl ->
+            val isLast = index == CLOUD_CODE_BASE_URLS.lastIndex
+            val root = postCloudCode(
+                httpClient = httpClient,
+                url = "$baseUrl$AVAILABLE_MODELS_PATH",
+                accessToken = accessToken,
+                payload = payload,
+                allowFailure = !isLast,
+            ) ?: return@forEachIndexed
+            val windows = parseAvailableModels(root)
+            if (windows.isNotEmpty() || isLast) return windows
+        }
+        return emptyList()
     }
 
     private suspend fun postCloudCode(
@@ -225,7 +307,7 @@ internal object AntigravityUsageFetcher {
             if (allowFailure) return null
             throw ProviderException(
                 AuthState.RequiresRelogin,
-                "Antigravity rejected credentials. Run `agy` and sign in again.",
+                "Antigravity rejected credentials. Sign in with Google again or re-import from `agy`.",
                 status,
             )
         }
@@ -263,18 +345,20 @@ internal object AntigravityUsageFetcher {
                     ?: bucketId
                 val bucketWindow = bucket.stringField("window") ?: ""
                 val period = quotaSummaryPeriod("$bucketId $bucketName $bucketWindow") ?: continue
-                val remainingFraction = quotaSummaryRemainingFraction(bucket) ?: continue
-                val usedRatio = (1.0 - remainingFraction.coerceIn(0.0, 1.0)).coerceIn(0.0, 1.0)
                 val resetAt = parseInstant(
                     bucket.stringField("resetTime")
                         ?: bucket.stringField("reset_time")
                         ?: bucket.stringField("resetAt")
                         ?: bucket.stringField("reset_at"),
                 )
+                // Proto3 JSON omits remainingFraction when its value is 0.0 (exhausted).
+                val remainingFraction = quotaSummaryRemainingFraction(bucket)
+                    ?: if (resetAt != null) 0.0 else continue
+                val usedRatio = (1.0 - remainingFraction.coerceIn(0.0, 1.0)).coerceIn(0.0, 1.0)
                 val id = "antigravity-$groupId-${period.id}"
                 windows += UsageWindow(
                     id = id,
-                    label = "${period.groupLabel(groupId)} · ${period.displayName}",
+                    label = "${period.groupLabel(groupId, groupName)} · ${period.displayName}",
                     usedRatio = usedRatio,
                     resetsAt = resetAt,
                     durationSeconds = period.durationSeconds,
@@ -286,6 +370,8 @@ internal object AntigravityUsageFetcher {
             "antigravity-gemini-weekly",
             "antigravity-claude-gpt-session",
             "antigravity-claude-gpt-weekly",
+            "antigravity-gemini-argon-session",
+            "antigravity-gemini-argon-weekly",
         )
         val seen = linkedSetOf<String>()
         return windows
@@ -306,13 +392,13 @@ internal object AntigravityUsageFetcher {
             }
             val info = infoElement as? JsonObject ?: continue
             val quotaInfo = info["quotaInfo"]?.jsonObject ?: continue
-            val remaining = quotaInfo["remainingFraction"]?.jsonPrimitive?.doubleOrNull
-                ?: quotaInfo["remaining_fraction"]?.jsonPrimitive?.doubleOrNull
-                ?: continue
-            val usedRatio = (1.0 - remaining.coerceIn(0.0, 1.0)).coerceIn(0.0, 1.0)
             val resetAt = parseInstant(
                 quotaInfo.stringField("resetTime") ?: quotaInfo.stringField("reset_time"),
             )
+            val remaining = quotaInfo["remainingFraction"]?.jsonPrimitive?.doubleOrNull
+                ?: quotaInfo["remaining_fraction"]?.jsonPrimitive?.doubleOrNull
+                ?: if (resetAt != null) 0.0 else continue
+            val usedRatio = (1.0 - remaining.coerceIn(0.0, 1.0)).coerceIn(0.0, 1.0)
             val display = info.stringField("displayName") ?: name
             windows += UsageWindow(
                 id = "model-$name",
@@ -337,6 +423,7 @@ internal object AntigravityUsageFetcher {
     private fun quotaSummaryGroupId(name: String): String? {
         val lower = name.lowercase()
         return when {
+            lower.contains("argon") -> "gemini-argon"
             lower.contains("gemini") -> "gemini"
             lower.contains("claude") || lower.contains("gpt") || lower.contains("3p") -> "claude-gpt"
             else -> null
@@ -344,10 +431,11 @@ internal object AntigravityUsageFetcher {
     }
 
     private data class Period(val id: String, val displayName: String, val durationSeconds: Long) {
-        fun groupLabel(groupId: String): String = when (groupId) {
+        fun groupLabel(groupId: String, rawGroupName: String): String = when (groupId) {
             "gemini" -> "Gemini"
+            "gemini-argon" -> rawGroupName.trim().ifEmpty { "Gemini Argon" }
             "claude-gpt" -> "Claude/GPT"
-            else -> groupId
+            else -> rawGroupName.trim().ifEmpty { groupId }
         }
     }
 

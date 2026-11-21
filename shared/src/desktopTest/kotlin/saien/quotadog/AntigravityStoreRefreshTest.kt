@@ -26,7 +26,7 @@ class AntigravityStoreRefreshTest {
         val client = QuotaDogClient()
         val store = QuotaDogStore(client = client)
         try {
-            store.beginLoginAndWait(ProviderId.ANTIGRAVITY)
+            store.importAntigravityAccountAndRefresh()
             val accounts = store.state.value.accounts.values.filter {
                 it.providerId == ProviderId.ANTIGRAVITY && it.added && !it.accountKey.isPending
             }

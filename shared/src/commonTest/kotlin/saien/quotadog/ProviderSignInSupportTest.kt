@@ -18,16 +18,16 @@ class ProviderSignInSupportTest {
     }
 
     @Test
-    fun cursorAntigravityAndDevinSupportCliImportOnly() {
-        for (provider in listOf(ProviderId.CURSOR, ProviderId.ANTIGRAVITY, ProviderId.DEVIN)) {
+    fun cursorAndDevinSupportCliImportOnly() {
+        for (provider in listOf(ProviderId.CURSOR, ProviderId.DEVIN)) {
             assertEquals(setOf(ProviderSignInMethod.CliImport), provider.supportedSignInMethods())
             assertFalse(provider.oauthAvailable())
         }
     }
 
     @Test
-    fun grokAndDroidSupportBothMethods() {
-        for (provider in listOf(ProviderId.GROK, ProviderId.DROID)) {
+    fun grokAntigravityAndDroidSupportBothMethods() {
+        for (provider in listOf(ProviderId.GROK, ProviderId.ANTIGRAVITY, ProviderId.DROID)) {
             assertEquals(
                 setOf(ProviderSignInMethod.OAuth, ProviderSignInMethod.CliImport),
                 provider.supportedSignInMethods(),
@@ -37,8 +37,9 @@ class ProviderSignInSupportTest {
     }
 
     @Test
-    fun grokAndDroidCliImportMirrorsPlatformSupport() {
+    fun hybridProviderCliImportMirrorsPlatformSupport() {
         assertEquals(grokCliImportAvailable(), ProviderId.GROK.cliImportAvailable())
+        assertEquals(antigravityCliImportAvailable(), ProviderId.ANTIGRAVITY.cliImportAvailable())
         assertEquals(droidCliImportAvailable(), ProviderId.DROID.cliImportAvailable())
     }
 

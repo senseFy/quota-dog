@@ -12,12 +12,17 @@ fun ProviderUsageSnapshot.displayPlanLabel(): String? {
     if (providerId == ProviderId.DROID) {
         return formatDroidPlanLabel(stored ?: message.legacyPlanRaw())
     }
+    // Older Antigravity snapshots may hold raw tier ids ("free-tier", "g1-pro-tier").
+    if (providerId == ProviderId.ANTIGRAVITY) {
+        return formatAntigravityPlanLabel(stored ?: message.legacyPlanRaw())
+    }
     if (stored != null) return stored
     val raw = message.legacyPlanRaw() ?: return null
     return when (providerId) {
         ProviderId.CODEX -> formatCodexPlanLabel(raw)
         ProviderId.CURSOR -> formatCursorPlanLabel(raw)
         ProviderId.GROK -> formatGrokPlanLabel(raw)
+        ProviderId.ANTIGRAVITY -> formatAntigravityPlanLabel(raw)
         else -> formatSubscriptionPlanLabel(raw)
     }
 }
@@ -71,6 +76,18 @@ internal fun formatDroidPlanLabel(raw: String?): String? {
     val tokens = normalizePlanKey(value).split('_').filter { it.isNotEmpty() }
     val tier = droidTierWords.firstOrNull { (word, _) -> word in tokens }?.second
     return tier ?: formatSubscriptionPlanLabel(value)
+}
+
+internal fun formatAntigravityPlanLabel(raw: String?): String? {
+    val value = raw?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+    return when (normalizePlanKey(value)) {
+        "g1_pro_tier" -> "Google AI Pro"
+        "g1_ultra_tier" -> "Google AI Ultra"
+        "free_tier" -> "Free"
+        "standard_tier" -> "Standard"
+        "legacy_tier" -> "Legacy"
+        else -> formatSubscriptionPlanLabel(value)
+    }
 }
 
 internal fun formatGrokPlanLabel(raw: String?): String? {

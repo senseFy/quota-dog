@@ -103,7 +103,10 @@ actual class PlatformOAuthCallbackServer actual constructor() : OAuthCallbackSer
             ProviderId.CLAUDE_CODE -> CallbackConfig(port = 54545, path = "/callback")
             ProviderId.GROK -> throw IllegalArgumentException("Grok does not use browser OAuth callbacks.")
             ProviderId.CURSOR -> throw IllegalArgumentException("Cursor does not use browser OAuth callbacks.")
-            ProviderId.ANTIGRAVITY -> throw IllegalArgumentException("Antigravity does not use browser OAuth callbacks.")
+            ProviderId.ANTIGRAVITY -> CallbackConfig(
+                port = AntigravityUsageFetcher.OAUTH_CALLBACK_PORT,
+                path = AntigravityUsageFetcher.OAUTH_CALLBACK_PATH,
+            )
             ProviderId.DEVIN -> throw IllegalArgumentException("Devin does not use browser OAuth callbacks.")
             ProviderId.DROID -> throw IllegalArgumentException("Droid does not use browser OAuth callbacks.")
         }

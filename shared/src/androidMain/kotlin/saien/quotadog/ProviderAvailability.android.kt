@@ -4,6 +4,7 @@ actual fun availableProviders(): List<ProviderId> = listOf(
     ProviderId.CODEX,
     ProviderId.CLAUDE_CODE,
     ProviderId.GROK,
+    ProviderId.ANTIGRAVITY,
     ProviderId.DROID,
 )
 
@@ -31,11 +32,13 @@ actual fun cursorAuthFileHint(): String =
 actual fun loadAntigravityCredentialsFromCli(): OAuthTokenBundle {
     throw ProviderException(
         AuthState.NotConfigured,
-        "Antigravity CLI is only available on the desktop app."
+        "Antigravity CLI import is only available on macOS desktop. Sign in with Google instead."
     )
 }
 
 actual fun antigravityAuthHint(): String = "macOS Keychain (service=gemini, account=antigravity)"
+
+actual fun antigravityCliImportAvailable(): Boolean = false
 
 actual fun loadDevinCredentialsFromCli(): OAuthTokenBundle {
     throw ProviderException(

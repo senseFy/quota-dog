@@ -118,6 +118,8 @@ import saien.quotadog.app.components.rememberQdSnackbarController
 import saien.quotadog.app.theme.QdTheme
 import saien.quotadog.app.theme.QuotaDogTheme
 import saien.quotadog.app.theme.rememberSystemDarkTheme
+import saien.quotadog.antigravityAuthHint
+import saien.quotadog.antigravityCliImportAvailable
 import saien.quotadog.availableProviders
 import saien.quotadog.canonicalManualOrder
 import saien.quotadog.cliImportAvailable
@@ -253,6 +255,7 @@ private fun QuotaDogScreen(
     val callbackInputs = remember { mutableStateMapOf<AccountKey, String>() }
     var showProviderPicker by remember { mutableStateOf(false) }
     var showGrokMethodPicker by remember { mutableStateOf(false) }
+    var showAntigravityMethodPicker by remember { mutableStateOf(false) }
     var showDroidMethodPicker by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
     var manualReorderEditing by remember { mutableStateOf(false) }
@@ -457,6 +460,9 @@ private fun QuotaDogScreen(
                     if (provider == ProviderId.GROK && grokCliImportAvailable()) {
                         showProviderPicker = false
                         showGrokMethodPicker = true
+                    } else if (provider == ProviderId.ANTIGRAVITY && antigravityCliImportAvailable()) {
+                        showProviderPicker = false
+                        showAntigravityMethodPicker = true
                     } else if (provider == ProviderId.DROID && droidCliImportAvailable()) {
                         showProviderPicker = false
                         showDroidMethodPicker = true
@@ -468,7 +474,7 @@ private fun QuotaDogScreen(
                                 ProviderId.GROK -> "Opening xAI sign-in..."
                                 ProviderId.DROID -> "Opening Factory sign-in..."
                                 ProviderId.CURSOR -> "Importing Cursor app or CLI credentials..."
-                                ProviderId.ANTIGRAVITY -> "Importing Antigravity CLI credentials..."
+                                ProviderId.ANTIGRAVITY -> "Opening Google sign-in for Antigravity..."
                                 ProviderId.DEVIN -> "Importing Devin CLI credentials..."
                                 else -> "Opening browser for ${provider.displayName}..."
                             },
@@ -503,6 +509,36 @@ private fun QuotaDogScreen(
                     store.startImportGrok()
                     snackbar.show(
                         text = "Importing Grok CLI credentials...",
+                        tone = QdSnackbarTone.Info,
+                    )
+                },
+            )
+        }
+
+        QdBottomSheet(
+            visible = showAntigravityMethodPicker,
+            onDismiss = { showAntigravityMethodPicker = false },
+        ) {
+            AuthMethodPickerContent(
+                title = "Add Antigravity",
+                description = "Sign in with Google, or import credentials from the Antigravity CLI on this Mac.",
+                oauthTitle = "Sign in with Google",
+                oauthSubtitle = "Browser OAuth sign-in for Antigravity quota windows",
+                importTitle = "Import from Antigravity CLI",
+                importSubtitle = "Read credentials from ${antigravityAuthHint()}",
+                onSelectOauth = {
+                    showAntigravityMethodPicker = false
+                    store.startLogin(ProviderId.ANTIGRAVITY)
+                    snackbar.show(
+                        text = "Opening Google sign-in for Antigravity...",
+                        tone = QdSnackbarTone.Info,
+                    )
+                },
+                onSelectCliImport = {
+                    showAntigravityMethodPicker = false
+                    store.startImportAntigravity()
+                    snackbar.show(
+                        text = "Importing Antigravity CLI credentials...",
                         tone = QdSnackbarTone.Info,
                     )
                 },
@@ -1951,7 +1987,7 @@ private fun ProviderId.subtitle(): String = when (this) {
     ProviderId.CLAUDE_CODE -> "Anthropic Claude Code usage"
     ProviderId.GROK -> "Grok Build / SuperGrok credits"
     ProviderId.CURSOR -> "Cursor plan / on-demand usage (app or CLI)"
-    ProviderId.ANTIGRAVITY -> "Antigravity CLI quota windows (desktop)"
+    ProviderId.ANTIGRAVITY -> "Google Antigravity quota windows"
     ProviderId.DEVIN -> "Devin daily / weekly quota (CLI import)"
     ProviderId.DROID -> "Factory Droid quota windows"
 }

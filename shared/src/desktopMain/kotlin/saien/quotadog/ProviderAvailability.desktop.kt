@@ -81,6 +81,8 @@ actual fun loadAntigravityCredentialsFromCli(): OAuthTokenBundle {
 
 actual fun antigravityAuthHint(): String = "macOS Keychain (service=gemini, account=antigravity)"
 
+actual fun antigravityCliImportAvailable(): Boolean = isMacOs()
+
 actual fun loadDevinCredentialsFromCli(): OAuthTokenBundle {
     val file = devinCredentialsFile()
     if (!file.exists()) {

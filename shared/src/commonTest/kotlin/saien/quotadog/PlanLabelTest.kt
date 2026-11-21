@@ -61,6 +61,15 @@ class PlanLabelTest {
     }
 
     @Test
+    fun formatsAntigravityTierIds() {
+        assertEquals("Google AI Pro", formatAntigravityPlanLabel("g1-pro-tier"))
+        assertEquals("Google AI Ultra", formatAntigravityPlanLabel("g1-ultra-tier"))
+        assertEquals("Free", formatAntigravityPlanLabel("free-tier"))
+        assertEquals("Google AI Pro", formatAntigravityPlanLabel("Google AI Pro"))
+        assertEquals("Google AI Pro", snapshot(ProviderId.ANTIGRAVITY, planLabel = "g1-pro-tier").displayPlanLabel())
+    }
+
+    @Test
     fun formatsOtherSubscriptionPlans() {
         assertEquals("Max", formatSubscriptionPlanLabel("max"))
         assertEquals("Max", formatSubscriptionPlanLabel("Max"))

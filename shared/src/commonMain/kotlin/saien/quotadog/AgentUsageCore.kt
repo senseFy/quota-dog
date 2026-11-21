@@ -222,6 +222,14 @@ private object ProviderSpecs {
         scope = "org:create_api_key user:profile user:inference"
     )
 
+    val antigravity = OAuthSpec(
+        authUrl = AntigravityUsageFetcher.OAUTH_AUTH_URL,
+        tokenUrl = AntigravityUsageFetcher.OAUTH_TOKEN_URL,
+        clientId = AntigravityUsageFetcher.OAUTH_CLIENT_ID,
+        redirectUri = AntigravityUsageFetcher.OAUTH_REDIRECT_URI,
+        scope = AntigravityUsageFetcher.OAUTH_SCOPE,
+    )
+
     fun forProvider(providerId: ProviderId): OAuthSpec = when (providerId) {
         ProviderId.CODEX -> codex
         ProviderId.CLAUDE_CODE -> claude
@@ -233,10 +241,7 @@ private object ProviderSpecs {
             AuthState.NotConfigured,
             "Cursor imports credentials from the local Cursor app or `cursor-agent` CLI instead of browser OAuth."
         )
-        ProviderId.ANTIGRAVITY -> throw ProviderException(
-            AuthState.NotConfigured,
-            "Antigravity imports credentials from the Antigravity CLI keyring instead of browser OAuth."
-        )
+        ProviderId.ANTIGRAVITY -> antigravity
         ProviderId.DEVIN -> throw ProviderException(
             AuthState.NotConfigured,
             "Devin imports credentials from the Devin CLI credentials file instead of browser OAuth."
@@ -290,7 +295,11 @@ class QuotaDogClient(
                     parameters.append("codex_cli_simplified_flow", "true")
                 }
                 ProviderId.CLAUDE_CODE -> Unit
-                ProviderId.GROK, ProviderId.CURSOR, ProviderId.ANTIGRAVITY, ProviderId.DEVIN, ProviderId.DROID -> Unit
+                ProviderId.ANTIGRAVITY -> {
+                    parameters.append("access_type", "offline")
+                    parameters.append("prompt", "select_account consent")
+                }
+                ProviderId.GROK, ProviderId.CURSOR, ProviderId.DEVIN, ProviderId.DROID -> Unit
             }
         }.buildString()
         if (openBrowser) browserLauncher.open(url)
@@ -333,11 +342,15 @@ class QuotaDogClient(
             platformDebugLog("completeLogin callback error provider=${start.providerId.name}")
             throw ProviderException(AuthState.Unauthorized, "Authorization was cancelled or denied")
         }
-        if (callback.state != start.state) {
+        val state = callback.state
+            ?: throw ProviderException(AuthState.Error, "Callback URL is missing 'state'")
+        if (state != start.state) {
             platformDebugLog("completeLogin state mismatch provider=${start.providerId.name}")
             throw ProviderException(AuthState.Error, "OAuth state mismatch, please sign in again")
         }
-        val token = exchangeCode(start.providerId, callback.code, start.codeVerifier, callback.state)
+        val code = callback.code
+            ?: throw ProviderException(AuthState.Error, "Callback URL is missing 'code'")
+        val token = exchangeCode(start.providerId, code, start.codeVerifier, state)
         return tokenStore.save(start.providerId, token)
     }
 
@@ -509,41 +522,61 @@ class QuotaDogClient(
     private suspend fun ensureFreshAntigravityToken(accountKey: AccountKey): OAuthTokenBundle {
         val stored = tokenStore.load(accountKey)
             ?: throw ProviderException(AuthState.NotConfigured, "Not signed in to ${accountKey.providerId.displayName}")
-        val reloaded = runCatching { loadAntigravityCredentialsFromCli() }.getOrNull()
-        if (reloaded != null) {
-            val reloadedWithEmail = if (reloaded.email.isNullOrBlank() && !stored.email.isNullOrBlank()) {
-                reloaded.copy(email = stored.email)
-            } else {
-                reloaded
-            }
-            val reloadedKey = accountKeyForToken(ProviderId.ANTIGRAVITY, reloadedWithEmail)
-            if (reloadedKey == accountKey || stored.email.isNullOrBlank() || reloadedWithEmail.email.isNullOrBlank()) {
-                if (!reloadedWithEmail.isExpired()) {
-                    val merged = reloadedWithEmail.withIdentityFrom(stored)
-                    tokenStore.save(accountKey, merged)
-                    return merged
-                }
-            } else if (reloadedKey != accountKey) {
-                if (!stored.isExpired()) return stored
-                throw ProviderException(
-                    AuthState.RequiresRelogin,
-                    "Antigravity CLI is signed in as a different account. Remove this account and import again.",
-                )
-            }
-        }
         if (!stored.isExpired()) {
             return stored
         }
-        if (stored.refreshToken.isBlank()) {
-            throw ProviderException(
-                AuthState.RequiresRelogin,
-                "Antigravity credentials expired. Run `agy`, sign in, then re-import.",
-            )
+        var refreshError: Throwable? = null
+        if (stored.refreshToken.isNotBlank()) {
+            val refreshResult = runCatching {
+                AntigravityUsageFetcher.refreshAccessToken(httpClient, stored.refreshToken)
+                    .withIdentityFrom(stored)
+            }
+            refreshResult.getOrNull()?.let { refreshed ->
+                tokenStore.save(accountKey, refreshed)
+                return refreshed
+            }
+            refreshError = refreshResult.exceptionOrNull()
         }
-        val refreshed = AntigravityUsageFetcher.refreshAccessToken(httpClient, stored.refreshToken)
-            .withIdentityFrom(stored)
-        tokenStore.save(accountKey, refreshed)
-        return refreshed
+        if (antigravityCliImportAvailable()) {
+            val reloaded = runCatching { loadAntigravityCredentialsFromCli() }.getOrNull()
+            if (reloaded != null) {
+                val candidate = if (reloaded.isExpired() &&
+                    reloaded.refreshToken.isNotBlank() &&
+                    reloaded.refreshToken != stored.refreshToken
+                ) {
+                    runCatching {
+                        AntigravityUsageFetcher.refreshAccessToken(httpClient, reloaded.refreshToken)
+                            .withIdentityFrom(reloaded)
+                    }.getOrNull() ?: reloaded
+                } else {
+                    reloaded
+                }
+                if (!candidate.isExpired()) {
+                    val resolvedEmail = candidate.email
+                        ?: runCatching {
+                            AntigravityUsageFetcher.fetchUserEmail(httpClient, candidate.accessToken)
+                        }.getOrNull()
+                    val candidateWithEmail = if (!resolvedEmail.isNullOrBlank()) {
+                        candidate.copy(email = resolvedEmail)
+                    } else {
+                        candidate
+                    }
+                    val reloadedKey = accountKeyForToken(ProviderId.ANTIGRAVITY, candidateWithEmail)
+                    if (reloadedKey == accountKey) {
+                        val merged = candidateWithEmail.withIdentityFrom(stored)
+                        tokenStore.save(accountKey, merged)
+                        return merged
+                    }
+                }
+            }
+        }
+        if (refreshError is ProviderException) {
+            throw refreshError
+        }
+        throw ProviderException(
+            AuthState.RequiresRelogin,
+            "Antigravity credentials expired. Sign in with Google again or re-import from `agy`.",
+        )
     }
 
     private suspend fun ensureFreshDevinToken(accountKey: AccountKey): OAuthTokenBundle {
@@ -671,9 +704,11 @@ class QuotaDogClient(
                 AuthState.NotConfigured,
                 "Cursor does not use browser OAuth. Import credentials from the local Cursor app or CLI instead."
             )
-            ProviderId.ANTIGRAVITY -> throw ProviderException(
-                AuthState.NotConfigured,
-                "Antigravity does not use browser OAuth. Import credentials from the Antigravity CLI instead."
+            ProviderId.ANTIGRAVITY -> AntigravityUsageFetcher.exchangeAuthorizationCode(
+                httpClient = httpClient,
+                code = code,
+                codeVerifier = codeVerifier,
+                redirectUri = spec.redirectUri,
             )
             ProviderId.DEVIN -> throw ProviderException(
                 AuthState.NotConfigured,
@@ -848,8 +883,8 @@ class QuotaDogClient(
             windows = usage.windows,
             collectedAt = Clock.System.now(),
             accountEmail = email,
-            message = "Source: Antigravity CLI (${antigravityAuthHint()})",
-            planLabel = formatSubscriptionPlanLabel(usage.planLabel),
+            message = "Source: Google Cloud Code",
+            planLabel = formatAntigravityPlanLabel(usage.planLabel),
         )
     }
 
@@ -1003,6 +1038,10 @@ class QuotaDogStore(
         launchSafely("importGrok") { importGrokAccountAndRefresh() }
     }
 
+    fun startImportAntigravity() {
+        launchSafely("importAntigravity") { importAntigravityAccountAndRefresh() }
+    }
+
     fun startImportDroid() {
         launchSafely("importDroid") { importDroidAccountAndRefresh() }
     }
@@ -1114,10 +1153,6 @@ class QuotaDogStore(
                 importCursorAccountAndRefresh()
                 return
             }
-            ProviderId.ANTIGRAVITY -> {
-                importAntigravityAccountAndRefresh()
-                return
-            }
             ProviderId.DEVIN -> {
                 importDevinAccountAndRefresh()
                 return
@@ -1126,7 +1161,7 @@ class QuotaDogStore(
                 beginDroidDeviceLoginAndWait()
                 return
             }
-            ProviderId.CODEX, ProviderId.CLAUDE_CODE -> Unit
+            ProviderId.CODEX, ProviderId.CLAUDE_CODE, ProviderId.ANTIGRAVITY -> Unit
         }
         var start: OAuthLoginStart? = null
         var pendingKey: AccountKey? = null
@@ -1457,7 +1492,7 @@ class QuotaDogStore(
         }
     }
 
-    private suspend fun importAntigravityAccountAndRefresh() {
+    internal suspend fun importAntigravityAccountAndRefresh() {
         val pendingKey = AccountKey.pending(ProviderId.ANTIGRAVITY, "import")
         update(pendingKey) {
             it.copy(
@@ -1761,8 +1796,12 @@ private fun inferWindowDurationSeconds(id: String, label: String): Long? {
         "primary", "five_hour" -> FIVE_HOUR_SECONDS
         "secondary", "seven_day", "seven_day_sonnet", "seven_day_opus" -> SEVEN_DAY_SECONDS
         "plan-usage", "on-demand", "cursor-auto", "cursor-api" -> THIRTY_DAY_SECONDS
-        "antigravity-gemini-session", "antigravity-claude-gpt-session" -> FIVE_HOUR_SECONDS
-        "antigravity-gemini-weekly", "antigravity-claude-gpt-weekly" -> SEVEN_DAY_SECONDS
+        "antigravity-gemini-session",
+        "antigravity-claude-gpt-session",
+        "antigravity-gemini-argon-session" -> FIVE_HOUR_SECONDS
+        "antigravity-gemini-weekly",
+        "antigravity-claude-gpt-weekly",
+        "antigravity-gemini-argon-weekly" -> SEVEN_DAY_SECONDS
         "credits" -> when {
             label.contains("weekly", ignoreCase = true) -> SEVEN_DAY_SECONDS
             label.contains("monthly", ignoreCase = true) -> THIRTY_DAY_SECONDS
@@ -1823,16 +1862,14 @@ private object OAuthCallback {
         val url = Url(raw)
         val error = url.parameters["error"]
         val code = url.parameters["code"]
-            ?: throw ProviderException(AuthState.Error, "Callback URL is missing 'code'")
         val state = url.parameters["state"]
-            ?: throw ProviderException(AuthState.Error, "Callback URL is missing 'state'")
         return ParsedOAuthCallback(code = code, state = state, error = error)
     }
 }
 
 private data class ParsedOAuthCallback(
-    val code: String,
-    val state: String,
+    val code: String?,
+    val state: String?,
     val error: String?
 )
 

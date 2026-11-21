@@ -16,6 +16,8 @@ expect fun loadAntigravityCredentialsFromCli(): OAuthTokenBundle
 
 expect fun antigravityAuthHint(): String
 
+expect fun antigravityCliImportAvailable(): Boolean
+
 expect fun loadDevinCredentialsFromCli(): OAuthTokenBundle
 
 expect fun devinAuthFileHint(): String
