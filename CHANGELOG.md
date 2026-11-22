@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.17 (29) — 2026-11-22
+
+Pair your iPhone or Android phone with QuotaDog on your Mac to see Devin CLI quota away from your desk. Choose a Devin login to share, and decide whether the phone can request a refresh. The last reading stays available offline. Quota data is end-to-end encrypted, and the login stays on your Mac.
+
 ## 1.0.16 (28) — 2026-11-22
 
 New Layout setting with denser dashboard views: Compact (the new default), Fold full, and One line, alongside the original Cards. The menu bar panel follows it too, and crowded provider filters now scroll instead of overlapping.
