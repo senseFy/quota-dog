@@ -5,6 +5,11 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 FIXTURE="$(mktemp -d "${TMPDIR:-/tmp}/quotadog-bump-version-test.XXXXXX")"
 trap 'rm -rf "$FIXTURE"' EXIT
 
+case "$#:${1:-}" in
+  0:|1:--with-releasekit) ;;
+  *) echo "Usage: $0 [--with-releasekit]" >&2; exit 2 ;;
+esac
+
 mkdir -p "$FIXTURE/scripts"
 cp "$ROOT_DIR/scripts/bump_version.sh" "$FIXTURE/scripts/"
 printf 'VERSION_NAME=1.0.0\nVERSION_CODE=12\n' >"$FIXTURE/version.properties"
@@ -46,7 +51,7 @@ fail() {
 
 init_repo() {
   local fixture="$1"
-  git -C "$fixture" init -q
+  git -C "$fixture" init -q -b main
   git -C "$fixture" config user.name "QuotaDog Tests"
   git -C "$fixture" config user.email "tests@quotadog.invalid"
   git -C "$fixture" config commit.gpgsign false
@@ -90,27 +95,61 @@ grep -F "Android versionCode" <<<"$commit_output" >/dev/null ||
 grep -F "iOS build number" <<<"$commit_output" >/dev/null ||
   fail "Bump summary omitted the iOS build."
 
-make_case="$(new_version_repo make-case 1.2.3 7)"
-make --no-print-directory -s -C "$make_case" -f "$ROOT_DIR/Makefile" \
-  BUMP_VERSION_SCRIPT="$BUMP_SCRIPT" bump-version >/dev/null
-[[ "$(git -C "$make_case" log -1 --format=%s)" == "Bump version to 1.2.4(8)" ]] ||
-  fail "make bump-version did not commit the shared bump."
+# A releasekit bump must update the same version and build that both mobile stores read.
+python3 - "$ROOT_DIR/release.toml" <<'PY'
+import sys
+import tomllib
 
-alias_case="$(new_version_repo alias-case 1.2.3 7)"
-make --no-print-directory -s -C "$alias_case" -f "$ROOT_DIR/Makefile" \
-  BUMP_VERSION_SCRIPT="$BUMP_SCRIPT" version-bump >/dev/null
-[[ "$(git -C "$alias_case" log -1 --format=%s)" == "Bump version to 1.2.4(8)" ]] ||
-  fail "make version-bump did not follow bump-version."
+with open(sys.argv[1], "rb") as manifest:
+    version = tomllib.load(manifest)["version"]
+if (version["source"], version["file"], version["key"], version["code_key"]) != (
+    "properties", "version.properties", "VERSION_NAME", "VERSION_CODE"
+):
+    sys.exit("release.toml must point to the shared product version and store build")
+PY
 
-no_commit_case="$(new_version_repo no-commit-case)"
-make --no-print-directory -s -C "$no_commit_case" -f "$ROOT_DIR/Makefile" \
-  BUMP_VERSION_SCRIPT="$BUMP_SCRIPT" COMMIT=no bump-version >/dev/null
-[[ "$(read_case_value "$no_commit_case" VERSION_NAME)" == "1.0.8" ]] ||
-  fail "COMMIT=no did not bump the product version."
-[[ "$(read_case_value "$no_commit_case" VERSION_CODE)" == "20" ]] ||
-  fail "COMMIT=no did not bump the shared build."
-[[ "$(git -C "$no_commit_case" log -1 --format=%s)" == "Fixture baseline" ]] ||
-  fail "COMMIT=no created a commit."
+# Exercise the Makefile's public CLI contract without access to the private engine.
+mkdir -p "$FIXTURE/bin"
+cat >"$FIXTURE/bin/releasekit" <<'SH'
+#!/bin/sh
+printf '[%s]' "$@"
+SH
+chmod +x "$FIXTURE/bin/releasekit"
+expect_releasekit_args() {
+  local expected="$1" actual
+  shift
+  actual=$(env -u RELEASEKIT PATH="$FIXTURE/bin:$PATH" \
+    make --no-print-directory -s -C "$FIXTURE" -f "$ROOT_DIR/Makefile" "$@")
+  [[ "$actual" == "$expected" ]] || fail "make $*: expected $expected, got $actual"
+}
+expect_releasekit_args '[bump]' bump-version
+expect_releasekit_args '[bump][--version][1.4.0]' version-bump VERSION=1.4.0
+expect_releasekit_args '[bump][--no-commit]' bump-version COMMIT=no
+
+if [[ "${1:-}" == --with-releasekit ]]; then
+  # Use the same manifest and tracked release files as a real bump, but no remote.
+  make_case="$FIXTURE/make-case"
+  mkdir -p "$make_case/infra/cloudflare/public"
+  cp "$ROOT_DIR/release.toml" "$ROOT_DIR/CHANGELOG.md" "$make_case/"
+  cp "$ROOT_DIR/infra/cloudflare/public/index.html" "$make_case/infra/cloudflare/public/"
+  new_version_repo make-case 1.2.3 7 >/dev/null
+  bump=(make --no-print-directory -s -C "$make_case" -f "$ROOT_DIR/Makefile")
+  "${bump[@]}" version-bump VERSION=1.4.0 </dev/null
+  [[ "$(read_case_value "$make_case" VERSION_NAME)" == 1.4.0 &&
+     "$(read_case_value "$make_case" VERSION_CODE)" == 8 ]] ||
+    fail "The bump did not commit the requested product version and next store build."
+  [[ "$(git -C "$make_case" diff --name-only HEAD^ HEAD)" == version.properties &&
+     -z "$(git -C "$make_case" status --porcelain)" ]] ||
+    fail "A standalone bump must commit only version.properties."
+  head=$(git -C "$make_case" rev-parse HEAD)
+  "${bump[@]}" bump-version VERSION=1.4.2 COMMIT=no </dev/null
+  [[ "$(git -C "$make_case" rev-parse HEAD)" == "$head" &&
+     "$(git -C "$make_case" status --porcelain)" == ' M version.properties' &&
+     "$(read_case_value "$make_case" VERSION_NAME)" == 1.4.2 &&
+     "$(read_case_value "$make_case" VERSION_CODE)" == 9 ]] ||
+    fail "COMMIT=no must leave only the requested version and next build uncommitted."
+  echo 'Real releasekit bump integration passed.'
+fi
 
 staged_case="$(new_version_repo staged-case)"
 printf 'unrelated staged content\n' >"$staged_case/release-notes.txt"

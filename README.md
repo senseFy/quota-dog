@@ -109,11 +109,11 @@ make bump-build                    # shared store build only, without a commit
 make git-build-info
 ```
 
-`make bump-version` is the routine store bump. It increments the patch version
-and the shared build number, then records one commit titled
-`Bump version to x.y.z(build)`. `make version-bump` is the same command.
-`COMMIT=no` can be repeated from the current local values. `make set-version`
-changes only the product version and does not commit. Compose Desktop's
+`make bump-version` and its alias `make version-bump` run `releasekit bump`
+on a clean `main`. Accept the next patch at the prompt, or pass `VERSION=x.y.z`
+for noninteractive use. The shared build number increments once. The command
+commits only `version.properties`; `COMMIT=no` leaves it uncommitted.
+`make set-version` changes only the product version and does not commit. Compose Desktop's
 installer formats reject `MAJOR=0`, so `0.x.y` cannot be used.
 
 ### Mobile store publishing
@@ -198,7 +198,10 @@ stops and leaves it in place. Bump the version, or upload that archive with
 IOS_CLEAN=yes` only after confirming that build did not reach App Store
 Connect. If only one store accepts an upload, the command exits unsuccessfully,
 keeps both logs and artifacts, and prints that platform's recovery command.
-Run `make test-mobile-release` to verify the release contracts.
+Run `make test-mobile-release` for the public CI checks, including the version
+source in `release.toml` and the arguments passed to `releasekit`. With the
+private CLI installed, run `scripts/tests/bump-version-test.sh --with-releasekit`
+to verify both commit modes in a temporary repository without a remote.
 
 ### Dropbox Sync Setup
 

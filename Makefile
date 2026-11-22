@@ -24,7 +24,6 @@ COMMIT ?= yes
 
 IOS_RELEASE_SCRIPT ?= ./scripts/release-ios.sh
 IOS_VERSION_SCRIPT ?= ./scripts/ios-version.sh
-BUMP_VERSION_SCRIPT ?= ./scripts/bump-version.sh
 PRODUCT_VERSION_SCRIPT ?= ./scripts/lib/product-version.sh
 IOS_BUNDLE_ID ?= saien.quotadog
 IOS_TEAM_ID ?= $(shell sed -n 's/^TEAM_ID=//p' iosApp/Configuration/Config.xcconfig)
