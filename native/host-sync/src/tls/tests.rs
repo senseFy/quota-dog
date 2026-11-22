@@ -50,7 +50,10 @@ fn both_roles_check_peer_proof_independently_of_pin() {
         client.receive(&server.outbound().unwrap()).unwrap();
         assert!(server.receive(&client.outbound().unwrap()).is_err());
         assert!(server.peer_pin().is_none());
-        assert!(server.take_plaintext().is_empty());
+        assert_eq!(
+            server.drain_plaintext(MAX_PLAIN, |p| Ok(p.len())).unwrap(),
+            0
+        );
     }
     let mut server = other.session(true, &s, Some(&c));
     let mut client = c.session(false, &c, Some(&s));
@@ -147,5 +150,37 @@ fn full_handshake_has_no_tickets_or_early_plaintext() {
         Some(ProtocolVersion::TLSv1_3)
     );
     assert!(!server.conn.wants_write()); // no NewSessionTicket flight
-    assert!(server.take_plaintext().is_empty());
+    assert_eq!(
+        server.drain_plaintext(MAX_PLAIN, |p| Ok(p.len())).unwrap(),
+        0
+    );
+}
+
+#[test]
+fn partial_drains_reclaim_capacity_without_losing_unread_plaintext() {
+    let c = Identity::generate();
+    let s = Identity::generate();
+    let mut client = c.session(false, &c, Some(&s));
+    let mut server = s.session(true, &s, Some(&c));
+    server.receive(&client.outbound().unwrap()).unwrap();
+    client.receive(&server.outbound().unwrap()).unwrap();
+    server.receive(&client.outbound().unwrap()).unwrap();
+
+    let original: Vec<u8> = (0..MAX_PLAIN).map(|i| i as u8).collect();
+    client.send(&original).unwrap();
+    server.receive(&client.outbound().unwrap()).unwrap();
+    let drain = |bytes: &[u8]| Ok(bytes.to_vec());
+    let n = 8193;
+    assert_eq!(server.drain_plaintext(n, drain).unwrap(), original[..n]);
+    client.send(&original[..n]).unwrap();
+    server.receive(&client.outbound().unwrap()).unwrap();
+    assert_eq!(
+        server.drain_plaintext(MAX_PLAIN - n, drain).unwrap(),
+        original[n..]
+    );
+    assert_eq!(
+        server.drain_plaintext(MAX_PLAIN, drain).unwrap(),
+        original[..n]
+    );
+    assert!(server.drain_plaintext(MAX_PLAIN, drain).unwrap().is_empty());
 }

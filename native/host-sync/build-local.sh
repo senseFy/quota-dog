@@ -28,6 +28,24 @@ build_desktop() {
     file "$root/build/desktop/$lib.dylib"
 }
 
+build_ios() {
+    local mode=$1 target sdk sdkroot archive
+    [[ $(uname -s) == Darwin ]] || die 'iOS requires macOS with the Xcode iOS SDKs.'
+    case "$mode" in
+        iosArm64) target=aarch64-apple-ios; sdk=iphoneos ;;
+        iosSimulatorArm64) target=aarch64-apple-ios-sim; sdk=iphonesimulator ;;
+    esac
+    sdkroot=$(xcrun --sdk "$sdk" --show-sdk-path)
+    rustup target add --toolchain "$toolchain" "$target"
+    SDKROOT="$sdkroot" IPHONEOS_DEPLOYMENT_TARGET=15.0 cargo "+$toolchain" rustc \
+        --manifest-path "$root/Cargo.toml" --locked --release --lib --crate-type staticlib --target "$target"
+    archive="$CARGO_TARGET_DIR/$target/release/$lib.a"
+    xcrun lipo -verify_arch arm64 "$archive"
+    mkdir -p "$root/build/$mode"
+    install -m 644 "$archive" "$root/build/$mode/$lib.a"
+    file "$root/build/$mode/$lib.a"
+}
+
 build_android() {
     local host sdk ndk bin abi target clang cc key cargo_key so
     case "$(uname -sm)" in
@@ -69,5 +87,6 @@ case "$#:${1-}" in
     0:)        build_desktop; build_android arm64-v8a ;; # existing local/staging pilot
     1:desktop) build_desktop ;;
     1:android) build_android arm64-v8a armeabi-v7a x86 x86_64 ;;
-    *) die "Usage: $0 [desktop|android]" ;;
+    1:iosArm64|1:iosSimulatorArm64) build_ios "$1" ;;
+    *) die "Usage: $0 [desktop|android|iosArm64|iosSimulatorArm64]" ;;
 esac

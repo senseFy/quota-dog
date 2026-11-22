@@ -21,7 +21,7 @@ use rustls::{
     SignatureScheme,
 };
 use subtle::ConstantTimeEq;
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::{Failure, Result};
 
@@ -189,6 +189,7 @@ pub struct Session {
     verified_pin: Option<Pin>,
     handshake_read: usize,
     pending: Zeroizing<Vec<u8>>,
+    consumed: usize,
 }
 
 impl Session {
@@ -243,6 +244,7 @@ impl Session {
             verified_pin: None,
             handshake_read: 0,
             pending: Zeroizing::default(),
+            consumed: 0,
         })
     }
 
@@ -293,10 +295,18 @@ impl Session {
             }
             let n = state.plaintext_bytes_to_read();
             if n != 0 {
-                let start = self.pending.len();
-                if self.verified_pin.is_none() || n > MAX_PLAIN - start {
+                let unread = self.pending.len() - self.consumed;
+                if self.verified_pin.is_none() || n > MAX_PLAIN - unread {
                     return Err(Failure("unauthenticated or excess plaintext"));
                 }
+                if n > MAX_PLAIN - self.pending.len() {
+                    // Reclaim a prefix left by partial drains without moving bytes per drain.
+                    self.pending.copy_within(self.consumed.., 0);
+                    self.pending[unread..].zeroize();
+                    self.pending.truncate(unread);
+                    self.consumed = 0;
+                }
+                let start = self.pending.len();
                 self.pending.resize(start + n, 0);
                 self.conn
                     .reader()
@@ -334,8 +344,8 @@ impl Session {
         Ok(n)
     }
 
-    pub fn outbound(&mut self) -> Result<Vec<u8>> {
-        let mut wire = vec![0; self.output_len()?];
+    pub fn outbound_up_to(&mut self, limit: usize) -> Result<Vec<u8>> {
+        let mut wire = vec![0; self.output_len()?.min(limit)];
         let mut rest = &mut wire[..];
         while !rest.is_empty() {
             if self
@@ -350,8 +360,26 @@ impl Session {
         Ok(wire)
     }
 
-    pub fn take_plaintext(&mut self) -> Zeroizing<Vec<u8>> {
-        std::mem::take(&mut self.pending)
+    #[cfg(any(test, not(target_os = "ios")))]
+    pub fn outbound(&mut self) -> Result<Vec<u8>> {
+        self.outbound_up_to(MAX_WIRE)
+    }
+
+    pub fn drain_plaintext<T>(
+        &mut self,
+        limit: usize,
+        copy: impl FnOnce(&[u8]) -> Result<T>,
+    ) -> Result<T> {
+        let n = (self.pending.len() - self.consumed).min(limit);
+        let bytes = &mut self.pending[self.consumed..self.consumed + n];
+        let result = copy(bytes)?;
+        bytes.zeroize();
+        self.consumed += n;
+        if self.consumed == self.pending.len() {
+            self.pending.clear();
+            self.consumed = 0;
+        }
+        Ok(result)
     }
     pub fn peer_pin(&self) -> Option<&Pin> {
         self.verified_pin.as_ref()

@@ -3,18 +3,18 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use aws_lc_rs::signature::ParsedPublicKey;
-use jni::objects::{Global, JByteArray, JObject, JValue};
-use jni::{Env, JavaVM, jni_sig, jni_str};
 use rustls::pki_types::SubjectPublicKeyInfoDer;
 use rustls::sign::{Signer, SigningKey};
 use rustls::{Error, SignatureAlgorithm, SignatureScheme};
 
+use crate::Result;
 use crate::tls::SCHEME;
-use crate::{Failure, Result, bytes};
+
+pub const MAX_SIGNATURE: usize = 72; // maximum DER-encoded ECDSA P-256 (r,s)
+type Sign = dyn Fn(&[u8]) -> Result<Vec<u8>> + Send + Sync;
 
 struct Callback {
-    vm: JavaVM,
-    object: Global<JObject<'static>>,
+    sign: Box<Sign>,
     key: ParsedPublicKey,
 }
 
@@ -31,17 +31,17 @@ impl fmt::Debug for PlatformKey {
 }
 
 impl PlatformKey {
-    pub fn new(env: &mut Env<'_>, signer: &JObject<'_>, key: ParsedPublicKey) -> Result<Self> {
-        let class = env.get_object_class(signer)?;
-        env.get_method_id(class, jni_str!("sign"), jni_sig!("([B)[B"))?;
-        Ok(Self {
+    pub fn new(
+        key: ParsedPublicKey,
+        sign: impl Fn(&[u8]) -> Result<Vec<u8>> + Send + Sync + 'static,
+    ) -> Self {
+        Self {
             callback: Arc::new(Callback {
-                vm: env.get_java_vm()?,
-                object: env.new_global_ref(signer)?,
+                sign: Box::new(sign),
                 key,
             }),
             signed: Arc::new(AtomicBool::new(false)),
-        })
+        }
     }
 }
 
@@ -69,26 +69,7 @@ impl Signer for PlatformKey {
         if message.len() > 256 {
             return Err(rejected());
         }
-        // rustls calls synchronously within a JNI entrypoint. No Env or local
-        // reference escapes its calling thread/frame. SHA256withECDSA takes
-        // rustls's unhashed CertificateVerify input and returns ASN.1 DER.
-        let sig = self
-            .callback
-            .vm
-            .with_local_frame(8, |env| -> Result<Vec<u8>> {
-                let message = env.byte_array_from_slice(message)?;
-                let obj = env
-                    .call_method(
-                        &self.callback.object,
-                        jni_str!("sign"),
-                        jni_sig!("([B)[B"),
-                        &[JValue::Object(&message)],
-                    )?
-                    .l()?;
-                let sig = env.cast_local::<JByteArray>(obj)?;
-                bytes(env, &sig, 72).map_err(|_| Failure("invalid platform signature"))
-            })
-            .map_err(|_| rejected())?;
+        let sig = (self.callback.sign)(message).map_err(|_| rejected())?;
         // Also reject a stale/mismatched platform key locally rather than
         // publishing a peer pin for a handshake we cannot authenticate in.
         self.callback
