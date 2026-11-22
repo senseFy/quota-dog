@@ -8,6 +8,7 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
@@ -16,7 +17,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -439,7 +439,7 @@ private fun QuotaDogTrayPanel(
 }
 
 @Composable
-private fun QuotaDogTrayPanelContent(
+internal fun QuotaDogTrayPanelContent(
     accounts: List<AccountUiState>,
     allAccounts: List<AccountUiState>,
     availableProviders: List<ProviderId>,
@@ -497,19 +497,26 @@ private fun QuotaDogTrayPanelContent(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(spacing.sm),
             ) {
-                if (availableProviders.size > 1) {
-                    QdSegmentedControl(
-                        options = listOf("All (${allAccounts.size})" to null) +
-                            availableProviders.map { provider ->
-                                val count = allAccounts.count { it.providerId == provider }
-                                "${provider.displayName} ($count)" to provider
-                            },
-                        selected = selectedProvider,
-                        onSelect = onSelectProvider,
-                        fillWidth = false,
-                    )
+                // Takes the room the buttons leave; more providers than fit scroll sideways, as in the main window.
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .horizontalScroll(rememberScrollState()),
+                ) {
+                    if (availableProviders.size > 1) {
+                        QdSegmentedControl(
+                            options = listOf("All (${allAccounts.size})" to null) +
+                                availableProviders.map { provider ->
+                                    val count = allAccounts.count { it.providerId == provider }
+                                    "${provider.displayName} ($count)" to provider
+                                },
+                            selected = selectedProvider,
+                            onSelect = onSelectProvider,
+                            fillWidth = false,
+                            autoScrollToSelected = true,
+                        )
+                    }
                 }
-                Spacer(modifier = Modifier.weight(1f))
                 QdIconButton(
                     onClick = onRefresh,
                     enabled = refreshEnabled,

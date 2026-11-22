@@ -31,6 +31,7 @@ static const CGFloat QDProgressHeight = 4.0;
 static const CGFloat QDWindowRowHeight = 22.0;
 static const CGFloat QDResetRowHeight = 16.0;
 static const CGFloat QDSwitcherHeight = 28.0;
+static const CGFloat QDSwitcherInset = 2.0;
 static const CGFloat QDButtonHeight = 28.0;
 static const CGFloat QDAccountGap = 12.0;
 static const CGFloat QDSectionGap = 12.0;
@@ -820,6 +821,7 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
 /// Accounts opened by hand in a layout that folds them, kept while the app runs.
 @property(nonatomic, strong) NSMutableSet<NSString *> *expandedAccounts;
 @property(nonatomic, weak) NSScrollView *accountsScroll;
+@property(nonatomic, weak) NSScrollView *providerScroll;
 @end
 
 @implementation QDStatusBarController
@@ -1043,6 +1045,7 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
         button.fgColor = active ? palette.textPrimary : palette.textSecondary;
         [button setNeedsDisplay:YES];
     }
+    [sender scrollRectToVisible:NSInsetRect(sender.bounds, -QDSwitcherInset, 0)];
 
     self.providerSelectionGeneration += 1;
     NSUInteger generation = self.providerSelectionGeneration;
@@ -1287,25 +1290,12 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
                             width:(CGFloat)width
                           palette:(QDPalette)palette {
     CGFloat height = QDSwitcherHeight;
-    CGFloat inset = 2.0;
+    CGFloat inset = QDSwitcherInset;
     CGFloat segmentHeight = height - inset * 2.0;
     CGFloat trackRadius = 6.0;
     CGFloat segmentRadius = 4.0;
 
     NSFont *font = [NSFont systemFontOfSize:11.0 weight:NSFontWeightMedium];
-    CGFloat availableWidth = width - inset * 2.0;
-    NSMutableArray<NSNumber *> *preferredWidths = [NSMutableArray arrayWithCapacity:filters.count];
-    CGFloat preferredTotal = 0;
-    for (id value in filters) {
-        NSDictionary *filter = [value isKindOfClass:[NSDictionary class]] ? value : @{};
-        NSString *label = [self stringIn:filter key:@"label" fallback:@"All"];
-        CGFloat textWidth = ceil([label sizeWithAttributes:@{NSFontAttributeName: font}].width);
-        CGFloat segmentWidth = textWidth + 16.0;
-        [preferredWidths addObject:@(segmentWidth)];
-        preferredTotal += segmentWidth;
-    }
-    CGFloat widthScale = preferredTotal > availableWidth ? availableWidth / preferredTotal : 1.0;
-
     NSMutableArray<NSValue *> *frames = [NSMutableArray arrayWithCapacity:filters.count];
     CGFloat x = inset;
     NSUInteger selectedIndex = NSNotFound;
@@ -1313,14 +1303,15 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
         NSDictionary *filter = [filters[index] isKindOfClass:[NSDictionary class]] ? filters[index] : @{};
         NSString *identifier = [self stringIn:filter key:@"id" fallback:@""];
         if ([identifier isEqualToString:selected]) selectedIndex = index;
-        CGFloat segmentWidth = preferredWidths[index].doubleValue * widthScale;
+        NSString *label = [self stringIn:filter key:@"label" fallback:@"All"];
+        CGFloat segmentWidth = ceil([label sizeWithAttributes:@{NSFontAttributeName: font}].width) + 16.0;
         NSRect frame = NSMakeRect(x, inset, segmentWidth, segmentHeight);
         [frames addObject:[NSValue valueWithRect:frame]];
         x += segmentWidth;
     }
     if (selectedIndex == NSNotFound) selectedIndex = 0;
 
-    // Rectangular Zed-style tabs; `width` only caps overflow.
+    // Rectangular Zed-style tabs, each as wide as its label.
     QDFillView *track = [[QDFillView alloc] initWithFrame:NSMakeRect(0, 0, x + inset, height)];
     track.fillColor = [palette.surfaceMuted colorWithAlphaComponent:0.55];
     track.borderColor = palette.border;
@@ -1356,8 +1347,23 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
         button.toolTip = label;
         [track addSubview:button];
     }
+    if (NSWidth(track.frame) <= width) return track;
 
-    return track;
+    // More providers than fit scroll sideways, as in the main window, so labels never overlap.
+    NSScrollView *scroll = [[NSScrollView alloc] initWithFrame:NSMakeRect(0, 0, width, height)];
+    scroll.drawsBackground = NO;
+    scroll.automaticallyAdjustsContentInsets = NO;
+    scroll.verticalScrollElasticity = NSScrollElasticityNone;
+    scroll.documentView = track;
+    // An open panel rebuilds for new data; keep the reader's place. Otherwise show the selected filter.
+    NSScrollView *previous = self.providerScroll;
+    if ([self isPanelVisible] && previous) {
+        [track scrollPoint:previous.contentView.bounds.origin];
+    } else {
+        [track scrollRectToVisible:NSInsetRect(selectedFrame, -inset, 0)];
+    }
+    self.providerScroll = scroll;
+    return scroll;
 }
 
 - (NSView *)buildUsageWindowRow:(NSDictionary *)window
