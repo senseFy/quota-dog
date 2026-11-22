@@ -4,6 +4,7 @@ import re
 import subprocess
 import sys
 import time
+import uuid
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
@@ -11,7 +12,6 @@ adb = str(Path(os.environ['ANDROID_HOME']) / 'platform-tools/adb')
 serial = os.environ['QD_TEST_SERIAL']
 assert serial.startswith('emulator-'), 'Pass a disposable emulator serial'
 pkg = 'saien.quotadog.hostsync.local'
-qr = '/sdcard/Download/QuotaDog-invitation.png'
 tree = '/data/local/tmp/qd-host-sync-ui.xml'
 
 
@@ -64,10 +64,11 @@ def reveal(label, prefix=False):
     deadline = time.monotonic() + 85
     while time.monotonic() < deadline:
         ns = nodes()
+        bottom = .968 if any('Close details' in labels(n) for n in ns) else .91
         for n in ns:
             if any((v.startswith(label) if prefix else v == label) for v in labels(n)):
                 _, y, _, b = map(int, re.findall(r'\d+', n.get('bounds')))
-                if b > y and .04*h < (b+y)/2 < .91*h: return n
+                if b > y and .04*h < (b+y)/2 < bottom*h: return n
         seen = [(labels(n), n.get('bounds')) for n in ns]
         if seen == previous: down = not down
         previous = seen
@@ -102,21 +103,34 @@ def main(action, *args):
         call('shell', 'svc', 'wifi', 'enable' if mode == 'wifi' else 'disable')
         call('shell', 'svc', 'data', 'disable' if mode == 'offline' else 'enable')
     elif action == 'import':
+        # DocumentsUI may still index a deleted file from an earlier pairing. Select only
+        # this invitation, even if a stale thumbnail is still present in Recents.
+        name = 'QuotaDog-' + uuid.uuid4().hex[:8] + '.png'
+        qr = '/sdcard/Download/' + name
         call('push', args[0], qr)
         call('shell', 'am', 'broadcast', '-a', 'android.intent.action.MEDIA_SCANNER_SCAN_FILE', '-d', 'file://' + qr)
-        tap(find('Open QR image'))
         try:
-            n = find('QuotaDog-invitation.png', timeout=4)
-        except AssertionError:
-            tap(find('Show roots')); tap(find('Downloads')); n = find('QuotaDog-invitation.png')
-        tap(n); find('Compare both screens'); call('shell', 'rm', '-f', qr)
+            tap(find('Open QR image'))
+            try:
+                n = find(name, timeout=4)
+            except AssertionError:
+                tap(find('Show roots')); tap(find('Downloads')); n = find(name)
+            tap(n); find('Compare both screens')
+        finally:
+            call('shell', 'rm', '-f', qr)
     elif action == 'match':
         find(sys.stdin.read().strip())
     elif action in ('expect', 'reveal'):
         for label in args: reveal(label)
     elif action == 'absent':
         visible = [v for n in nodes() for v in labels(n)]
-        assert all(a not in visible for a in args), 'Unexpected card or action'
+        assert not any(v == a or v.startswith(a + ' · ') for a in args for v in visible), 'Unexpected card or action'
+    elif action == 'open':
+        tap(reveal(f'Open {args[0]} details · ', prefix=True))
+    elif action == 'row-refresh':
+        tap(reveal(f'Refresh on computer · {args[0]} · ', prefix=True))
+    elif action == 'close':
+        tap(find('Close details'))
     elif action == 'tap':
         tap(reveal(args[0]))
     elif action == 'collected':
@@ -124,7 +138,7 @@ def main(action, *args):
     elif action == 'capture':
         Path(os.environ['QD_EVIDENCE'], 'host-sync-' + args[0] + '.png').write_bytes(call('exec-out', 'screencap', '-p'))
     elif action == 'clean':
-        call('shell', 'rm', '-f', qr, tree)
+        call('shell', 'rm', '-f', tree)
     else:
         raise ValueError('Unknown UI action')
 

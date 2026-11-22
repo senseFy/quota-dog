@@ -121,6 +121,17 @@ class AppPreferences(
         _dashboardLayout.value = layout
     }
 
+    // A local record or an incoming grant from one pairing, never an email or a match tag.
+    fun phoneAlias(source: String): String? = settings.getStringOrNull(phoneAliasKey(source))
+
+    fun setPhoneAlias(source: String, alias: String) {
+        val key = phoneAliasKey(source)
+        val name = alias.trim().take(48)
+        if (name.isEmpty()) settings.remove(key) else settings.putString(key, name)
+    }
+
+    private fun phoneAliasKey(source: String) = "phone_alias_" + base64UrlNoPadding(sha256(source.encodeToByteArray()))
+
     fun exportForSync(): CloudSyncPreferencesRecord {
         return CloudSyncPreferencesRecord(
             themeMode = CloudSyncStringPreference(

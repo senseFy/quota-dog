@@ -179,6 +179,37 @@ class QuotaReadingTest {
         assertNotNull(snapshot(q).ampWorkspaceScope)
     }
 
+    @Test fun phoneCacheKeepsDisplaySemanticsButCannotRestoreSharingEvidence() {
+        val settings = com.russhwolf.settings.MapSettings()
+        fun roundTrip(q: LocalQuota): PhoneQuotaDisplay {
+            val key = AccountKey(q.providerId, "record")
+            val current = snapshot(q).copy(loginTag = "live-login", quotaIdentity = "verified", quotaTarget = "original")
+            SettingsUsageSnapshotStore(settings, phoneDisplay = true).save(key, current)
+            val restored = assertNotNull(SettingsUsageSnapshotStore(settings, phoneDisplay = true).load(key))
+            assertNull(restored.loginTag); assertNull(restored.quotaIdentity); assertNull(restored.quotaTarget)
+            assertNull(restored.toQuotaReading()); assertNull(restored.toQuotaReading(workspace = true))
+            assertFalse("phoneDisplay" in Json.encodeToString(restored))
+            assertNull(SettingsUsageSnapshotStore(settings).load(key)?.phoneQuotaDisplay())
+            return assertNotNull(restored.copy(stale = true).phoneQuotaDisplay()).also { assertEquals(current.phoneQuotaDisplay(), it) }
+        }
+        for ((percent, expected) in listOf("" to null, "\"creditUsagePercent\":0," to 0.0, "\"creditUsagePercent\":40," to .4)) {
+            val q = GrokCreditsProxyFetcher.parseCreditsJson("""{"config":{$percent"currentPeriod":{"type":"WEEKLY"},
+                "billingPeriodEnd":"2026-12-15T00:00:00Z"}}""", now).localQuota
+            val window = roundTrip(q).windows.single()
+            assertEquals(expected, window.used); assertNull(window.reset)
+        }
+        val workspace = "Individual credits: $99 remaining - https://ampcode.com/workspaces/fixture/settings"
+        val balances = roundTrip(AmpUsageFetcher.parseDisplayText("Individual credits: $10 remaining - https://ampcode.com/settings\n$workspace", now).localQuota)
+        assertEquals(listOf("Individual credits: $10.00", "Workspace credits: $99.00"), balances.amounts)
+        val ambiguous = roundTrip(AmpUsageFetcher.parseDisplayText("Amp Free: $7.50/$10.00 remaining\nIndividual credits: $14.41 remaining", now).localQuota)
+        assertEquals(listOf("Amp Free remaining: $7.50 / $10.00", "Credits (scope unverified): $14.41"), ambiguous.amounts)
+        val model = AntigravityUsageFetcher.availableModels(obj("""{"models":{"some-other-model":{"displayName":"Local label","quotaInfo":{"remainingFraction":0.1}}}}"""))
+        val q = model.localQuota(null, null, "google")
+        assertEquals("Local label", roundTrip(q).windows.single().label)
+        assertEquals(.9, roundTrip(q).windows.single().used)
+        assertEquals("Model 1", reading(q).windows.single().label)
+    }
+
     @Test fun ampPayAsYouGoAndWorkspaceOnlyNeverProjectTheSyntheticCreditsWindow() {
         fun quota(text: String) = AmpUsageFetcher.parseDisplayText(text, now).localQuota
         val individual = quota("Individual credits: $0 remaining - https://ampcode.com/settings")

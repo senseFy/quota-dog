@@ -142,7 +142,9 @@ internal val DashboardAccount.busy get() = when (this) {
     is DashboardAccount.Remote -> source.busy
 }
 
-internal fun DashboardAccount.refreshTarget(collectors: List<ProviderId> = availableProviders()): DashboardRefresh? = when (this) {
+internal fun DashboardAccount.refreshTarget(
+    collectors: List<ProviderId> = availableProviders(), retryStandalone: Boolean = false,
+): DashboardRefresh? = when (this) {
     is DashboardAccount.Remote -> source.takeIf { it.refreshable }?.let(DashboardRefresh::There)
     is DashboardAccount.Local -> when {
         !account.added || account.authState == AuthState.RateLimited -> null
@@ -151,13 +153,14 @@ internal fun DashboardAccount.refreshTarget(collectors: List<ProviderId> = avail
         // Local tokens can be renewed, and a failed local request can be retried. Neither is a
         // reason to issue another provider request from a peer.
         account.authState == AuthState.LoggedIn || account.authState == AuthState.TokenExpired ||
-            (copies.isNotEmpty() && account.authState == AuthState.Error) -> DashboardRefresh.Here(account)
+            (account.authState == AuthState.Error && (copies.isNotEmpty() || retryStandalone && !account.accountKey.isPending)) ->
+            DashboardRefresh.Here(account)
         else -> null
     }
 }
 
-internal fun List<DashboardAccount>.refreshAllTargets(): List<DashboardRefresh> =
-    mapNotNull { if (it.busy) null else it.refreshTarget() }
+internal fun List<DashboardAccount>.refreshAllTargets(retryStandalone: Boolean = false): List<DashboardRefresh> =
+    mapNotNull { if (it.busy) null else it.refreshTarget(retryStandalone = retryStandalone) }
 
 internal fun AccountUiState.attributableSnapshot(): ProviderUsageSnapshot? = snapshot?.takeIf {
     // A later sign-in or rate-limit error doesn't invalidate the last locally observed identity.
@@ -201,12 +204,12 @@ internal fun dashboardAccounts(
     } + remote
 }
 
-private val byName = compareBy<DashboardAccount> { it.sortName }.thenBy { it.provider.displayName.lowercase() }
-    .thenBy { when (val k = it.key) { is DashboardKey.Local -> k.key.accountId; is DashboardKey.Remote -> k.ref } }
-
 internal fun List<DashboardAccount>.inDashboardOrder(
     mode: AccountSortMode, localOrder: List<AccountKey>, sessionOrder: List<DashboardKey>, reversed: Boolean,
+    sortName: (DashboardAccount) -> String = { it.sortName },
 ): List<DashboardAccount> {
+    val byName = compareBy(sortName).thenBy { it.provider.displayName.lowercase() }
+        .thenBy { when (val k = it.key) { is DashboardKey.Local -> k.key.accountId; is DashboardKey.Remote -> k.ref } }
     val forward = when (mode) {
         AccountSortMode.Name -> sortedWith(byName)
         AccountSortMode.RefreshTime -> sortedWith(compareByDescending<DashboardAccount> { it.collectedAt }.then(byName))

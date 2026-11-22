@@ -8,6 +8,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import saien.quotadog.AppPreferences
 import saien.quotadog.QuotaDogStore
+import saien.quotadog.SettingsUsageSnapshotStore
 import saien.quotadog.app.App
 import saien.quotadog.app.DashboardPeer
 import saien.quotadog.app.components.*
@@ -29,13 +30,15 @@ fun PhoneDashboard(phone: PhoneSync?, onScan: () -> Unit, onOpenImage: () -> Uni
     val showConnection = pilot || pairing || s?.digits != null || s?.paired == true
     val peers = remember(phone, s) {
         if (phone == null || s?.paired != true) emptyList() else listOf(DashboardPeer(
-            id = "computer", label = "My computer", refreshLabel = "Refresh on computer", online = s.online,
+            id = s.pairId ?: return@remember emptyList(), label = "My computer", refreshLabel = "Refresh on computer", online = s.online,
             cards = s.cards, busyRefs = s.busyRefs, matchFor = phone::matchFor, refresh = phone::refresh, clockConflict = s.clockConflict,
         ))
     }
     App(
         store = store, preferences = prefs, versionLabel = if (pilot) "$hostSyncLabel host-sync build" else version,
+        usageSnapshotStore = remember { SettingsUsageSnapshotStore(phoneDisplay = true) },
         showLocalEmptyState = pilot || !showConnection,
+        phoneDashboard = true,
         syncPeers = peers,
         onConnectComputer = if (!pilot && s?.paired != true) ({ pairing = true }) else null,
         hostSyncContent = { activeStore ->

@@ -54,7 +54,7 @@ fun QdSettingsSheet(
     visible: Boolean,
     themeMode: ThemeMode,
     onThemeChange: (ThemeMode) -> Unit,
-    dashboardLayout: DashboardLayout,
+    dashboardLayout: DashboardLayout?,
     onDashboardLayoutChange: (DashboardLayout) -> Unit,
     usageDisplayMode: UsageDisplayMode,
     onUsageDisplayModeChange: (UsageDisplayMode) -> Unit,
@@ -191,8 +191,8 @@ fun QdSettingsSheet(
                         },
                     )
 
-                    // Layout.
-                    QdSettingsRow(
+                    // Only desktop has multiple dashboard layouts.
+                    if (dashboardLayout != null) QdSettingsRow(
                         title = "Layout",
                         description = "How much of each account the dashboard shows.",
                         control = {

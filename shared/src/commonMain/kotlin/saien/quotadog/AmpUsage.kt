@@ -198,6 +198,8 @@ internal object AmpUsageFetcher {
         var workspaceName: String? = null
         var workspaceScope: String? = null
         var workspaceLines = 0
+        val individualAmounts = mutableListOf<Double>()
+        val workspaceAmounts = mutableListOf<Double>()
         var details = QuotaDetails.AmpIndividual()
 
         for (rawLine in displayText.lines()) {
@@ -213,10 +215,12 @@ internal object AmpUsageFetcher {
                 if (individualCreditsRegex.containsMatchIn(line) && slug == null) {
                     individualLines++
                     individualCredits = amount
+                    amount?.let(individualAmounts::add)
                     individualScoped = individualSuffix.matches(suffix)
                 } else {
                     workspaceLines++
                     workspaceCredits = amount
+                    amount?.let(workspaceAmounts::add)
                     workspaceName = balance.groupValues[1].trim().takeUnless { it.equals("Workspace", ignoreCase = true) }
                     // A display name is not stable consent to observe this workspace across refreshes.
                     workspaceScope = slug?.let { "amp-workspace-url:$it" }
@@ -297,7 +301,11 @@ internal object AmpUsageFetcher {
             workspaceCreditsDollars = workspaceCredits,
             workspaceName = workspaceName,
             localQuota = LocalQuota(ProviderId.AMP, quotaWindows, details.takeUnless { it == QuotaDetails.AmpIndividual() },
-                ampWorkspaceUsd = workspaceCredits, ampWorkspaceScope = workspaceScope.takeIf { workspaceLines == 1 && workspaceCredits != null }),
+                ampWorkspaceUsd = workspaceCredits, ampWorkspaceScope = workspaceScope.takeIf { workspaceLines == 1 && workspaceCredits != null },
+                unscopedCreditsUsd = buildList {
+                    if (details.creditsUsd == null) addAll(individualAmounts)
+                    if (workspaceLines != 1) addAll(workspaceAmounts)
+                }),
         )
     }
 

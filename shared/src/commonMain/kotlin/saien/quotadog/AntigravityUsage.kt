@@ -41,6 +41,7 @@ internal class AntigravityQuery(
     val windows: List<UsageWindow>,
     val quotaWindows: List<QuotaWindow>,
     private val knownPools: List<String>?,
+    private val phoneWindows: List<PhoneWindow>,
 ) {
     // Only the project in the request which actually returned this quota is a target. A
     // project discovered by loadCodeAssist must not be attributed to a subsequent {} retry.
@@ -49,7 +50,7 @@ internal class AntigravityQuery(
         val scope = if (user != null && !project.isNullOrBlank() && !knownPools.isNullOrEmpty()) {
             listOf(user, project, backend) + knownPools.sorted()
         } else null
-        return LocalQuota(ProviderId.ANTIGRAVITY, quotaWindows, matchParts = scope)
+        return LocalQuota(ProviderId.ANTIGRAVITY, quotaWindows, matchParts = scope, phoneWindows = phoneWindows)
     }
 }
 
@@ -365,6 +366,7 @@ internal object AntigravityUsageFetcher {
         val groups = quotaSummaryGroups(root).orEmpty()
         val windows = mutableListOf<UsageWindow>()
         val shared = mutableListOf<QuotaWindow>()
+        val phone = mutableListOf<PhoneWindow>()
         val poolIds = mutableSetOf<String>()
         var allKnown = true
         var unknownSlot = 0
@@ -402,11 +404,13 @@ internal object AntigravityUsageFetcher {
                 if (shared.size < 16 && shared.none { it.kind == kind && it.slot == number }) {
                     shared += quotaWindow(kind, usedRatio, resetAt, period.durationSeconds, slot = number)
                 }
+                val label = "${period.groupLabel(groupId, groupName)} · ${period.displayName}"
+                phone += PhoneWindow(label, usedRatio, resetAt, period.durationSeconds)
                 if (usedRatio == null) continue
                 val id = "antigravity-$groupId-${period.id}"
                 windows += UsageWindow(
                     id = id,
-                    label = "${period.groupLabel(groupId, groupName)} · ${period.displayName}",
+                    label = label,
                     usedRatio = usedRatio,
                     resetsAt = resetAt,
                     durationSeconds = period.durationSeconds,
@@ -428,7 +432,7 @@ internal object AntigravityUsageFetcher {
                 compareBy<UsageWindow> { order.indexOf(it.id).let { index -> if (index < 0) order.size else index } }
                     .thenBy { it.resetsAt?.toEpochMilliseconds() ?: Long.MAX_VALUE },
             )
-        return AntigravityQuery(ordered, shared.sortedBy { it.kind.ordinal }, poolIds.toList().takeIf { allKnown })
+        return AntigravityQuery(ordered, shared.sortedBy { it.kind.ordinal }, poolIds.toList().takeIf { allKnown }, phone)
     }
 
     internal fun parseAvailableModels(root: JsonObject) = availableModels(root).windows
@@ -437,6 +441,7 @@ internal object AntigravityUsageFetcher {
         val models = root["models"] as? JsonObject
         val windows = mutableListOf<UsageWindow>()
         val shared = mutableListOf<QuotaWindow>()
+        val phone = mutableListOf<PhoneWindow>()
         var unknownSlot = 0
         // Number unfamiliar models locally in stable machine-key order. Never send their raw keys or display names.
         for ((name, infoElement) in models.orEmpty().entries.sortedBy { it.key }) {
@@ -455,8 +460,9 @@ internal object AntigravityUsageFetcher {
             }
             if (shared.size < 12) shared += quotaWindow(kind, usedRatio, resetAt, null,
                 slot = if (kind == QuotaWindowKind.OtherModel) ++unknownSlot else null)
-            if (usedRatio == null || listOf("gemini", "claude", "gpt").none { name.contains(it, ignoreCase = true) }) continue
             val display = info.stringField("displayName") ?: name
+            phone += PhoneWindow(display, usedRatio, resetAt, null)
+            if (usedRatio == null || listOf("gemini", "claude", "gpt").none { name.contains(it, ignoreCase = true) }) continue
             windows += UsageWindow(
                 id = "model-$name",
                 label = display,
@@ -466,7 +472,7 @@ internal object AntigravityUsageFetcher {
             )
         }
         // Model identifiers do not establish which underlying quota pool is being charged.
-        return AntigravityQuery(windows.sortedBy { it.resetsAt?.toEpochMilliseconds() ?: Long.MAX_VALUE }.take(12), shared, null)
+        return AntigravityQuery(windows.sortedBy { it.resetsAt?.toEpochMilliseconds() ?: Long.MAX_VALUE }.take(12), shared, null, phone)
     }
 
     private fun quotaSummaryGroups(root: JsonObject): JsonArray? {

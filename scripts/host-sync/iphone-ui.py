@@ -70,12 +70,13 @@ def reveal(text, prefix=False):
         ns = elements()
         screen = next(n['frame'] for n in ns if n.get('type') == 'Application')
         h = screen['height']; x = str(int(screen['width'] / 3))
+        # The Add button occludes the dashboard, not the modal presented above it.
+        bottom = .968 if any(n.get('AXLabel') == 'Close details' for n in ns) else .875
         seen = []
         for n in ns:
             name = n.get('AXLabel') or ''
             f = n['frame']; y = f['y'] + f['height'] / 2
-            # Accessibility also reports content underneath the status bar and fixed Add button.
-            if name and .085*h < y < .875*h and 0 < f['x'] + f['width'] / 2 < screen['width']:
+            if name and .085*h < y < bottom*h and 0 < f['x'] + f['width'] / 2 < screen['width']:
                 seen.append((name, int(y)))
                 if (name.startswith(text) if prefix else name == text): return n
         if seen == previous: down = not down
@@ -134,7 +135,13 @@ def main(action, *args):
         for text in args: reveal(text)
     elif action == 'absent':
         visible = {n.get('AXLabel') for n in elements()}
-        assert not visible.intersection(args), 'Unexpected account or action'
+        assert not any(v == a or (v or '').startswith(a + ' · ') for a in args for v in visible), 'Unexpected account or action'
+    elif action == 'open':
+        tap(reveal(f'Open {args[0]} details · ', prefix=True))
+    elif action == 'row-refresh':
+        tap(reveal(f'Refresh on computer · {args[0]} · ', prefix=True))
+    elif action == 'close':
+        tap(label('Close details'))
     elif action == 'tap':
         tap(reveal(args[0]))
     elif action == 'collected':

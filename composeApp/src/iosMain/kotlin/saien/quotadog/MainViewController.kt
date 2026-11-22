@@ -5,7 +5,7 @@ import androidx.compose.ui.window.ComposeUIViewController
 import platform.Foundation.NSBundle
 import saien.quotadog.hostsync.*
 
-private val iosQuotaDogStore = QuotaDogStore()
+private val iosQuotaDogStore = QuotaDogStore(usageSnapshotStore = SettingsUsageSnapshotStore(phoneDisplay = true))
 
 fun MainViewController(platform: IosPhonePlatform) = ComposeUIViewController {
     var phone by remember(platform) { mutableStateOf<PhoneSync?>(null) }

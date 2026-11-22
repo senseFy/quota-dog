@@ -44,6 +44,21 @@ class AppPreferencesTest {
     }
 
     @Test
+    fun phoneNicknamesStayWithTheirRecordOrPairAndCanBeCleared() {
+        val settings = MapSettings()
+        val prefs = AppPreferences(settings)
+        prefs.setPhoneAlias("local:CODEX:one", " Work ")
+        prefs.setPhoneAlias("grant:mac-a:one", "Personal")
+        val restored = AppPreferences(settings)
+        assertEquals("Work", restored.phoneAlias("local:CODEX:one"))
+        assertEquals(null, restored.phoneAlias("local:CODEX:two"))
+        assertEquals(null, restored.phoneAlias("grant:mac-b:one"))
+        restored.setPhoneAlias("local:CODEX:one", " ")
+        assertEquals(null, restored.phoneAlias("local:CODEX:one"))
+        assertEquals("Personal", restored.phoneAlias("grant:mac-a:one"))
+    }
+
+    @Test
     fun projectedUsageDisplayDefaultsOff() {
         val preferences = AppPreferences(MapSettings())
 

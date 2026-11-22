@@ -4,6 +4,7 @@ import kotlinx.datetime.Instant
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import saien.quotadog.AuthState
+import saien.quotadog.PhoneWindow
 import saien.quotadog.ProviderId
 import saien.quotadog.ProviderUsageSnapshot
 import saien.quotadog.UsageWindow
@@ -215,6 +216,8 @@ class LocalQuota internal constructor(
     val matchParts: List<String>? = null,
     private val ampWorkspaceUsd: Double? = null,
     internal val ampWorkspaceScope: String? = null,
+    internal val phoneWindows: List<PhoneWindow>? = null,
+    internal val unscopedCreditsUsd: List<Double> = emptyList(),
 ) {
     val hasAccountReading get() = windows.isNotEmpty() || details != null
 

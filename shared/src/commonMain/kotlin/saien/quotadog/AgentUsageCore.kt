@@ -164,6 +164,7 @@ data class ProviderUsageSnapshot(
     @Transient val ampWorkspaceName: String? = null, // Local grant picker only, never a wire label or match key.
     @Transient val quotaTarget: String? = null,
     @Transient val quotaIdentity: String? = localQuota?.matchParts?.let { Json.encodeToString(it) },
+    @Transient val cachedPhoneDisplay: PhoneQuotaDisplay? = null,
 )
 
 data class StoredToken(

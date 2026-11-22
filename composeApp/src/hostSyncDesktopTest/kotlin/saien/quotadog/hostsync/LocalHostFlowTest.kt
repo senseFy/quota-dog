@@ -61,7 +61,9 @@ class LocalHostFlowTest {
         fun pair() {
             click("Pair a phone")
             desktop.waitUntil(15_000) { desktop.onAllNodesWithTag("pairing-qr").fetchSemanticsNodes().isNotEmpty() }
-            qr.writeBytes(Image.makeFromBitmap(desktop.onNodeWithTag("pairing-qr").captureToImage().asSkiaBitmap()).encodeToData()!!.bytes)
+            val code = desktop.onNodeWithTag("pairing-qr").performScrollTo()
+            desktop.waitForIdle()
+            qr.writeBytes(Image.makeFromBitmap(code.captureToImage().asSkiaBitmap()).encodeToData()!!.bytes)
             phone("import", qr.path); qr.delete()
             val digits = checkNotNull(f.host.state.value.digits)
             desktop.onNodeWithText(digits).assertExists(); phone("match", input = digits)
@@ -79,60 +81,65 @@ class LocalHostFlowTest {
             click("Enable host"); pair(); phone("capture", "empty")
             record("Two screens matched; desktop approved; authenticated new session had zero shared accounts.")
 
-            grant("View only"); phone("expect", "25% used", "75% used", "Extra balance · USD 2.50", "View only")
+            grant("View only"); phone("expect", "75% used"); phone("absent", "25% used", "Refresh on computer")
+            phone("open", "Devin"); phone("expect", "25% used", "75% used", "Extra balance", "$2.50", "View only")
             phone("absent", "Refresh on computer", "97% used", "owner@example.invalid")
             assertEquals("1", upstream("count")); assertEquals("1", upstream("unshared-count"))
             captureDesktop("desktop", desktop.onNodeWithTag("host-sharing"))
             phone("capture", "view"); record("View only: daily used 25%, weekly used 75%, USD 2.50; unrelated 97% source absent. Provider count=1.")
 
-            grant("Allow refresh"); phone("tap", "Refresh on computer"); phone("expect", "38% used", "Updated by computer")
+            grant("Allow refresh"); phone("expect", "Refresh on computer"); phone("close")
+            phone("row-refresh", "Devin"); phone("expect", "Updated by computer"); phone("absent", "Close details")
+            phone("open", "Devin"); phone("expect", "38% used")
             assertEquals("2", upstream("count")); val collected = phone("collected")
             phone("capture", "updated"); record("One phone tap: personal GetUserStatus count=2; daily used 38%; collected=$collected.")
 
-            upstream("fail", true); phone("tap", "Refresh on computer"); phone("expect", "Refresh failed on computer", "38% used")
+            upstream("fail", true); phone("tap", "Refresh on computer"); phone("close"); phone("expect", "Refresh failed on computer")
+            phone("open", "Devin"); phone("expect", "38% used")
             assertEquals(collected, phone("collected")); assertEquals("3", upstream("count"))
             phone("capture", "failed")
             record("Provider failure: count=3; 38% and original collection time preserved.")
 
             upstream("hold", true); phone("tap", "Refresh on computer")
             desktop.waitUntil(5_000) { upstream("count") == "4" }
-            click("Pause host"); phone("expect", "Computer unavailable", "38% used")
+            click("Pause host"); phone("expect", "Offline", "38% used"); phone("absent", "Refresh on computer")
             assertEquals(collected, phone("collected")); phone("capture", "offline")
-            phone("restart"); phone("expect", "Computer unavailable", "38% used"); assertEquals(collected, phone("collected"))
+            phone("restart"); phone("expect", "Computer unavailable"); phone("open", "Devin")
+            phone("expect", "38% used"); assertEquals(collected, phone("collected"))
             upstream("release", true); click("Enable host")
             desktop.waitUntil(10_000) { f.host.state.value.online || f.host.state.value.saveFailed }
             record("Host resumed after request #4: ${hostStatus()}.")
-            phone("expect", "Computer connected", "53% used", "Refresh on computer")
+            phone("expect", "53% used", "Refresh on computer")
             assertNotEquals(collected, phone("collected")); assertEquals("4", upstream("count"))
             record("Interrupted after upstream accepted request #4. Phone restart retained 38%; reconnect delivered 53% without a 5th call or another QR.")
 
             if (iphone) {
                 phone("background"); grant("View only"); phone("foreground")
-                phone("expect", "Computer connected", "View only", "53% used"); phone("absent", "Refresh on computer")
+                phone("expect", "View only", "53% used"); phone("absent", "Refresh on computer")
                 assertEquals("4", upstream("count"))
                 record("iPhone returned from background with the new view-only grant and no repeated query.")
             } else try {
                 // The forwarded socket stays routable; only Android's default network change retires it.
-                phone("network", "offline"); phone("expect", "Computer unavailable", "53% used")
+                phone("network", "offline"); phone("expect", "Offline", "53% used")
                 grant("View only"); phone("network", "cellular")
-                phone("expect", "Computer connected", "View only", "53% used"); phone("absent", "Refresh on computer")
+                phone("expect", "View only", "53% used"); phone("absent", "Refresh on computer")
                 assertEquals("4", upstream("count"))
                 record("AVD default network lost and restored with only emulated mobile data. Fresh view-only grant, no QR or additional query. Transport was still adb reverse, NOT a public carrier test.")
             } finally { phone("network", "wifi") }
 
             grant("Not shared"); phone("expect", "No accounts shared. Choose a workspace on your computer.")
             phone("absent", "Devin", "Refresh on computer")
-            grant("View only"); phone("expect", "53% used", "View only"); click("Revoke phone")
+            grant("View only"); phone("open", "Devin"); phone("expect", "53% used", "View only"); click("Revoke phone")
             phone("expect", "Pairing revoked by computer", "No accounts yet"); phone("absent", "Devin")
             phone("capture", "revoked")
             phone("restart"); phone("expect", "Connect your computer", "No accounts yet")
             assertEquals("4", upstream("count")); assertEquals("1", upstream("unshared-count"))
             record("Unshare removed card; regrant was view-only; online revocation and cold restart left zero remote accounts. Final counts: personal=4, unshared=1.")
 
-            pair(); grant("View only"); phone("expect", "53% used")
+            pair(); grant("View only"); phone("open", "Devin"); phone("expect", "53% used"); phone("close")
             click("Pause host"); phone("expect", "Computer unavailable"); click("Revoke phone"); click("Enable host")
-            phone("expect", "Relay did not accept this pairing", "53% used"); phone("absent", "Refresh on computer")
-            phone("tap", "Forget computer…"); phone("tap", "Cancel"); phone("expect", "53% used")
+            phone("expect", "Relay did not accept this pairing", "75% used"); phone("absent", "Refresh on computer")
+            phone("tap", "Forget computer…"); phone("tap", "Cancel"); phone("open", "Devin"); phone("expect", "53% used"); phone("close")
             phone("tap", "Forget computer…"); phone("expect", "Remove from phone"); phone("capture", "forget")
             phone("tap", "Remove from phone"); phone("expect", "Computer disconnected", "No accounts yet"); phone("absent", "Devin")
             assertEquals("4", upstream("count")); assertEquals("1", upstream("unshared-count"))
@@ -141,18 +148,19 @@ class LocalHostFlowTest {
             // Every click uses the production shareableSources filter and HostSharingCard. Adding
             // only a protocol test here would miss the released Devin-only settings regression.
             pair()
-            val readings = linkedMapOf(ProviderId.CURSOR to "Included spend: $392.73 / $400.00", ProviderId.GROK to "45% used",
-                ProviderId.CODEX to "Resets available: 2", ProviderId.CLAUDE_CODE to "81% used",
-                ProviderId.ANTIGRAVITY to "56% used", ProviderId.AMP to "Individual credits: $14.41",
-                ProviderId.DROID to "Extra usage balance: $123.45", ProviderId.DEVIN to "Extra balance · USD 2.50")
+            val readings = linkedMapOf(ProviderId.CURSOR to listOf("Included spend", "$392.73 / $400.00"), ProviderId.GROK to listOf("45% used"),
+                ProviderId.CODEX to listOf("Resets available", "2"), ProviderId.CLAUDE_CODE to listOf("81% used"),
+                ProviderId.ANTIGRAVITY to listOf("56% used"), ProviderId.AMP to listOf("Individual credits", "$14.41"),
+                ProviderId.DROID to listOf("Extra usage balance", "$123.45"), ProviderId.DEVIN to listOf("Extra balance", "$2.50"))
             for ((id, expected) in readings) {
                 val source = if (id == ProviderId.DEVIN) f.source else runBlocking { f.addProvider(id) }
                 grant(if (id == ProviderId.CURSOR) "Allow refresh" else "View only", source)
                 val n = readings.keys.indexOf(id) + 1
-                phone("expect", "All providers ($n)"); phone("reveal", expected)
+                phone("expect", "All providers ($n)"); phone("open", id.displayName); phone("expect", *expected.toTypedArray())
                 if (id == ProviderId.CURSOR) {
-                    phone("expect", "On-demand spend: $3.47"); phone("capture", "cursor")
+                    phone("expect", "On-demand spend", "$3.47", "16% used", "78% used", "Not reported"); phone("capture", "cursor")
                 }
+                phone("close")
                 record("$id: shared by Mac settings; phone displayed $expected; $n simultaneous sources.")
             }
             phone("reveal", "All providers (8)"); phone("capture", "multi")
@@ -166,11 +174,12 @@ class LocalHostFlowTest {
             fun calls(name: String) = upstream("provider-counts/$name").toInt()
             val before = calls("codex-phone"); val macCount = calls("codex-mac")
             phone("local-codex", input = """{"accessToken":"fixture-codex-phone","refreshToken":"","expiresAtEpochMillis":4102444800000}""")
-            phone("expect", "Computer connected", "Source details (2)", "All providers (8)")
+            phone("expect", "Computer connected", "All providers (8)")
             desktop.waitUntil(5_000) { calls("codex-phone") == before + 1 }
             check(f.host.state.value.phones.single().cards.isEmpty()) { "Local phone account shared without a grant" }
-            phone("reveal", "Computer connected"); phone("tap", "Codex (1)"); phone("absent", "Individual credits: $14.41")
-            phone("tap", "Source details (2)"); phone("reveal", "Hide source details"); phone("capture", "merged")
+            phone("reveal", "Computer connected"); phone("tap", "Codex (1)"); phone("absent", "Amp")
+            phone("open", "Codex"); phone("expect", "Collected by this phone", "This phone", "My computer", "View only", "Refresh on this device")
+            phone("capture", "merged"); phone("close")
             phone("tap", "Share from this phone"); phone("tap", "Allow refresh")
             phone("capture", "outgoing")
             desktop.waitUntil(10_000) { f.host.state.value.phones.single().cards.singleOrNull()?.reading != null }

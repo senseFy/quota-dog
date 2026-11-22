@@ -74,8 +74,8 @@ if [[ ${1:-android} == android ]]; then
   "$adb" -s "$QD_TEST_SERIAL" reverse tcp:18787 tcp:18787; reversed=1
   "$adb" -s "$QD_TEST_SERIAL" reverse tcp:18788 tcp:18788
   "$adb" -s "$QD_TEST_SERIAL" shell wm dismiss-keyguard
-  # Keep the system bar height consistent with the test AVD's emulated camera cutout.
-  "$adb" -s "$QD_TEST_SERIAL" shell cmd overlay enable-exclusive --category com.android.internal.display.cutout.emulation.hole
+  # Reserve a full-height status bar; the hole overlay clips the clock on this API 36 AVD.
+  "$adb" -s "$QD_TEST_SERIAL" shell cmd overlay enable-exclusive --category com.android.internal.display.cutout.emulation.tall
 fi
 node scripts/host-sync/devin-fixture.mjs --relay & stack=$!
 for _ in $(seq 50); do curl -sf http://127.0.0.1:18788/count >/dev/null && break; sleep .2; done

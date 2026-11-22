@@ -6,7 +6,8 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
 class SettingsUsageSnapshotStore(
-    private val settings: Settings = createPreferenceSettings()
+    private val settings: Settings = createPreferenceSettings(),
+    private val phoneDisplay: Boolean = false,
 ) {
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -15,7 +16,7 @@ class SettingsUsageSnapshotStore(
         if (!settings.hasKey(snapshotKey)) return null
         val encoded = settings.getString(snapshotKey, "")
         return runCatching {
-            json.decodeFromString(ProviderUsageSnapshot.serializer(), encoded)
+            if (phoneDisplay) json.decodePhoneSnapshot(encoded) else json.decodeFromString(ProviderUsageSnapshot.serializer(), encoded)
         }.getOrNull()
     }
 
@@ -24,7 +25,7 @@ class SettingsUsageSnapshotStore(
     }
 
     fun save(accountKey: AccountKey, snapshot: ProviderUsageSnapshot, updatedAtEpochMillis: Long) {
-        val encoded = json.encodeToString(ProviderUsageSnapshot.serializer(), snapshot)
+        val encoded = if (phoneDisplay) json.encodePhoneSnapshot(snapshot) else json.encodeToString(ProviderUsageSnapshot.serializer(), snapshot)
         settings.putString(key(accountKey), encoded)
         settings.putLong(updatedAtKey(accountKey), updatedAtEpochMillis)
         upsertIndex(accountKey)

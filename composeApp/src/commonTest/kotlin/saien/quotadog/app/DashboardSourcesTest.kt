@@ -81,6 +81,48 @@ class DashboardSourcesTest {
         assertEquals(boundary.collectedAt, skew.collectedAt)
     }
 
+    @Test fun phoneSummaryKeepsTheTightestAndLongestOtherCriticalWindowFromOneReading() {
+        val five = QuotaWindow(QuotaWindowKind.ClaudeFiveHour, .964, resetsAt = 10)
+        val weekly = QuotaWindow(QuotaWindowKind.ClaudeWeekly, .963, resetsAt = 20)
+        val opus = QuotaWindow(QuotaWindowKind.ClaudeOpusWeekly, .900, resetsAt = 30)
+        val sonnet = QuotaWindow(QuotaWindowKind.ClaudeSonnetWeekly, .8999, resetsAt = 40)
+        val value = observed.copy(windows = listOf(weekly, sonnet, opus, five))
+        val account = local.copy(snapshot = snapshot.copy(planLabel = "Local plan", windows = listOf(
+            saien.quotadog.UsageWindow("here", "Local", .99, null))))
+        fun reading(observation: QuotaReading, now: Long = 1_000) = dashboardAccounts(listOf(account),
+            listOf(peer("1", card.copy(reading = observation), tag = card.match)), now).single().phoneReading()!!
+        val hot = reading(value)
+        assertEquals(listOf(.964, .900), hot.summary.map { it.used })
+        assertEquals(1, hot.moreCritical) // .8999 also rounds to 90%, but is not critical.
+        assertEquals(4, hot.windows.size)
+        assertNull(hot.plan) // An omitted field is not taken from the other source.
+        assertNull(hot.commonReset)
+        val quiet = reading(value.copy(windows = listOf(five.copy(used = .06), weekly.copy(used = .03, resetsAt = 10))))
+        assertEquals(listOf(.06), quiet.summary.map { it.used })
+        assertEquals(Instant.fromEpochMilliseconds(10), quiet.commonReset)
+        val tied = reading(value.copy(windows = listOf(five.copy(used = 1.0, resetsAt = 11), weekly.copy(used = 1.0, resetsAt = 60), opus)))
+        assertEquals(listOf(11L, 60L), tied.summary.map { it.reset?.toEpochMilliseconds() })
+        val sample = reading(value.copy(collectedAt = 3_600_000, windows = listOf(five.copy(used = .2, durationSeconds = 18_000, resetsAt = 18_000_000))), now = 14_400_000)
+        assertEquals(1.0, sample.estimatedAtReset(sample.windows.single(), Instant.fromEpochMilliseconds(14_400_000)))
+        assertNull(sample.estimatedAtReset(sample.windows.single(), Instant.fromEpochMilliseconds(18_000_000)))
+    }
+
+    @Test fun phoneResetCreditsOnlyShowDetailsFromTheSourceThatWon() {
+        val p = ProviderId.CODEX
+        val expires = Instant.fromEpochMilliseconds(10_000)
+        val credits = listOf(saien.quotadog.CodexResetCredit("private-id", "available", "Weekly reset", expiresAt = expires),
+            saien.quotadog.CodexResetCredit("private-id-2", "available", "Referral reset"))
+        val here = local.copy(providerId = p, accountKey = AccountKey(p, "local"), snapshot = snapshot.copy(providerId = p,
+            resetCreditsAvailable = 2, resetCredits = credits))
+        val localLines = dashboardAccounts(listOf(here), emptyList()).single().phoneReading()!!.amounts
+        assertEquals("Resets available: 2", localLines.first())
+        assertTrue(localLines[1].startsWith("Weekly reset: ")); assertEquals("Referral reset: No expiry", localLines.last())
+        val incoming = SharedCard(card.source.copy(provider = p), QuotaReading(p, 500, emptyList(), QuotaDetails.Codex(2, 1, listOf(42_000, 14_000))))
+        val remoteLines = dashboardAccounts(listOf(here), listOf(peer("1", incoming, tag = card.match))).single().phoneReading()!!.amounts
+        assertEquals(listOf("Resets available: 2", "Resets eligible: 1"), remoteLines.take(2))
+        assertEquals(2, remoteLines.count { it.startsWith("Reset credit expires: ") }); assertTrue(remoteLines.none { "Weekly reset" in it || "Referral reset" in it })
+    }
+
     @Test fun untrustedSampleIsNeverAMergeCandidateAndDoesNotBlockAnEarlierCorrectedSample() {
         val history = DashboardReadingHistory()
         val now = 1_000L
@@ -122,6 +164,12 @@ class DashboardSourcesTest {
         val busyPeer = peer("already-querying", allowed, tag = card.match, busy = setOf(allowed.ref))
         assertEquals(emptyList(), dashboardAccounts(listOf(signInNeeded), phones.takeLast(1) + busyPeer).refreshAllTargets())
         assertEquals(emptyList(), dashboardAccounts(listOf(signInNeeded.copy(busy = true)), phones.takeLast(1)).refreshAllTargets())
+
+        val failed = local.copy(authState = AuthState.Error)
+        val pending = failed.copy(accountKey = AccountKey.pending(provider, "sign-in"))
+        val standalone = dashboardAccounts(listOf(failed, pending), emptyList())
+        assertEquals(listOf(DashboardRefresh.Here(failed)), standalone.refreshAllTargets(retryStandalone = true))
+        assertEquals(emptyList(), standalone.refreshAllTargets()) // Desktop's batch policy stays unchanged.
     }
 
     @Test fun noGuessFromCachedSnapshotsMissingTagsDuplicateCandidatesOrProviderName() {

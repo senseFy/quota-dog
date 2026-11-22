@@ -49,6 +49,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -177,6 +178,7 @@ fun App(
     showLocalEmptyState: Boolean = true,
     onConnectComputer: (() -> Unit)? = null,
     syncPeers: List<DashboardPeer> = emptyList(),
+    phoneDashboard: Boolean = false,
 ) {
     val activeStore = store ?: remember {
         QuotaDogStore(
@@ -205,6 +207,7 @@ fun App(
             showLocalEmptyState = showLocalEmptyState,
             onConnectComputer = onConnectComputer,
             syncPeers = syncPeers,
+            phoneDashboard = phoneDashboard,
         )
     }
 }
@@ -270,6 +273,7 @@ private fun QuotaDogScreen(
     showLocalEmptyState: Boolean,
     onConnectComputer: (() -> Unit)?,
     syncPeers: List<DashboardPeer>,
+    phoneDashboard: Boolean,
 ) {
     val state by store.state.collectAsState()
     val themeMode by preferences.themeMode.collectAsState()
@@ -304,10 +308,14 @@ private fun QuotaDogScreen(
     val history = remember(store) { DashboardReadingHistory() }
     val rows = remember(localAccounts, syncPeers, history) { dashboardAccounts(localAccounts, syncPeers, history = history) }
     var sessionOrder by remember { mutableStateOf(emptyList<DashboardKey>()) }
-    val accounts = rows.inDashboardOrder(accountSortMode, accountManualOrder, sessionOrder, accountSortReversed)
+    val phoneNames = if (phoneDashboard) remember(preferences) { PhoneAccountNames(preferences) } else null
+    val sortName: (DashboardAccount) -> String = {
+        if (phoneNames == null) it.sortName else "${it.provider.displayName} · ${phoneNames.name(it)}".lowercase()
+    }
+    val accounts = rows.inDashboardOrder(accountSortMode, accountManualOrder, sessionOrder, accountSortReversed, sortName)
     val availableProviders = accounts.map { it.provider }.distinct().sortedBy { it.ordinal }
     // Plan over all logical rows, not the active filter or every collector/copy independently.
-    val refreshAll = rows.refreshAllTargets()
+    val refreshAll = rows.refreshAllTargets(retryStandalone = phoneDashboard)
     val refreshAllBusy = rows.any { it.busy }
     val refreshAllEnabled = refreshAll.isNotEmpty()
 
@@ -422,7 +430,7 @@ private fun QuotaDogScreen(
                 }
                 val moveVisibleAccount = { key: DashboardKey, delta: Int, pushSync: Boolean ->
                     val reversed = preferences.accountSortReversed.value
-                    val full = rows.inDashboardOrder(AccountSortMode.Manual, preferences.accountManualOrder.value, sessionOrder, reversed)
+                    val full = rows.inDashboardOrder(AccountSortMode.Manual, preferences.accountManualOrder.value, sessionOrder, reversed, sortName)
                     val moved = moveDashboardKey(full, activeProvider, key, delta)
                     sessionOrder = if (reversed) moved.asReversed() else moved
                     val local = sessionOrder.filterIsInstance<DashboardKey.Local>().map { it.key }
@@ -435,7 +443,8 @@ private fun QuotaDogScreen(
                     accounts = visibleAccounts,
                     showSourceDetails = syncPeers.isNotEmpty(),
                     isDesktop = isDesktop,
-                    layout = dashboardLayout,
+                    layout = if (phoneDashboard) DashboardLayout.OneLine else dashboardLayout,
+                    phoneNames = phoneNames,
                     revealActionsOnHover = revealActionsOnHover,
                     manualReorder = manualReorderEditing,
                     usageDisplayMode = usageDisplayMode,
@@ -646,7 +655,7 @@ private fun QuotaDogScreen(
                 cloudSync.startPushLocalChanges()
                 snackbar.show("Theme set to ${it.name.lowercase()}")
             },
-            dashboardLayout = dashboardLayout,
+            dashboardLayout = dashboardLayout.takeUnless { phoneDashboard },
             onDashboardLayoutChange = {
                 preferences.setDashboardLayout(it)
                 cloudSync.startPushLocalChanges()
@@ -748,6 +757,7 @@ private fun QuotaDogScreen(
             destructive = true,
             onConfirm = {
                 pendingDelete?.let {
+                    phoneNames?.rename(DashboardKey.Local(it), "")
                     store.startDelete(it)
                     snackbar.show("${it.deleteLabel(state, emailPrivacyMode)} removed", tone = QdSnackbarTone.Success)
                 }
@@ -1139,6 +1149,7 @@ private fun AccountCards(
     showSourceDetails: Boolean,
     isDesktop: Boolean,
     layout: DashboardLayout,
+    phoneNames: PhoneAccountNames?,
     revealActionsOnHover: Boolean,
     manualReorder: Boolean,
     usageDisplayMode: UsageDisplayMode,
@@ -1163,6 +1174,9 @@ private fun AccountCards(
     val expandedAccounts = remember { mutableStateMapOf<DashboardKey, Boolean>() }
     // One line separates rows with a 1 dp rule instead of a gap.
     val itemSpacing = if (layout == DashboardLayout.OneLine) 1.dp else spacing.md
+    val phoneClock = if (phoneNames == null) null else produceState(Clock.System.now()) {
+        while (true) { delay(60_000); value = Clock.System.now() }
+    }
 
     @Composable
     fun cardAt(index: Int, row: DashboardAccount, inline: Boolean, modifier: Modifier) {
@@ -1191,6 +1205,20 @@ private fun AccountCards(
                 .accountReorderVisual(rowKey, dragState)
         } else {
             modifier
+        }
+        if (phoneNames != null && phoneClock != null) {
+            PhoneAccountRow(row, phoneNames, usageDisplayMode, showProjectedUsage, emailPrivacyMode, onRefresh,
+                modifier = cardModifier.alpha(if (sinkExhaustedAccounts && row.exhausted) EXHAUSTED_ACCOUNT_ALPHA else 1f),
+                now = phoneClock.value,
+                reorder = { reorder?.let { AccountReorderButtons(it, compact = true) } },
+                onRemove = onRequestDelete,
+                signIn = { account ->
+                    val key = account.accountKey
+                    AccountSignInDetails(account, callbackInput(key), { onCallbackChange(key, it) },
+                        { onCompleteLogin(key) }, { onReopenLogin(key) }, { onSignInAgain(account.providerId) })
+                },
+            )
+            return
         }
         if (row is DashboardAccount.Remote) {
             AccountSurface(layout, cardModifier) {
@@ -2625,7 +2653,7 @@ private fun AccountUiState.canRefreshUsage(): Boolean {
 }
 
 // Indexed legacy accounts may still use their email as the key. New record IDs aren't user labels.
-private fun AccountUiState.displayEmail() = snapshot?.accountEmail?.takeIf(String::isNotBlank)
+internal fun AccountUiState.displayEmail() = snapshot?.accountEmail?.takeIf(String::isNotBlank)
     ?: accountKey.accountId.takeIf { !accountKey.isPending && '@' in it }
 
 internal fun AccountUiState.accountTitle(emailPrivacyMode: EmailPrivacyMode = EmailPrivacyMode.Visible): String {
@@ -2659,7 +2687,7 @@ private fun String.maskFullStop(): Float {
     return (2f / last.toFloat()).coerceIn(0.08f, 0.45f)
 }
 
-private fun String.maskEmailPlain(): String {
+internal fun String.maskEmailPlain(): String {
     if (!canMaskEmail()) return this
     return "${take(2)}...${takeLast(2)}"
 }
