@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.16 (28) — 2026-11-22
+
+New Layout setting with denser dashboard views: Compact (the new default), Fold full, and One line, alongside the original Cards. The menu bar panel follows it too, and crowded provider filters now scroll instead of overlapping.
+
 ## 1.0.15 (27) — 2026-11-21
 
 Support google gemini & ampcode
