@@ -8,7 +8,6 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
@@ -81,6 +80,7 @@ import saien.quotadog.app.components.QdProviderAvatar
 import saien.quotadog.app.components.QdRefreshIcon
 import saien.quotadog.app.components.QdSegmentedControl
 import saien.quotadog.app.components.QdTimestamp
+import saien.quotadog.app.components.fadingHorizontalScroll
 import saien.quotadog.app.theme.QdTheme
 import saien.quotadog.app.theme.QuotaDogTheme
 import saien.quotadog.app.theme.SystemThemeRefresh
@@ -501,7 +501,7 @@ internal fun QuotaDogTrayPanelContent(
                 Box(
                     modifier = Modifier
                         .weight(1f)
-                        .horizontalScroll(rememberScrollState()),
+                        .fadingHorizontalScroll(rememberScrollState()),
                 ) {
                     if (availableProviders.size > 1) {
                         QdSegmentedControl(

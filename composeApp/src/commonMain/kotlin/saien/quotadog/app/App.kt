@@ -11,7 +11,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusGroup
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
@@ -124,6 +123,7 @@ import saien.quotadog.app.components.QdSnackbarTone
 import saien.quotadog.app.components.QdSortAscendingIcon
 import saien.quotadog.app.components.QdSortDescendingIcon
 import saien.quotadog.app.components.QdTimestamp
+import saien.quotadog.app.components.fadingHorizontalScroll
 import saien.quotadog.app.components.label
 import saien.quotadog.app.components.rememberQdSnackbarController
 import saien.quotadog.app.theme.QdTheme
@@ -1089,7 +1089,7 @@ private fun ProviderSwitcher(
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .horizontalScroll(rememberScrollState()),
+            .fadingHorizontalScroll(rememberScrollState()),
     ) {
         QdSegmentedControl(
             options = options,

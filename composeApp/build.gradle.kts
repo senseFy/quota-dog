@@ -73,6 +73,8 @@ val compileMacStatusBar by tasks.registering(Exec::class) {
         "AppKit",
         "-framework",
         "Foundation",
+        "-framework",
+        "QuartzCore",
         "-o",
         output.get().asFile.absolutePath,
         source.asFile.absolutePath,

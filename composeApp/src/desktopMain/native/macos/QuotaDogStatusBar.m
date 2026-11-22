@@ -1,4 +1,5 @@
 #import <Cocoa/Cocoa.h>
+#import <QuartzCore/QuartzCore.h>
 
 typedef void (*QDActionCallback)(void);
 typedef void (*QDProviderCallback)(const char *provider);
@@ -32,6 +33,7 @@ static const CGFloat QDWindowRowHeight = 22.0;
 static const CGFloat QDResetRowHeight = 16.0;
 static const CGFloat QDSwitcherHeight = 28.0;
 static const CGFloat QDSwitcherInset = 2.0;
+static const CGFloat QDFilterFadeWidth = 24.0;
 static const CGFloat QDButtonHeight = 28.0;
 static const CGFloat QDAccountGap = 12.0;
 static const CGFloat QDSectionGap = 12.0;
@@ -797,6 +799,56 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
 }
 @end
 
+/// Scrolls the provider filters sideways and fades each end that has filters past it, so a strip
+/// cut off at the panel's edge reads as one that continues.
+@interface QDFilterScrollView : NSScrollView
+- (void)updateFades;
+@end
+
+@implementation QDFilterScrollView
+- (instancetype)initWithFrame:(NSRect)frame {
+    self = [super initWithFrame:frame];
+    if (self) {
+        self.drawsBackground = NO;
+        self.automaticallyAdjustsContentInsets = NO;
+        self.verticalScrollElasticity = NSScrollElasticityNone;
+        self.wantsLayer = YES;
+        // A mask rather than a painted gradient, so the filters fade into whatever is behind them.
+        CAGradientLayer *mask = [CAGradientLayer layer];
+        mask.startPoint = CGPointMake(0, 0.5);
+        mask.endPoint = CGPointMake(1, 0.5);
+        self.layer.mask = mask;
+    }
+    return self;
+}
+
+- (void)reflectScrolledClipView:(NSClipView *)clipView {
+    [super reflectScrolledClipView:clipView];
+    [self updateFades];
+}
+
+- (void)updateFades {
+    CAGradientLayer *mask = (CAGradientLayer *)self.layer.mask;
+    CGFloat width = NSWidth(self.bounds);
+    if (!mask || width <= QDFilterFadeWidth * 2.0) return;
+    NSRect visible = self.contentView.bounds;
+    // Each fade deepens over its first fade-width of hidden filters instead of popping in.
+    CGFloat before = MIN(MAX(NSMinX(visible) / QDFilterFadeWidth, 0.0), 1.0);
+    CGFloat after = MIN(MAX((NSWidth(self.documentView.frame) - NSMaxX(visible)) / QDFilterFadeWidth, 0.0), 1.0);
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    mask.frame = self.layer.bounds;
+    mask.colors = @[
+        (__bridge id)[NSColor colorWithWhite:0 alpha:1.0 - before].CGColor,
+        (__bridge id)NSColor.blackColor.CGColor,
+        (__bridge id)NSColor.blackColor.CGColor,
+        (__bridge id)[NSColor colorWithWhite:0 alpha:1.0 - after].CGColor,
+    ];
+    mask.locations = @[@0.0, @(QDFilterFadeWidth / width), @(1.0 - QDFilterFadeWidth / width), @1.0];
+    [CATransaction commit];
+}
+@end
+
 #pragma mark - Controller
 
 @interface QDStatusBarController : NSObject
@@ -1350,10 +1402,7 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
     if (NSWidth(track.frame) <= width) return track;
 
     // More providers than fit scroll sideways, as in the main window, so labels never overlap.
-    NSScrollView *scroll = [[NSScrollView alloc] initWithFrame:NSMakeRect(0, 0, width, height)];
-    scroll.drawsBackground = NO;
-    scroll.automaticallyAdjustsContentInsets = NO;
-    scroll.verticalScrollElasticity = NSScrollElasticityNone;
+    QDFilterScrollView *scroll = [[QDFilterScrollView alloc] initWithFrame:NSMakeRect(0, 0, width, height)];
     scroll.documentView = track;
     // An open panel rebuilds for new data; keep the reader's place. Otherwise show the selected filter.
     NSScrollView *previous = self.providerScroll;
@@ -1362,6 +1411,7 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
     } else {
         [track scrollRectToVisible:NSInsetRect(selectedFrame, -inset, 0)];
     }
+    [scroll updateFades];
     self.providerScroll = scroll;
     return scroll;
 }

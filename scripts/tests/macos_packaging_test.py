@@ -85,6 +85,7 @@ class StatusBarLifecycleTest(unittest.TestCase):
             executable = Path(directory) / "statusbar-test"
             subprocess.run([
                 "clang", "-fobjc-arc", "-framework", "AppKit", "-framework", "Foundation",
+                "-framework", "QuartzCore",
                 str(root / "composeApp/src/desktopMain/native/macos/QuotaDogStatusBar.m"),
                 str(Path(__file__).with_name("macos_statusbar_test.m")),
                 "-o", str(executable),

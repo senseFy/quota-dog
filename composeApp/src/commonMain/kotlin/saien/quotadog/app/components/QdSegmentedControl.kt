@@ -4,9 +4,11 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
@@ -29,6 +31,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.platform.LocalDensity
@@ -36,6 +46,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 import saien.quotadog.app.theme.QdTheme
+import kotlin.math.min
 import kotlin.math.roundToInt
 
 /**
@@ -155,6 +166,45 @@ fun <T> QdSegmentedControl(
         }
     }
 }
+
+/**
+ * Scrolls a selector sideways and fades each edge that has options past it, so a selector cut off
+ * at the edge reads as one that continues. Pair it with [QdSegmentedControl]'s `autoScrollToSelected`.
+ */
+fun Modifier.fadingHorizontalScroll(state: ScrollState): Modifier = this
+    .graphicsLayer {
+        // Offscreen only while something is hidden, so a selector that fits draws as before.
+        compositingStrategy = if (state.maxValue > 0) CompositingStrategy.Offscreen else CompositingStrategy.Auto
+    }
+    .drawWithContent {
+        drawContent()
+        val fade = min(ScrollFadeWidth.toPx(), size.width / 2)
+        // Each fade deepens over its first fade-width of hidden options instead of popping in.
+        val before = (state.value / fade).coerceIn(0f, 1f)
+        val after = ((state.maxValue - state.value) / fade).coerceIn(0f, 1f)
+        if (before > 0f) {
+            drawRect(
+                brush = Brush.horizontalGradient(listOf(Color.Black.copy(alpha = 1f - before), Color.Black), endX = fade),
+                size = Size(fade, size.height),
+                blendMode = BlendMode.DstIn,
+            )
+        }
+        if (after > 0f) {
+            drawRect(
+                brush = Brush.horizontalGradient(
+                    listOf(Color.Black, Color.Black.copy(alpha = 1f - after)),
+                    startX = size.width - fade,
+                    endX = size.width,
+                ),
+                topLeft = Offset(size.width - fade, 0f),
+                size = Size(fade, size.height),
+                blendMode = BlendMode.DstIn,
+            )
+        }
+    }
+    .horizontalScroll(state)
+
+private val ScrollFadeWidth = 24.dp
 
 private data class SegmentBounds(
     val x: Int,
