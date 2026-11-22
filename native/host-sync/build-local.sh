@@ -22,7 +22,7 @@ build_desktop() {
     rustup target add --toolchain "$toolchain" "$target"
     MACOSX_DEPLOYMENT_TARGET=11.0 RUSTFLAGS="-C link-arg=-Wl,-install_name,@rpath/$lib.dylib" \
         "${build[@]}" --target "$target"
-    lipo -verify_arch "$arch" "$CARGO_TARGET_DIR/$target/release/$lib.dylib"
+    lipo "$CARGO_TARGET_DIR/$target/release/$lib.dylib" -verify_arch "$arch"
     mkdir -p "$root/build/desktop"
     install -m 755 "$CARGO_TARGET_DIR/$target/release/$lib.dylib" "$root/build/desktop/$lib.dylib"
     file "$root/build/desktop/$lib.dylib"
@@ -40,7 +40,7 @@ build_ios() {
     SDKROOT="$sdkroot" IPHONEOS_DEPLOYMENT_TARGET=15.0 cargo "+$toolchain" rustc \
         --manifest-path "$root/Cargo.toml" --locked --release --lib --crate-type staticlib --target "$target"
     archive="$CARGO_TARGET_DIR/$target/release/$lib.a"
-    xcrun lipo -verify_arch arm64 "$archive"
+    xcrun lipo "$archive" -verify_arch arm64
     mkdir -p "$root/build/$mode"
     install -m 644 "$archive" "$root/build/$mode/$lib.a"
     file "$root/build/$mode/$lib.a"
