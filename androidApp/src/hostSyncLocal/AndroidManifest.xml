@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application android:networkSecurityConfig="${hostSyncNetworkPolicy}">
+        <activity android:name=".MainActivity" android:label="${hostSyncLabel}" />
+        <activity-alias android:name=".hostsync.LocalPhoneActivity" android:targetActivity=".MainActivity" android:exported="true" />
+    </application>
+</manifest>

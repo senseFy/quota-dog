@@ -6,6 +6,8 @@ plugins {
     alias(libs.plugins.kotlinSerialization)
 }
 
+val hostSyncVariant = rootProject.extra["hostSyncVariant"] as String
+
 kotlin {
     jvmToolchain(21)
 
@@ -60,5 +62,10 @@ kotlin {
                 implementation(libs.ktor.client.java)
             }
         }
+        val relay = hostSyncVariant.ifEmpty { "hostSyncProduction" }
+        listOf(androidMain.get(), desktopMain).forEach {
+            it.kotlin.srcDirs("src/hostSyncJvm/kotlin", "src/$relay/kotlin")
+        }
+        if (hostSyncVariant == "hostSyncLocal") getByName("desktopTest").kotlin.srcDir("src/hostSyncTest/kotlin")
     }
 }

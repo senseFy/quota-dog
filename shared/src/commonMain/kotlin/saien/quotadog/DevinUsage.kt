@@ -124,19 +124,10 @@ internal object DevinUsageFetcher {
                 resetsAt = weeklyReset,
                 durationSeconds = WEEK_SECONDS,
             )
-        } else if (hideDailyQuota && dailyRemaining != null) {
-            // No weekly quota: surface the hidden daily figure in the Weekly row so the
-            // card stays meaningful (same fallback as other Devin quota trackers).
-            windows += UsageWindow(
-                id = "devin-weekly",
-                label = "Weekly quota",
-                usedRatio = 1.0 - normalizePercent(dailyRemaining),
-                resetsAt = weeklyReset,
-                durationSeconds = WEEK_SECONDS,
-            )
         }
 
-        if (windows.isEmpty()) {
+        // Import can identify the login even when Devin exposes no quota window. Refresh requires a reading.
+        if (windows.isEmpty() && email == null) {
             throw ProviderException(AuthState.Error, "Devin did not report quota data for this account.")
         }
 

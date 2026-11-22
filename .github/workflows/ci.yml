@@ -29,6 +29,12 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
+      - name: Set up host-sync native build tools
+        run: |
+          rustup toolchain install 1.92.0 --profile minimal
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install 'ndk;27.1.12297006'
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.1.12297006" >> "$GITHUB_ENV"
+
       - name: Run multiplatform tests
         run: ./gradlew :shared:allTests --stacktrace
 

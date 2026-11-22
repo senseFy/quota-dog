@@ -124,24 +124,12 @@ class DevinUsageParserTest {
     }
 
     @Test
-    fun fallsBackToDailyFigureWhenWeeklyMissingAndDailyHidden() {
-        val snapshot = DevinUsageFetcher.parseUserStatusJson(
-            """
-            {
-              "userStatus": {
-                "planStatus": {
-                  "planInfo": { "hideDailyQuota": true },
-                  "dailyQuotaRemainingPercent": 50
-                }
-              }
-            }
-            """.trimIndent()
+    fun hiddenDailyQuotaDoesNotInventAWeeklyReading() {
+        val result = DevinUsageFetcher.parseUserStatusJson(
+            """{"userStatus":{"email":"owner@example.invalid","planStatus":{"planInfo":{"hideDailyQuota":true},"dailyQuotaRemainingPercent":50}}}"""
         )
-
-        assertEquals(1, snapshot.windows.size)
-        val weekly = snapshot.windows.single()
-        assertEquals("devin-weekly", weekly.id)
-        assertEquals(0.5, weekly.usedRatio, 0.000001)
+        assertEquals("owner@example.invalid", result.email)
+        assertTrue(result.windows.isEmpty())
     }
 
     @Test

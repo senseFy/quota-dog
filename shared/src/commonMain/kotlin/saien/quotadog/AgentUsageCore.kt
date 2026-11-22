@@ -18,6 +18,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
@@ -28,10 +29,12 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import kotlinx.datetime.Clock
 import kotlinx.datetime.Instant
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.Transient
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
@@ -93,7 +96,9 @@ data class OAuthTokenBundle(
     val email: String? = null,
     val expiresAtEpochMillis: Long,
     val lastRefreshEpochMillis: Long = Clock.System.now().toEpochMilliseconds(),
-    val apiServerUrl: String? = null
+    val apiServerUrl: String? = null,
+    // Local token-row generation, stripped from Dropbox exports; a deleted grant must not revive on import.
+    internal val devinLoginGeneration: String? = null,
 ) {
     fun isExpired(bufferMillis: Long = 60_000): Boolean {
         return Clock.System.now().toEpochMilliseconds() + bufferMillis >= expiresAtEpochMillis
@@ -145,7 +150,14 @@ data class ProviderUsageSnapshot(
     val resetCreditsAvailable: Int? = null,
     val resetCreditsApplicable: Int? = null,
     val resetCredits: List<CodexResetCredit> = emptyList(),
+    val devinExtraBalanceUsd: Double? = null,
+    // Only a reading collected locally can be granted to a phone. Never export this binding.
+    @Transient val devinLoginTag: String? = null,
 )
+
+private fun OAuthTokenBundle.devinLoginTag() = devinLoginGeneration ?: base64UrlNoPadding(sha256(
+    "${apiServerUrl.orEmpty()}\u0000$expiresAtEpochMillis\u0000$accessToken".encodeToByteArray(),
+))
 
 data class StoredToken(
     val accountKey: AccountKey,
@@ -485,12 +497,25 @@ class QuotaDogClient(
         }
     }
 
+    internal suspend fun currentDevinLogin(accountKey: AccountKey): String? {
+        require(accountKey.providerId == ProviderId.DEVIN && !accountKey.isPending)
+        return tokenStore.load(accountKey)?.devinLoginTag()
+    }
+
+    internal suspend fun refreshSharedDevin(accountKey: AccountKey, loginTag: String): ProviderUsageSnapshot? {
+        require(accountKey.providerId == ProviderId.DEVIN && !accountKey.isPending)
+        val token = tokenStore.load(accountKey)?.takeIf { it.devinLoginTag() == loginTag } ?: return null
+        return fetchDevinUsage(token)
+    }
+
     private suspend fun ensureFreshToken(accountKey: AccountKey): OAuthTokenBundle {
         return when (accountKey.providerId) {
             ProviderId.GROK -> ensureFreshGrokToken(accountKey)
             ProviderId.CURSOR -> ensureFreshCursorToken(accountKey)
             ProviderId.ANTIGRAVITY -> ensureFreshAntigravityToken(accountKey)
-            ProviderId.DEVIN -> ensureFreshDevinToken(accountKey)
+            // Both local and remote refresh use the imported login and service instance, not today's CLI file.
+            ProviderId.DEVIN -> tokenStore.load(accountKey)
+                ?: throw ProviderException(AuthState.NotConfigured, "Devin login not found. Import it on your computer.")
             ProviderId.DROID -> ensureFreshDroidToken(accountKey)
             ProviderId.AMP -> ensureFreshAmpToken(accountKey)
             ProviderId.CODEX, ProviderId.CLAUDE_CODE -> {
@@ -622,27 +647,6 @@ class QuotaDogClient(
             AuthState.RequiresRelogin,
             "Antigravity credentials expired. Sign in with Google again or re-import from `agy`.",
         )
-    }
-
-    private suspend fun ensureFreshDevinToken(accountKey: AccountKey): OAuthTokenBundle {
-        val stored = tokenStore.load(accountKey)
-            ?: throw ProviderException(AuthState.NotConfigured, "Not signed in to ${accountKey.providerId.displayName}")
-        // Devin API keys never expire; re-reading credentials.toml picks up a re-login or a
-        // moved api_server_url, and keeps working off the stored key when the file is gone
-        // (e.g. an account synced to a device without the Devin CLI installed).
-        val reloaded = runCatching { loadDevinCredentialsFromCli() }.getOrNull() ?: return stored
-        if (reloaded.accessToken != stored.accessToken) {
-            throw ProviderException(
-                AuthState.RequiresRelogin,
-                "Devin CLI is signed in as a different account. Remove this account and import again.",
-            )
-        }
-        val merged = reloaded.withIdentityFrom(stored)
-            .copy(lastRefreshEpochMillis = stored.lastRefreshEpochMillis)
-        if (merged != stored) {
-            tokenStore.save(accountKey, merged)
-        }
-        return merged
     }
 
     private suspend fun ensureFreshDroidToken(accountKey: AccountKey): OAuthTokenBundle {
@@ -968,6 +972,7 @@ class QuotaDogClient(
 
     private suspend fun fetchDevinUsage(token: OAuthTokenBundle): ProviderUsageSnapshot {
         val usage = DevinUsageFetcher.fetch(httpClient, token.accessToken, token.apiServerUrl)
+        if (usage.windows.isEmpty()) throw ProviderException(AuthState.Error, "Devin did not report quota data for this account.")
         return ProviderUsageSnapshot(
             providerId = ProviderId.DEVIN,
             authState = AuthState.LoggedIn,
@@ -982,6 +987,8 @@ class QuotaDogClient(
                 append("Source: Devin CLI (${devinAuthFileHint()})")
             },
             planLabel = formatSubscriptionPlanLabel(usage.planName),
+            devinExtraBalanceUsd = usage.overageBalanceDollars,
+            devinLoginTag = token.devinLoginTag(),
         )
     }
 
@@ -1078,7 +1085,7 @@ class QuotaDogStore(
 ) {
     private val storeScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val refreshMutex = Mutex()
-    private val activeRefreshes = mutableSetOf<AccountKey>()
+    private val activeRefreshes = mutableMapOf<AccountKey, Any>()
     private var detectStarted = false
     private var grokDeviceLoginJob: Job? = null
     private var droidDeviceLoginJob: Job? = null
@@ -1879,44 +1886,46 @@ class QuotaDogStore(
         refresh(savedKey)
     }
 
-    suspend fun refresh(accountKey: AccountKey) {
-        if (!beginRefresh(accountKey)) return
-        update(accountKey) { it.copy(added = true, busy = true, message = null) }
+    internal suspend fun currentDevinLogin(key: AccountKey) = client.currentDevinLogin(key)
+
+    suspend fun refresh(accountKey: AccountKey, sharedDevinLogin: String? = null) {
+        val attempt = Any()
+        val login = refreshMutex.withLock {
+            if (accountKey in activeRefreshes) return
+            val stored = if (accountKey.providerId == ProviderId.DEVIN && !accountKey.isPending) currentDevinLogin(accountKey) else null
+            if (sharedDevinLogin != null && sharedDevinLogin != stored) return
+            activeRefreshes[accountKey] = attempt
+            update(accountKey) { it.copy(added = true, busy = true, message = null) }
+            stored
+        }
         try {
-            val snapshot = client.refreshUsage(accountKey)
-            usageSnapshotStore.save(accountKey, snapshot)
-            onLocalDataChanged?.invoke()
-            update(accountKey) {
-                it.copy(
-                    added = true,
-                    authState = snapshot.authState,
-                    snapshot = snapshot,
-                    busy = false,
-                    message = snapshot.message
-                )
+            val result = runCatching {
+                if (login == null) client.refreshUsage(accountKey) else client.refreshSharedDevin(accountKey, login)
             }
-        } catch (error: ProviderException) {
-            platformDebugLog("store refresh provider error provider=${accountKey.providerId.name} state=${error.state} status=${error.statusCode}")
-            update(accountKey) {
-                it.copy(
-                    added = true,
-                    authState = error.state,
-                    busy = false,
-                    message = safeUserMessage(error, "Refresh failed. Please try again.")
-                )
-            }
-        } catch (error: Throwable) {
-            platformDebugLog("store refresh unexpected error provider=${accountKey.providerId.name}")
-            update(accountKey) {
-                it.copy(
-                    added = true,
-                    authState = AuthState.Error,
-                    busy = false,
-                    message = safeUserMessage(error, "Refresh failed. Please try again.")
-                )
+            refreshMutex.withLock {
+                // Deletion invalidates this attempt, even if the same key has already been re-added.
+                if (activeRefreshes[accountKey] !== attempt || (login != null && currentDevinLogin(accountKey) != login)) return
+                try {
+                    val snapshot = result.getOrThrow() ?: return
+                    usageSnapshotStore.save(accountKey, snapshot)
+                    onLocalDataChanged?.invoke()
+                    update(accountKey) { it.copy(added = true, authState = snapshot.authState, snapshot = snapshot, busy = false, message = snapshot.message) }
+                } catch (e: CancellationException) { throw e }
+                catch (error: Throwable) {
+                    val auth = (error as? ProviderException)?.state ?: AuthState.Error
+                    platformDebugLog("store refresh failed provider=${accountKey.providerId.name} state=$auth")
+                    update(accountKey) { it.copy(added = true, authState = auth, busy = false, message = safeUserMessage(error, "Refresh failed. Please try again.")) }
+                }
             }
         } finally {
-            endRefresh(accountKey)
+            withContext(NonCancellable) {
+                refreshMutex.withLock {
+                    if (activeRefreshes[accountKey] === attempt) {
+                        activeRefreshes.remove(accountKey)
+                        if (state.value.accounts[accountKey]?.busy == true) update(accountKey) { it.copy(busy = false) }
+                    }
+                }
+            }
         }
     }
 
@@ -1934,11 +1943,12 @@ class QuotaDogStore(
                 else -> Unit
             }
         }
-        client.logout(accountKey)
-        usageSnapshotStore.delete(accountKey)
-        onLocalAccountDeleted?.invoke(accountKey) ?: onLocalDataChanged?.invoke()
-        _state.update { current ->
-            current.copy(accounts = current.accounts - accountKey)
+        refreshMutex.withLock {
+            client.logout(accountKey)
+            activeRefreshes.remove(accountKey)
+            usageSnapshotStore.delete(accountKey)
+            onLocalAccountDeleted?.invoke(accountKey) ?: onLocalDataChanged?.invoke()
+            _state.update { current -> current.copy(accounts = current.accounts - accountKey) }
         }
     }
 
@@ -1973,18 +1983,6 @@ class QuotaDogStore(
         _state.update { current ->
             val existing = current.accounts[accountKey] ?: AccountUiState(accountKey)
             current.copy(accounts = current.accounts + (accountKey to transform(existing)))
-        }
-    }
-
-    private suspend fun beginRefresh(accountKey: AccountKey): Boolean {
-        return refreshMutex.withLock {
-            if (accountKey in activeRefreshes) false else activeRefreshes.add(accountKey)
-        }
-    }
-
-    private suspend fun endRefresh(accountKey: AccountKey) {
-        refreshMutex.withLock {
-            activeRefreshes.remove(accountKey)
         }
     }
 }

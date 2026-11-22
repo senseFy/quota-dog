@@ -35,8 +35,20 @@ val releaseVersionCode: Int =
 val buildIdentity = rootProject.extensions.extraProperties
     .get("quotadogBuildIdentity") as Map<String, String>
 val verifyReleaseBuildIdentity = rootProject.tasks.named("verifyReleaseBuildIdentity")
+val hostSyncVariant = rootProject.extra["hostSyncVariant"] as String
+
+val hostSyncNative = rootProject.file("native/host-sync")
+val buildAndroidHostTls by tasks.registering(Exec::class) {
+    workingDir(hostSyncNative)
+    commandLine("bash", "build-local.sh", "android")
+    inputs.files(fileTree(hostSyncNative) { include("Cargo.*", "src/**", "build-local.sh") })
+    outputs.files(listOf("arm64-v8a", "armeabi-v7a", "x86_64", "x86").map {
+        hostSyncNative.resolve("build/android/$it/libquotadog_host_tls.so")
+    })
+}
 
 tasks.configureEach {
+    if (name == "preBuild" && hostSyncVariant.isEmpty()) dependsOn(buildAndroidHostTls)
     if (name == "preReleaseBuild") {
         dependsOn(verifyReleaseBuildIdentity)
     }
@@ -45,6 +57,7 @@ tasks.configureEach {
 android {
     namespace = "saien.quotadog"
     compileSdk = libs.versions.android.compileSdk.get().toInt()
+    sourceSets.getByName("main").jniLibs.srcDir(hostSyncNative.resolve("build/android"))
 
     defaultConfig {
         applicationId = "saien.quotadog"
@@ -93,12 +106,31 @@ android {
         getByName("release") {
             signingConfig = signingConfigs.getByName("release")
         }
+        if (hostSyncVariant.isNotEmpty()) {
+            val staging = hostSyncVariant == "hostSyncStaging"
+            create(hostSyncVariant) {
+                initWith(getByName("debug"))
+                applicationIdSuffix = if (staging) ".hostsync.staging" else ".hostsync.local"
+                ndk.abiFilters += "arm64-v8a" // The pilot's rustls JNI library is built only for this ABI.
+                manifestPlaceholders["hostSyncLabel"] = if (staging) "QuotaDog Staging" else "QuotaDog Local"
+                manifestPlaceholders["hostSyncNetworkPolicy"] = if (staging) "@xml/relay_tls" else "@xml/relay_loopback"
+                matchingFallbacks += "debug"
+            }
+            sourceSets.getByName(hostSyncVariant).apply {
+                if (staging) {
+                    manifest.srcFile("src/hostSyncLocal/AndroidManifest.xml")
+                }
+            }
+        }
     }
 }
 
 dependencies {
     implementation(projects.composeApp)
     implementation(libs.androidx.activity.compose)
+    implementation(libs.ktor.client.okhttp)
+    implementation(libs.zxing.core)
+    implementation("com.journeyapps:zxing-android-embedded:4.3.0")
 }
 
 abstract class GenerateBuildIdentityAsset : DefaultTask() {
@@ -134,6 +166,8 @@ val buildIdentityTokens = mapOf(
 )
 
 androidComponents {
+    // A pilot selects a different relay at compile time. Never put it in the regular app ID.
+    if (hostSyncVariant.isNotEmpty()) beforeVariants { it.enable = it.buildType == hostSyncVariant }
     onVariants { variant ->
         val generateTask = tasks.register<GenerateBuildIdentityAsset>(
             "generate${variant.name.replaceFirstChar(Char::uppercase)}BuildIdentityAsset",

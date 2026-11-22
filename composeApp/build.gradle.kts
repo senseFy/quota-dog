@@ -1,5 +1,6 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
+import org.gradle.language.jvm.tasks.ProcessResources
 import java.util.Properties
 
 plugins {
@@ -23,6 +24,7 @@ val releaseVersionName: String =
 val updaterProperties = Properties().apply {
     rootProject.file("updater.properties").inputStream().use { load(it) }
 }
+val hostSyncVariant = rootProject.extra["hostSyncVariant"] as String
 val acceptanceDirectory = providers.gradleProperty("quotadog.acceptanceDirectory").orNull
 val updateSequence = (if (acceptanceDirectory != null) {
     providers.gradleProperty("quotadog.acceptanceSequence").get()
@@ -132,10 +134,20 @@ kotlin {
         androidMain.dependencies {
             implementation(libs.androidx.activity.compose)
         }
+        androidMain.get().kotlin.srcDir("src/hostSyncUi/kotlin")
         val desktopMain by getting {
             resources.srcDir(macStatusBarResourcesDir)
             resources.srcDir(desktopBuildProperties)
+            kotlin.srcDir("src/hostSyncUi/kotlin")
+            if (hostSyncVariant.isNotEmpty()) {
+                kotlin.srcDir("src/hostSyncDesktop/kotlin")
+                dependencies {
+                    implementation(libs.multiplatform.settings.test)
+                }
+            }
             dependencies {
+                implementation(libs.ktor.client.java)
+                implementation(libs.zxing.core)
                 implementation(compose.desktop.currentOs)
                 implementation(libs.jna)
                 implementation(libs.kmp.updater.jvm)
@@ -143,6 +155,7 @@ kotlin {
             }
         }
         val desktopTest by getting {
+            if (hostSyncVariant == "hostSyncLocal") kotlin.srcDir("src/hostSyncDesktopTest/kotlin")
             dependencies {
                 implementation(libs.compose.ui.test.junit4)
             }
@@ -150,13 +163,39 @@ kotlin {
     }
 }
 
-tasks.named("desktopProcessResources") {
+val hostSyncNative = rootProject.file("native/host-sync")
+val buildMacHostTls by tasks.registering(Exec::class) {
+    workingDir(hostSyncNative)
+    commandLine("bash", "build-local.sh", "desktop")
+    inputs.files(fileTree(hostSyncNative) { include("Cargo.*", "src/**", "build-local.sh") })
+    inputs.property("architecture", System.getProperty("os.arch"))
+    outputs.file(hostSyncNative.resolve("build/desktop/libquotadog_host_tls.dylib"))
+}
+
+tasks.named<ProcessResources>("desktopProcessResources") {
     dependsOn(compileMacStatusBar, generateDesktopBuildProperties)
+    if (hostSyncVariant.isEmpty() && System.getProperty("os.name").startsWith("Mac")) {
+        dependsOn(buildMacHostTls)
+        from(buildMacHostTls) { into("macos") }
+    }
+}
+
+if (hostSyncVariant.isNotEmpty()) {
+    val rejectPilotDistribution = tasks.register("rejectPilotDistribution") {
+        doLast { error("The host-sync pilot is for :composeApp:run only. Remove the test flag to package QuotaDog.") }
+    }
+    tasks.matching { it.name.endsWith("Distributable") || it.name.endsWith("UberJarForCurrentOS") }.configureEach {
+        dependsOn(rejectPilotDistribution)
+    }
 }
 
 compose.desktop {
     application {
-        mainClass = if (acceptanceDirectory == null) "saien.quotadog.MainKt" else "saien.quotadog.UpdaterAcceptanceKt"
+        mainClass = when {
+            hostSyncVariant.isNotEmpty() -> "saien.quotadog.hostsync.LocalHostKt"
+            acceptanceDirectory != null -> "saien.quotadog.UpdaterAcceptanceKt"
+            else -> "saien.quotadog.MainKt"
+        }
         jvmArgs += "-Xdock:icon=${project.file("icons/QuotaDog.png").absolutePath}"
 
         buildTypes.release.proguard {

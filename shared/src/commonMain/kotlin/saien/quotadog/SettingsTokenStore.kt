@@ -42,8 +42,14 @@ class SettingsTokenStore(
         save(accountKey, token, Clock.System.now().toEpochMilliseconds())
     }
 
-    private fun save(accountKey: AccountKey, token: OAuthTokenBundle, updatedAtEpochMillis: Long) {
-        val encoded = json.encodeToString(OAuthTokenBundle.serializer(), token)
+    private suspend fun save(accountKey: AccountKey, token: OAuthTokenBundle, updatedAtEpochMillis: Long) {
+        val local = if (accountKey.providerId == ProviderId.DEVIN) {
+            val old = load(accountKey)
+            val sameLogin = old != null && old.accessToken == token.accessToken && old.apiServerUrl == token.apiServerUrl &&
+                old.expiresAtEpochMillis == token.expiresAtEpochMillis
+            token.copy(devinLoginGeneration = if (sameLogin) old.devinLoginGeneration else base64UrlNoPadding(secureRandomBytes(16)))
+        } else token
+        val encoded = json.encodeToString(OAuthTokenBundle.serializer(), local)
         settings.putString(key(accountKey), encoded)
         settings.putLong(updatedAtKey(accountKey), updatedAtEpochMillis)
         upsertIndex(accountKey)
@@ -63,7 +69,7 @@ class SettingsTokenStore(
                 providerId = stored.accountKey.providerId,
                 accountId = stored.accountKey.accountId,
                 token = CloudSyncTokenValue(
-                    value = stored.token,
+                    value = stored.token.copy(devinLoginGeneration = null),
                     updatedAtEpochMillis = tokenUpdatedAt(stored.accountKey, stored.token)
                 )
             )

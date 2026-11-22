@@ -57,6 +57,12 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
 
+      - name: Set up Android host-sync native build tools
+        run: |
+          rustup toolchain install 1.92.0 --profile minimal
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install 'ndk;27.1.12297006'
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.1.12297006" >> "$GITHUB_ENV"
+
       - name: Decode keystore
         env:
           KEYSTORE_B64: ${{ secrets.QUOTADOG_KEYSTORE_BASE64 }}
@@ -134,6 +140,10 @@ jobs:
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
+
+      - name: Set up macOS host-sync Rust toolchain
+        if: runner.os == 'macOS'
+        run: rustup toolchain install 1.92.0 --profile minimal
 
       - name: Build macOS distribution
         if: runner.os == 'macOS'

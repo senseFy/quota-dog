@@ -85,6 +85,7 @@ import saien.quotadog.app.theme.QdTheme
 import saien.quotadog.app.theme.QuotaDogTheme
 import saien.quotadog.app.theme.SystemThemeRefresh
 import saien.quotadog.app.theme.rememberSystemDarkTheme
+import saien.quotadog.hostsync.rememberHostSettings
 import java.awt.Frame
 import java.awt.event.WindowAdapter
 import java.awt.event.WindowEvent
@@ -118,6 +119,7 @@ fun main() = application {
             onLocalAccountDeleted = { cloudSync.recordAccountDeleted(it) },
         )
     }
+    val hostSettings = if (isMacOs()) rememberHostSettings(store, preferences) else null
     val windowState = rememberWindowState(width = 1100.dp, height = 760.dp)
     var windowVisible by remember { mutableStateOf(true) }
     var mainWindowFocusToken by remember { mutableIntStateOf(0) }
@@ -178,7 +180,7 @@ fun main() = application {
                 store = store,
                 manageBackgroundEffects = false,
                 versionLabel = "v${desktopMetadata.version} (${desktopMetadata.sequence})",
-                updatesContent = updater?.let { { DesktopUpdateSettings(it) } },
+                platformSettings = { hostSettings?.invoke(); updater?.let { DesktopUpdateSettings(it) } },
                 revealActionsOnHover = true,
             )
         }

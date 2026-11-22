@@ -179,10 +179,13 @@ fun App(
     // effects outside App so refresh/detect/sync session survive window teardown.
     manageBackgroundEffects: Boolean = true,
     versionLabel: String = "v1.0.0",
-    updatesContent: (@Composable () -> Unit)? = null,
+    platformSettings: (@Composable () -> Unit)? = null,
     // Pointer platforms show each account's refresh and menu only while it is hovered in the
     // denser layouts. Touch platforms keep them visible.
     revealActionsOnHover: Boolean = false,
+    hostSyncContent: (@Composable () -> Unit)? = null,
+    showLocalEmptyState: Boolean = true,
+    onConnectComputer: (() -> Unit)? = null,
 ) {
     val themeMode by preferences.themeMode.collectAsState()
     val systemDark = rememberSystemDarkTheme()
@@ -196,7 +199,13 @@ fun App(
         if (manageBackgroundEffects) {
             QuotaDogBackgroundEffects(store = store, preferences = preferences, cloudSync = cloudSync)
         }
-        QuotaDogScreen(store, preferences, cloudSync, versionLabel, updatesContent, revealActionsOnHover)
+        QuotaDogScreen(
+            store, preferences, cloudSync, versionLabel, platformSettings,
+            revealActionsOnHover = revealActionsOnHover,
+            hostSyncContent = hostSyncContent,
+            showLocalEmptyState = showLocalEmptyState,
+            onConnectComputer = onConnectComputer,
+        )
     }
 }
 
@@ -255,8 +264,11 @@ private fun QuotaDogScreen(
     preferences: AppPreferences,
     cloudSync: CloudSyncCoordinator,
     versionLabel: String,
-    updatesContent: (@Composable () -> Unit)?,
+    platformSettings: (@Composable () -> Unit)?,
     revealActionsOnHover: Boolean,
+    hostSyncContent: (@Composable () -> Unit)?,
+    showLocalEmptyState: Boolean,
+    onConnectComputer: (() -> Unit)?,
 ) {
     val state by store.state.collectAsState()
     val themeMode by preferences.themeMode.collectAsState()
@@ -381,8 +393,9 @@ private fun QuotaDogScreen(
                 onOpenSettings = { showSettings = true },
             )
 
+            hostSyncContent?.invoke()
             if (accounts.isEmpty()) {
-                AccountsEmptyState(isDesktop = isDesktop)
+                if (showLocalEmptyState) AccountsEmptyState(isDesktop = isDesktop)
             } else {
                 ProviderSwitcher(
                     accounts = accounts,
@@ -477,6 +490,7 @@ private fun QuotaDogScreen(
             onDismiss = { showProviderPicker = false },
         ) {
             ProviderPickerContent(
+                onConnectComputer = onConnectComputer?.let { connect -> { showProviderPicker = false; connect() } },
                 onSelect = { provider ->
                     if (provider == ProviderId.GROK && grokCliImportAvailable()) {
                         showProviderPicker = false
@@ -729,7 +743,7 @@ private fun QuotaDogScreen(
             },
             onDismiss = { showSettings = false },
             versionLabel = versionLabel,
-            updatesContent = updatesContent,
+            platformSettings = platformSettings,
         )
 
         QdConfirmDialog(
@@ -2357,7 +2371,7 @@ private fun AddAccountButton(modifier: Modifier = Modifier, onClick: () -> Unit)
 }
 
 @Composable
-private fun ProviderPickerContent(onSelect: (ProviderId) -> Unit) {
+private fun ProviderPickerContent(onConnectComputer: (() -> Unit)?, onSelect: (ProviderId) -> Unit) {
     val colors = QdTheme.colors
     val typo = QdTheme.typography
     val spacing = QdTheme.spacing
@@ -2372,6 +2386,7 @@ private fun ProviderPickerContent(onSelect: (ProviderId) -> Unit) {
                 color = colors.textSecondary,
             )
         }
+        onConnectComputer?.let { QdButton("Connect my computer", it, variant = QdButtonVariant.Secondary) }
         Column(verticalArrangement = Arrangement.spacedBy(spacing.xs)) {
             SignInSupportHeaderRow()
             providers.forEach { provider ->
@@ -2579,7 +2594,7 @@ private fun AccountUiState.canRefreshUsage(): Boolean {
     return added && (authState == AuthState.LoggedIn || authState == AuthState.TokenExpired)
 }
 
-private fun AccountUiState.accountTitle(emailPrivacyMode: EmailPrivacyMode = EmailPrivacyMode.Visible): String {
+internal fun AccountUiState.accountTitle(emailPrivacyMode: EmailPrivacyMode = EmailPrivacyMode.Visible): String {
     val email = snapshot?.accountEmail?.takeIf { it.isNotBlank() }
     val displayEmail = if (emailPrivacyMode == EmailPrivacyMode.Masked) email?.maskEmailPlain() else email
     return if (displayEmail == null) providerId.displayName else "${providerId.displayName} ($displayEmail)"

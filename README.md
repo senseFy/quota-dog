@@ -15,11 +15,22 @@ The app currently focuses on a small workflow:
 - Refresh accounts, remove local account data, and optionally mask account emails in the UI.
 - Optionally sync encrypted account tokens, cached usage, and preferences through a user-provided Dropbox app folder.
 
+### View your Mac’s Devin quota on Android
+
+1. Import your Devin CLI login in QuotaDog on the Mac and refresh it once. In **Settings → Share from this computer**, choose **Enable host → Pair a phone**.
+2. In QuotaDog on Android, choose **Add account → Connect my computer** and scan the QR. Compare the six digits on both screens and approve the phone on the Mac. Pairing alone shares no accounts.
+3. On the Mac, choose one Devin login for this phone and select **View only** or **Allow refresh**. Leave QuotaDog running and the Mac awake for new readings. After changing networks, reopen the phone app; it reconnects without another QR. Offline, it keeps the last received reading and collection time.
+
+No Tailscale, QuotaDog account, Dropbox login or router setup is needed. The production relay is `sync.quotadog.saien.pro`; the Mac makes an outbound connection and does not expose its ports. This feature shares quota readings, not provider credentials. It currently supports macOS → Android for Devin. You can pause the host and revoke a phone while offline.
+
+Local and phone-requested Devin refreshes use the login and server imported into QuotaDog. If you change the CLI login or its server, import it again and explicitly share the replacement. Switching the CLI alone never switches the account shown to a phone.
+
 ## Privacy, Security, And Limits
 
-QuotaDog is a local client with no backend, analytics, telemetry, or crash reporting.
+QuotaDog reads provider data locally and has no analytics, telemetry, or crash reporting. Optional host sync uses a [dedicated relay](infra/host-sync-relay/README.md).
 
 - OAuth and usage requests go directly to the selected provider.
+- During host sync the two devices encrypt traffic end to end. The relay stores admission verifiers, never quota snapshots (even encrypted ones). Cloudflare can see connection metadata such as IP addresses, timing and traffic volume.
 - Tokens, account identifiers, cached usage snapshots, and preferences are stored locally using multiplatform settings (`SharedPreferences`, `NSUserDefaults`, `java.util.prefs`), not hardened credential storage.
 - Dropbox cloud sync is opt-in. When enabled, QuotaDog encrypts its sync document with your sync passphrase before uploading it to your Dropbox app folder.
 - The Dropbox integration uses QuotaDog's Dropbox app with App Folder access and the minimum file scopes needed to read and write the QuotaDog sync file.
@@ -39,6 +50,7 @@ See [SECURITY.md](SECURITY.md) for how to report security issues. Please remove 
 
 - Full JDK 21 (including `jpackage` for desktop distributions)
 - Android Studio or IntelliJ IDEA for Android/Desktop development
+- For Android and macOS builds: Rust 1.92.0 via rustup; for Android, NDK 27.1.12297006 on macOS or x86_64 Linux. See [native prerequisites](native/host-sync/README.md).
 - Xcode for iOS builds
 
 ### Commands
@@ -187,7 +199,7 @@ Run `make test-mobile-release` to verify the release contracts.
 
 ### Dropbox Sync Setup
 
-QuotaDog does not run a sync server. To use cloud sync, connect Dropbox from Settings with a sync passphrase:
+Dropbox sync is separate from host sync. To use it, connect Dropbox from Settings with a sync passphrase:
 
 1. Open QuotaDog Settings → Cloud sync.
 2. Enter a sync passphrase with at least 8 characters.
