@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.18 (30) — 2026-11-22
+
+Share quota readings from all eight providers between your Mac and a paired iPhone or Android phone. Choose which accounts each device can view or refresh, including Cursor and Devin accounts that use the CLI on your Mac. Amp workspace credits have a separate permission.
+
+When both devices can verify the same account and workspace, the dashboard shows one card with both sources. Provider credentials stay on the device that collects the reading. Update both devices to 1.0.18 for two-way sharing.
+
 ## 1.0.17 (29) — 2026-11-22
 
 Pair your iPhone or Android phone with QuotaDog on your Mac to see Devin CLI quota away from your desk. Choose a Devin login to share, and decide whether the phone can request a refresh. The last reading stays available offline. Quota data is end-to-end encrypted, and the login stays on your Mac.
