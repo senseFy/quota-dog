@@ -170,7 +170,7 @@ only to a manually managed App Store profile to use manual signing.
 The API key is used only when uploading, and the TestFlight URL is printed at
 the end. Override `IOS_APP_STORE_CONNECT_APP_ID` for a different app.
 
-The iOS client includes rustls and AWS-LC for the inner TLS 1.3 connection. It is not limited to Apple's built-in HTTPS. Answer App Store Connect's [export compliance questions](https://developer.apple.com/help/app-store-connect/reference/app-information/export-compliance-documentation-for-encryption) for the actual distribution territories; do not carry over an OS-only exemption from a previous build.
+The iOS app bundles rustls and AWS-LC for host sync. Its [Info.plist](iosApp/iosApp/Info.plist) records the TestFlight export declaration (`ITSAppUsesNonExemptEncryption = NO`); this does not mean the app uses only Apple's HTTPS. If the app's encryption or distribution territories change, [reassess the declaration](https://developer.apple.com/documentation/security/complying-with-encryption-export-regulations) before the next upload.
 
 App Store Connect auth uses `APP_STORE_CONNECT_*`, `ASC_*`, or `EXPO_ASC_*`
 variables. These single-platform targets remain available for a retry:
