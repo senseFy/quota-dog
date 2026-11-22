@@ -1,0 +1,16 @@
+[package]
+name = "quotadog_host_tls"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.92"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+aws-lc-rs = { version = "1.19", default-features = false, features = ["aws-lc-sys"] }
+jni = "0.22.4"
+rustls = { version = "=0.23.46", default-features = false, features = ["std", "aws_lc_rs"] }
+subtle = "2.6"
+zeroize = "1.9"
