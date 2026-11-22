@@ -1,0 +1,20 @@
+{
+  "name": "quota-dog-host-sync-production",
+  "account_id": "c65e01069017b7e2fcf6cd1ac338e642",
+  "main": "production.mjs",
+  "compatibility_date": "2026-03-17",
+  "workers_dev": false,
+  "preview_urls": false,
+  "logpush": false,
+  "observability": { "enabled": false },
+  "vars": { "RELAY_MODE": "production" },
+  "routes": [{ "pattern": "sync.quotadog.saien.pro", "custom_domain": true }],
+  "durable_objects": { "bindings": [{ "name": "PRODUCTION_ROUTES", "class_name": "ProductionRoute" }] },
+  "migrations": [{ "tag": "production-v1", "new_sqlite_classes": ["ProductionRoute"] }],
+  "ratelimits": [
+    { "name": "REGISTER_SOURCE",   "namespace_id": "3178701", "simple": { "limit": 3,   "period": 60 } },
+    { "name": "REGISTER_LOCATION", "namespace_id": "3178702", "simple": { "limit": 30,  "period": 60 } },
+    { "name": "ADMIT_SOURCE",      "namespace_id": "3178703", "simple": { "limit": 60,  "period": 60 } },
+    { "name": "ADMIT_LOCATION",    "namespace_id": "3178704", "simple": { "limit": 600, "period": 60 } }
+  ]
+}

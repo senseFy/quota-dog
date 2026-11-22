@@ -1,0 +1,13 @@
+{
+  "name": "quota-dog-host-sync-relay-local",
+  "main": "relay.mjs",
+  "compatibility_date": "2026-03-17",
+  "workers_dev": false,
+  "preview_urls": false,
+  "logpush": false,
+  "observability": { "enabled": false },
+  "vars": { "LOCAL_PROVISIONING": "loopback" },
+  "dev": { "ip": "127.0.0.1", "port": 18787, "inspector_ip": "127.0.0.1", "local_protocol": "http" },
+  "durable_objects": { "bindings": [{ "name": "ROUTES", "class_name": "Route" }] },
+  "migrations": [{ "tag": "local-v1", "new_sqlite_classes": ["Route"] }]
+}
