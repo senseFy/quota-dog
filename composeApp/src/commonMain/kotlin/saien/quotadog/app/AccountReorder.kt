@@ -167,10 +167,10 @@ internal fun Modifier.accountDragHandle(
 }
 
 @Composable
-internal fun QdReorderHandle(modifier: Modifier = Modifier) {
+internal fun QdReorderHandle(modifier: Modifier = Modifier, size: Dp = 32.dp) {
     Box(
         modifier = Modifier
-            .size(32.dp)
+            .size(size)
             .pointerHoverIcon(PointerIcon.Hand)
             .then(modifier),
         contentAlignment = Alignment.Center,

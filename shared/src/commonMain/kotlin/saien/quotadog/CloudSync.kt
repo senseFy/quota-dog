@@ -62,7 +62,8 @@ data class CloudSyncPreferencesRecord(
     val accountSortMode: CloudSyncStringPreference? = null,
     val accountManualOrder: CloudSyncStringPreference? = null,
     val accountSortReversed: CloudSyncBooleanPreference? = null,
-    val sinkExhaustedAccounts: CloudSyncBooleanPreference? = null
+    val sinkExhaustedAccounts: CloudSyncBooleanPreference? = null,
+    val dashboardLayout: CloudSyncStringPreference? = null
 )
 
 @Serializable
@@ -143,7 +144,8 @@ internal fun mergePreferences(
         sinkExhaustedAccounts = newest(
             local.sinkExhaustedAccounts,
             remote.sinkExhaustedAccounts
-        ) { it.updatedAtEpochMillis }
+        ) { it.updatedAtEpochMillis },
+        dashboardLayout = newest(local.dashboardLayout, remote.dashboardLayout) { it.updatedAtEpochMillis }
     )
 }
 

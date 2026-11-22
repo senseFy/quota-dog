@@ -48,6 +48,8 @@ internal data class DesktopStatusBarState(
     val darkTheme: Boolean,
     /** [UsageDisplayMode.name] — Used or Remaining. */
     val usageDisplayMode: String = UsageDisplayMode.Used.name,
+    /** [DashboardLayout.name]; Cards keeps the original panel, the others draw one line per window. */
+    val layout: String = DashboardLayout.Cards.name,
 )
 
 internal data class DesktopStatusBarProviderFilter(
@@ -58,14 +60,24 @@ internal data class DesktopStatusBarProviderFilter(
 internal data class DesktopStatusBarAccount(
     val id: String,
     val title: String,
+    /** [title] in parts, for the one-line header of the denser layouts. */
+    val name: String = "",
+    val subtitle: String = "",
     val planLabel: String = "",
     val status: String,
+    /** A problem the denser layouts show on its own line, since they leave out [status]. */
+    val alert: String = "",
     val emptyLabel: String,
     val provider: String,
     val busy: Boolean,
     val refreshable: Boolean,
     val exhausted: Boolean = false,
     val windows: List<DesktopStatusBarUsageWindow>,
+    /** Rows hidden while the account is folded, or 0 when this layout always shows them all. */
+    val foldedHiddenCount: Int = 0,
+    /** The window a folded account keeps, as an index into [windows], or -1. */
+    val tightestIndex: Int = -1,
+    val foldedLabel: String = "",
     val resetAvailable: Int = 0,
     val resetLabel: String? = null,
     val resetTooltip: String? = null,
@@ -86,6 +98,10 @@ internal data class DesktopStatusBarUsageWindow(
     val remainingPct: Int,
     val resetLabel: String,
     val resetTooltip: String? = null,
+    /** Time to reset as the main window's compact rows print it; empty without a reset. */
+    val compactResetLabel: String = "",
+    /** Nearly untouched, so the denser layouts print the value in gray. */
+    val quiet: Boolean = false,
 )
 
 @Composable
@@ -365,6 +381,8 @@ private fun DesktopStatusBarState.toJson(): String {
         append(',')
         appendJsonField("usageDisplayMode", usageDisplayMode)
         append(',')
+        appendJsonField("layout", layout)
+        append(',')
         append("\"refreshEnabled\":").append(refreshEnabled)
         append(',')
         append("\"refreshBusy\":").append(refreshBusy)
@@ -392,9 +410,15 @@ private fun DesktopStatusBarState.toJson(): String {
             append(',')
             appendJsonField("title", account.title)
             append(',')
+            appendJsonField("name", account.name)
+            append(',')
+            appendJsonField("subtitle", account.subtitle)
+            append(',')
             appendJsonField("planLabel", account.planLabel)
             append(',')
             appendJsonField("status", account.status)
+            append(',')
+            appendJsonField("alert", account.alert)
             append(',')
             appendJsonField("emptyLabel", account.emptyLabel)
             append(',')
@@ -419,9 +443,19 @@ private fun DesktopStatusBarState.toJson(): String {
                 appendJsonField("resetLabel", window.resetLabel)
                 append(',')
                 appendJsonField("resetTooltip", window.resetTooltip.orEmpty())
+                append(',')
+                appendJsonField("compactResetLabel", window.compactResetLabel)
+                append(',')
+                append("\"quiet\":").append(window.quiet)
                 append('}')
             }
             append(']')
+            append(',')
+            append("\"foldedHiddenCount\":").append(account.foldedHiddenCount)
+            append(',')
+            append("\"tightestIndex\":").append(account.tightestIndex)
+            append(',')
+            appendJsonField("foldedLabel", account.foldedLabel)
             append(',')
             append("\"resetAvailable\":").append(account.resetAvailable)
             append(',')

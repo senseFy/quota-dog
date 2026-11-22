@@ -39,6 +39,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import saien.quotadog.CloudSyncStatus
 import saien.quotadog.CloudSyncUiState
+import saien.quotadog.DashboardLayout
 import saien.quotadog.EmailPrivacyMode
 import saien.quotadog.ThemeMode
 import saien.quotadog.UsageDisplayMode
@@ -53,6 +54,8 @@ fun QdSettingsSheet(
     visible: Boolean,
     themeMode: ThemeMode,
     onThemeChange: (ThemeMode) -> Unit,
+    dashboardLayout: DashboardLayout,
+    onDashboardLayoutChange: (DashboardLayout) -> Unit,
     usageDisplayMode: UsageDisplayMode,
     onUsageDisplayModeChange: (UsageDisplayMode) -> Unit,
     showProjectedUsage: Boolean,
@@ -184,6 +187,19 @@ fun QdSettingsSheet(
                                 ),
                                 selected = themeMode,
                                 onSelect = onThemeChange,
+                            )
+                        },
+                    )
+
+                    // Layout.
+                    QdSettingsRow(
+                        title = "Layout",
+                        description = "How much of each account the dashboard shows.",
+                        control = {
+                            QdSegmentedControl(
+                                options = DashboardLayout.entries.map { it.label to it },
+                                selected = dashboardLayout,
+                                onSelect = onDashboardLayoutChange,
                             )
                         },
                     )
@@ -415,3 +431,12 @@ private fun cloudSyncStatusText(state: CloudSyncUiState): String? {
         CloudSyncStatus.Error -> "Dropbox sync needs attention."
     }
 }
+
+/** Name shown in settings and in the confirmation after a change. */
+val DashboardLayout.label: String
+    get() = when (this) {
+        DashboardLayout.Cards -> "Cards"
+        DashboardLayout.Compact -> "Compact"
+        DashboardLayout.FoldFull -> "Fold full"
+        DashboardLayout.OneLine -> "One line"
+    }

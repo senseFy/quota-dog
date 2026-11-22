@@ -42,6 +42,19 @@ static const NSUInteger QDMaxResetCredits = 4;
 static const CGFloat QDAccountRefreshSize = 18.0;
 static const CGFloat QDAccountRefreshGap = 4.0;
 
+// Compact, Fold full, and One line: a one-line header, then one line per window.
+static const CGFloat QDDensePadY = 8.0;
+static const CGFloat QDDenseAvatarSize = 16.0;
+static const CGFloat QDDenseHeaderHeight = 20.0;
+static const CGFloat QDDenseRowHeight = 18.0;
+static const CGFloat QDDenseRowGap = 2.0;
+static const CGFloat QDDenseBodyGap = 4.0;
+static const CGFloat QDDenseBarWidth = 88.0;
+static const CGFloat QDDenseValueWidth = 64.0;
+static const CGFloat QDDenseResetWidth = 48.0;
+static const CGFloat QDDenseColumnGap = 10.0;
+static const CGFloat QDFoldIndicatorWidth = 34.0;
+
 /// 80% remaining moon (left lit). Template image so the menu bar tints it.
 static NSImage *QDMenuBarMoonImage(void) {
     const CGFloat pointSize = 16.0;
@@ -199,6 +212,17 @@ static NSColor *QDUsageFill(NSInteger usedPct, QDPalette palette) {
     if (usedPct >= 90) return palette.danger;
     if (usedPct >= 70) return palette.warning;
     return palette.meter;
+}
+
+/** Matches Kotlin DashboardLayout — default Cards when missing/unknown. */
+static NSString *QDLayoutName(NSDictionary *state) {
+    id value = state[@"layout"];
+    return [value isKindOfClass:[NSString class]] ? (NSString *)value : @"Cards";
+}
+
+/** Compact, Fold full, and One line draw one line per window; Cards keeps the original panel. */
+static BOOL QDIsDenseLayout(NSDictionary *state) {
+    return ![QDLayoutName(state) isEqualToString:@"Cards"];
 }
 
 /** Matches Kotlin UsageDisplayMode — default Used when missing/unknown. */
@@ -706,10 +730,22 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
 @property(nonatomic, assign) BOOL accountBusy;
 @property(nonatomic, assign) BOOL refreshable;
 @property(nonatomic, assign) BOOL hovering;
+/// Opens or closes a folded account. Clicks on its labels reach here through the responder
+/// chain; the refresh button keeps its own.
+@property(nonatomic, copy) void (^onToggle)(void);
 - (void)syncRefreshVisibility;
 @end
 
 @implementation QDAccountCardView
+- (void)mouseUp:(NSEvent *)event {
+    NSPoint local = [self convertPoint:event.locationInWindow fromView:nil];
+    if (self.onToggle && NSPointInRect(local, self.bounds)) {
+        self.onToggle();
+        return;
+    }
+    [super mouseUp:event];
+}
+
 - (void)updateTrackingAreas {
     [super updateTrackingAreas];
     for (NSTrackingArea *area in self.trackingAreas) {
@@ -781,6 +817,9 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
 @property(nonatomic, strong) QDFillView *providerIndicator;
 @property(nonatomic, assign) NSUInteger providerSelectionGeneration;
 @property(nonatomic, copy) NSString *pendingProviderSelection;
+/// Accounts opened by hand in a layout that folds them, kept while the app runs.
+@property(nonatomic, strong) NSMutableSet<NSString *> *expandedAccounts;
+@property(nonatomic, weak) NSScrollView *accountsScroll;
 @end
 
 @implementation QDStatusBarController
@@ -801,6 +840,7 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
     _onSelectProvider = selectProvider;
     _onRefreshAccount = refreshAccount;
     _state = @{};
+    _expandedAccounts = [NSMutableSet set];
     _panelSize = NSMakeSize(QDPanelWidth, 200.0);
 
     _statusItem = [[NSStatusBar systemStatusBar] statusItemWithLength:NSSquareStatusItemLength];
@@ -973,6 +1013,16 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
     NSString *key = sender.accountIdentifier ?: @"";
     if (key.length == 0 || !self.onRefreshAccount) return;
     self.onRefreshAccount(key.UTF8String);
+}
+
+- (void)toggleAccountFold:(NSString *)identifier {
+    if (identifier.length == 0) return;
+    if ([self.expandedAccounts containsObject:identifier]) {
+        [self.expandedAccounts removeObject:identifier];
+    } else {
+        [self.expandedAccounts addObject:identifier];
+    }
+    [self rebuildPanelContent];
 }
 
 - (void)providerFilterClicked:(QDPillButton *)sender {
@@ -1182,15 +1232,15 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
     return height;
 }
 
-- (NSView *)buildProviderAvatar:(NSString *)provider palette:(QDPalette)palette {
+- (NSView *)buildProviderAvatar:(NSString *)provider palette:(QDPalette)palette size:(CGFloat)size {
     // Match QdProviderAvatar: transparent slot, tinted vector logo scaled inside.
-    QDFlippedView *slot = [[QDFlippedView alloc] initWithFrame:NSMakeRect(0, 0, QDAvatarSize, QDAvatarSize)];
-    CGFloat iconSize = QDAvatarSize * QDProviderIconScale(provider);
+    QDFlippedView *slot = [[QDFlippedView alloc] initWithFrame:NSMakeRect(0, 0, size, size)];
+    CGFloat iconSize = size * QDProviderIconScale(provider);
     NSImage *logo = QDProviderLogoImage(provider, QDProviderAccent(provider, palette), iconSize);
     if (logo) {
         NSImageView *imageView = [[NSImageView alloc] initWithFrame:NSMakeRect(
-            (QDAvatarSize - iconSize) / 2.0,
-            (QDAvatarSize - iconSize) / 2.0,
+            (size - iconSize) / 2.0,
+            (size - iconSize) / 2.0,
             iconSize,
             iconSize)];
         imageView.image = logo;
@@ -1200,6 +1250,36 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
         [slot addSubview:imageView];
     }
     return slot;
+}
+
+/// Plan capsule like QdPlanLabel, at most [maxWidth] wide; nil without a plan or room for one.
+- (NSView *)buildPlanBadge:(NSString *)planLabel maxWidth:(CGFloat)maxWidth palette:(QDPalette)palette {
+    CGFloat badgeHeight = 16.0;
+    CGFloat badgePadX = 8.0;
+    if (planLabel.length == 0 || maxWidth <= badgePadX * 2.0) return nil;
+    // sizeToFit includes the text field's own insets. Measuring the string
+    // alone leaves the field narrower than the glyphs, so AppKit draws "…".
+    NSTextField *badgeText = [self label:planLabel
+                                fontSize:10.0
+                                  weight:NSFontWeightSemibold
+                                   color:palette.primary];
+    badgeText.translatesAutoresizingMaskIntoConstraints = YES;
+    badgeText.lineBreakMode = NSLineBreakByTruncatingTail;
+    badgeText.alignment = NSTextAlignmentCenter;
+    badgeText.toolTip = planLabel;
+    [badgeText sizeToFit];
+    CGFloat badgeWidth = MIN(ceil(NSWidth(badgeText.frame)) + badgePadX * 2.0, maxWidth);
+    CGFloat textHeight = ceil(NSHeight(badgeText.frame));
+    badgeText.frame = NSMakeRect(
+        badgePadX,
+        floor((badgeHeight - textHeight) / 2.0),
+        badgeWidth - badgePadX * 2.0,
+        textHeight);
+    QDFillView *badge = [[QDFillView alloc] initWithFrame:NSMakeRect(0, 0, badgeWidth, badgeHeight)];
+    badge.fillColor = [palette.primary colorWithAlphaComponent:0.16];
+    badge.cornerRadius = badgeHeight / 2.0;
+    [badge addSubview:badgeText];
+    return badge;
 }
 
 - (NSView *)buildProviderSwitcher:(NSArray *)filters
@@ -1415,7 +1495,7 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
     CGFloat y = QDCardPad;
 
     NSString *provider = [self stringIn:account key:@"provider" fallback:@"CODEX"];
-    NSView *avatar = [self buildProviderAvatar:provider palette:palette];
+    NSView *avatar = [self buildProviderAvatar:provider palette:palette size:QDAvatarSize];
     avatar.frame = NSMakeRect(0, y, QDAvatarSize, QDAvatarSize);
     [card addSubview:avatar];
 
@@ -1426,32 +1506,10 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
     CGFloat rowWidth = MAX(40.0, width - trailing - titleX);
     NSString *planLabel = [self stringIn:account key:@"planLabel" fallback:@""];
     CGFloat badgeGap = 6.0;
-    CGFloat badgeHeight = 16.0;
-    CGFloat badgePadX = 8.0;
     // Match QdPlanLabel's cap while preserving room for the account title.
     CGFloat badgeMaxWidth = MIN(148.0, MAX(0.0, rowWidth - 40.0 - badgeGap));
-    NSTextField *badgeText = nil;
-    CGFloat badgeWidth = 0.0;
-    if (planLabel.length > 0 && badgeMaxWidth > badgePadX * 2.0) {
-        // sizeToFit includes the text field's own insets. Measuring the string
-        // alone leaves the field narrower than the glyphs, so AppKit draws "…".
-        badgeText = [self label:planLabel
-                       fontSize:10.0
-                         weight:NSFontWeightSemibold
-                          color:palette.primary];
-        badgeText.translatesAutoresizingMaskIntoConstraints = YES;
-        badgeText.lineBreakMode = NSLineBreakByTruncatingTail;
-        badgeText.alignment = NSTextAlignmentCenter;
-        badgeText.toolTip = planLabel;
-        [badgeText sizeToFit];
-        badgeWidth = MIN(ceil(NSWidth(badgeText.frame)) + badgePadX * 2.0, badgeMaxWidth);
-        CGFloat textHeight = ceil(NSHeight(badgeText.frame));
-        badgeText.frame = NSMakeRect(
-            badgePadX,
-            floor((badgeHeight - textHeight) / 2.0),
-            badgeWidth - badgePadX * 2.0,
-            textHeight);
-    }
+    NSView *badge = [self buildPlanBadge:planLabel maxWidth:badgeMaxWidth palette:palette];
+    CGFloat badgeWidth = badge ? NSWidth(badge.frame) : 0.0;
     CGFloat badgeReserve = badgeWidth > 0.0 ? badgeWidth + badgeGap : 0.0;
     NSString *titleText = [self stringIn:account key:@"title" fallback:@"Account"];
     NSTextField *title = [self label:titleText
@@ -1467,14 +1525,10 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
     title.frame = NSMakeRect(titleX, y, titleW, titleH);
     [card addSubview:title];
 
-    if (badgeText != nil) {
+    if (badge != nil) {
         // The title field is taller than its glyphs, so a shared top edge sits
         // the capsule above the email. One point down lands on the cap line.
-        CGFloat badgeY = y + 1.0;
-        QDFillView *badge = [[QDFillView alloc] initWithFrame:NSMakeRect(titleX + titleW + badgeGap, badgeY, badgeWidth, badgeHeight)];
-        badge.fillColor = [palette.primary colorWithAlphaComponent:0.16];
-        badge.cornerRadius = badgeHeight / 2.0;
-        [badge addSubview:badgeText];
+        [badge setFrameOrigin:NSMakePoint(titleX + titleW + badgeGap, y + 1.0)];
         [card addSubview:badge];
     }
 
@@ -1563,12 +1617,302 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
     return card;
 }
 
+- (BOOL)isAccountFolded:(NSDictionary *)account {
+    if ([self integerIn:account key:@"foldedHiddenCount" fallback:0] <= 0) return NO;
+    return ![self.expandedAccounts containsObject:[self stringIn:account key:@"id" fallback:@""]];
+}
+
+/// One account in Compact, Fold full, or One line: a one-line header, then one line per window.
+/// A folded account keeps only its tightest window, and a click on the account opens or closes it.
+- (NSView *)buildDenseAccount:(NSDictionary *)account
+                        width:(CGFloat)width
+                      palette:(QDPalette)palette
+             remainingDisplay:(BOOL)remainingDisplay
+                  reserveFold:(BOOL)reserveFold {
+    QDAccountCardView *card = [[QDAccountCardView alloc] initWithFrame:NSMakeRect(0, 0, width, 0)];
+    card.fillColor = NSColor.clearColor;
+    card.borderColor = nil;
+    card.cornerRadius = 0;
+    if ([self boolIn:account key:@"exhausted"]) {
+        card.alphaValue = 0.5;
+    }
+
+    NSString *identifier = [self stringIn:account key:@"id" fallback:@""];
+    NSInteger hiddenCount = [self integerIn:account key:@"foldedHiddenCount" fallback:0];
+    BOOL folded = [self isAccountFolded:account];
+    BOOL busy = [self boolIn:account key:@"busy"];
+    BOOL refreshable = [self boolIn:account key:@"refreshable"];
+    CGFloat y = QDDensePadY;
+
+    // Header, right to left: refresh and the fold state keep fixed slots, so rows line up;
+    // provider, plan, and email share the rest, and the email gives way first.
+    CGFloat right = width - QDAccountRefreshSize - QDAccountRefreshGap;
+    if (refreshable) {
+        QDPillButton *refresh = [QDPillButton iconButtonWithSystemSymbol:@"arrow.clockwise"
+                                                                 palette:palette
+                                                                  target:self
+                                                                  action:@selector(accountRefreshClicked:)];
+        refresh.accountIdentifier = identifier;
+        refresh.frame = NSMakeRect(
+            width - QDAccountRefreshSize,
+            y + (QDDenseHeaderHeight - QDAccountRefreshSize) / 2.0,
+            QDAccountRefreshSize,
+            QDAccountRefreshSize);
+        refresh.toolTip = @"Refresh this account";
+        refresh.enabled = !busy;
+        [card addSubview:refresh];
+        card.refreshButton = refresh;
+        card.refreshable = YES;
+        card.accountBusy = busy;
+        [card syncRefreshVisibility];
+    }
+    if (hiddenCount > 0 || reserveFold) {
+        right -= QDFoldIndicatorWidth;
+        if (hiddenCount > 0) {
+            NSView *fold = [self buildFoldIndicator:folded hiddenCount:hiddenCount palette:palette];
+            [fold setFrameOrigin:NSMakePoint(right, y)];
+            [card addSubview:fold];
+        }
+        right -= 6.0;
+    }
+
+    NSString *provider = [self stringIn:account key:@"provider" fallback:@"CODEX"];
+    NSView *avatar = [self buildProviderAvatar:provider palette:palette size:QDDenseAvatarSize];
+    avatar.frame = NSMakeRect(0, y + (QDDenseHeaderHeight - QDDenseAvatarSize) / 2.0, QDDenseAvatarSize, QDDenseAvatarSize);
+    [card addSubview:avatar];
+
+    CGFloat x = QDDenseAvatarSize + 8.0;
+    NSTextField *name = [self label:[self stringIn:account key:@"name" fallback:@"Account"]
+                           fontSize:13.0
+                             weight:NSFontWeightSemibold
+                              color:palette.textPrimary];
+    [name sizeToFit];
+    CGFloat nameWidth = MIN(ceil(NSWidth(name.frame)), MAX(40.0, right - x));
+    name.frame = NSMakeRect(x, y + 2.0, nameWidth, 16.0);
+    [card addSubview:name];
+    x += nameWidth + 6.0;
+
+    NSView *badge = [self buildPlanBadge:[self stringIn:account key:@"planLabel" fallback:@""]
+                                maxWidth:MIN(148.0, right - x - 40.0)
+                                 palette:palette];
+    if (badge != nil) {
+        [badge setFrameOrigin:NSMakePoint(x, y + 2.0)];
+        [card addSubview:badge];
+        x += NSWidth(badge.frame) + 8.0;
+    }
+
+    NSString *subtitle = [self stringIn:account key:@"subtitle" fallback:@""];
+    if (subtitle.length > 0 && right - x >= 24.0) {
+        NSTextField *email = [self label:subtitle
+                                fontSize:12.0
+                                  weight:NSFontWeightRegular
+                                   color:palette.textTertiary];
+        email.frame = NSMakeRect(x, y + 2.0, right - x, 16.0);
+        [card addSubview:email];
+    }
+    y += QDDenseHeaderHeight;
+
+    NSString *alert = [self stringIn:account key:@"alert" fallback:@""];
+    if (alert.length > 0) {
+        y += QDDenseRowGap;
+        NSTextField *alertLabel = [self label:alert
+                                     fontSize:11.0
+                                       weight:NSFontWeightRegular
+                                        color:palette.warning];
+        alertLabel.frame = NSMakeRect(0, y, width, 14.0);
+        [card addSubview:alertLabel];
+        y += 14.0;
+    }
+    y += QDDenseBodyGap;
+
+    NSArray *windows = [account[@"windows"] isKindOfClass:[NSArray class]] ? account[@"windows"] : @[];
+    NSInteger resetAvailable = [self integerIn:account key:@"resetAvailable" fallback:0];
+    if (windows.count == 0 && resetAvailable <= 0) {
+        QDFillView *empty = [[QDFillView alloc] initWithFrame:NSMakeRect(0, y, width, 24.0)];
+        empty.fillColor = palette.surfaceMuted;
+        empty.cornerRadius = 6.0;
+        NSTextField *emptyLabel = [self label:[self stringIn:account key:@"emptyLabel" fallback:@"No usage data yet"]
+                                     fontSize:11.0
+                                       weight:NSFontWeightRegular
+                                        color:palette.textSecondary];
+        emptyLabel.frame = NSMakeRect(8, 5, width - 16, 14);
+        [empty addSubview:emptyLabel];
+        [card addSubview:empty];
+        y += 24.0;
+    } else if (folded) {
+        NSInteger tightestIndex = [self integerIn:account key:@"tightestIndex" fallback:-1];
+        if (tightestIndex >= 0 && tightestIndex < (NSInteger)windows.count) {
+            NSDictionary *window = [windows[tightestIndex] isKindOfClass:[NSDictionary class]] ? windows[tightestIndex] : @{};
+            NSView *row = [self buildDenseWindowRow:window
+                                              label:[self stringIn:account key:@"foldedLabel" fallback:@""]
+                                              width:width
+                                            palette:palette
+                                   remainingDisplay:remainingDisplay];
+            [row setFrameOrigin:NSMakePoint(0, y)];
+            [card addSubview:row];
+            y += QDDenseRowHeight;
+        }
+    } else {
+        for (NSUInteger i = 0; i < windows.count; i++) {
+            NSDictionary *window = [windows[i] isKindOfClass:[NSDictionary class]] ? windows[i] : @{};
+            if (i > 0) y += QDDenseRowGap;
+            NSView *row = [self buildDenseWindowRow:window
+                                              label:nil
+                                              width:width
+                                            palette:palette
+                                   remainingDisplay:remainingDisplay];
+            [row setFrameOrigin:NSMakePoint(0, y)];
+            [card addSubview:row];
+            y += QDDenseRowHeight;
+        }
+        if (resetAvailable > 0) {
+            if (windows.count > 0) y += 4.0;
+            NSView *resetRow = [self buildResetCreditsRow:account width:width palette:palette];
+            resetRow.frame = NSMakeRect(0, y, width, QDResetRowHeight);
+            [card addSubview:resetRow];
+            y += QDResetRowHeight;
+
+            NSArray *credits = [account[@"resetCredits"] isKindOfClass:[NSArray class]] ? account[@"resetCredits"] : @[];
+            NSUInteger creditRows = MIN(credits.count, QDMaxResetCredits);
+            for (NSUInteger i = 0; i < creditRows; i++) {
+                NSDictionary *credit = [credits[i] isKindOfClass:[NSDictionary class]] ? credits[i] : @{};
+                NSView *creditRow = [self buildResetCreditRow:credit width:width palette:palette];
+                y += (i == 0) ? 4.0 : 2.0;
+                creditRow.frame = NSMakeRect(0, y, width, QDResetRowHeight);
+                [card addSubview:creditRow];
+                y += QDResetRowHeight;
+            }
+        }
+    }
+    y += QDDensePadY;
+
+    card.frame = NSMakeRect(0, 0, width, y);
+    if (hiddenCount > 0) {
+        __weak QDStatusBarController *weakSelf = self;
+        card.onToggle = ^{
+            // Rebuilding replaces this view, so let its click finish first.
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [weakSelf toggleAccountFold:identifier];
+            });
+        };
+    }
+    return card;
+}
+
+/// One window on one line: label, bar, value, and time to reset, in columns every row shares.
+- (NSView *)buildDenseWindowRow:(NSDictionary *)window
+                          label:(NSString *)labelText
+                          width:(CGFloat)width
+                        palette:(QDPalette)palette
+               remainingDisplay:(BOOL)remainingDisplay {
+    NSInteger usedPct = [self integerIn:window key:@"usedPct" fallback:0];
+    NSInteger remainingPct = [self integerIn:window key:@"remainingPct" fallback:0];
+    NSInteger shownPct = remainingDisplay ? remainingPct : usedPct;
+    BOOL quiet = [self boolIn:window key:@"quiet"];
+    // Warnings follow the bar; an untouched window reads gray and anything else bright.
+    NSColor *valueColor = usedPct >= 70 ? QDUsageFill(usedPct, palette)
+                                        : (quiet ? palette.textTertiary : palette.textPrimary);
+
+    QDFlippedView *row = [[QDFlippedView alloc] initWithFrame:NSMakeRect(0, 0, width, QDDenseRowHeight)];
+    CGFloat resetX = width - QDDenseResetWidth;
+    CGFloat valueX = resetX - QDDenseColumnGap - QDDenseValueWidth;
+    CGFloat barX = valueX - QDDenseColumnGap - QDDenseBarWidth;
+    CGFloat textY = (QDDenseRowHeight - 14.0) / 2.0;
+
+    NSTextField *name = [self label:labelText.length > 0 ? labelText : [self stringIn:window key:@"label" fallback:@"Usage"]
+                           fontSize:11.0
+                             weight:NSFontWeightMedium
+                              color:palette.textSecondary];
+    name.frame = NSMakeRect(0, textY, MAX(40.0, barX - QDDenseColumnGap), 14.0);
+    [row addSubview:name];
+
+    QDProgressBar *bar = [[QDProgressBar alloc] initWithFrame:NSMakeRect(
+        barX, (QDDenseRowHeight - QDProgressHeight) / 2.0, QDDenseBarWidth, QDProgressHeight)];
+    bar.trackColor = palette.surfaceMuted;
+    bar.fillColor = QDUsageFill(usedPct, palette);
+    bar.progress = shownPct / 100.0;
+    [row addSubview:bar];
+
+    NSString *valueText = remainingDisplay
+        ? [NSString stringWithFormat:@"%ld%% left", (long)shownPct]
+        : [NSString stringWithFormat:@"%ld%% used", (long)shownPct];
+    NSTextField *value = [self label:valueText fontSize:11.0 weight:NSFontWeightMedium color:valueColor];
+    value.font = [NSFont monospacedDigitSystemFontOfSize:11.0 weight:quiet ? NSFontWeightMedium : NSFontWeightSemibold];
+    value.alignment = NSTextAlignmentRight;
+    value.lineBreakMode = NSLineBreakByClipping;
+    value.frame = NSMakeRect(valueX, textY, QDDenseValueWidth, 14.0);
+    [row addSubview:value];
+
+    NSString *resetText = [self stringIn:window key:@"compactResetLabel" fallback:@""];
+    if (resetText.length > 0) {
+        NSTextField *reset = [self label:resetText fontSize:11.0 weight:NSFontWeightRegular color:palette.textTertiary];
+        reset.font = [NSFont monospacedDigitSystemFontOfSize:11.0 weight:NSFontWeightRegular];
+        reset.alignment = NSTextAlignmentRight;
+        reset.lineBreakMode = NSLineBreakByClipping;
+        reset.toolTip = [self stringIn:window key:@"resetTooltip" fallback:@""];
+        reset.frame = NSMakeRect(resetX, textY, QDDenseResetWidth, 14.0);
+        [row addSubview:reset];
+    }
+    return row;
+}
+
+/// "+N ⌄" while folded, "⌃" once open. The whole account takes the click; this only shows the state.
+- (NSView *)buildFoldIndicator:(BOOL)folded hiddenCount:(NSInteger)hiddenCount palette:(QDPalette)palette {
+    QDFlippedView *view = [[QDFlippedView alloc] initWithFrame:NSMakeRect(0, 0, QDFoldIndicatorWidth, QDDenseHeaderHeight)];
+    CGFloat chevronSize = 10.0;
+    CGFloat chevronX = QDFoldIndicatorWidth - chevronSize;
+    if (@available(macOS 11.0, *)) {
+        NSImage *chevron = [NSImage imageWithSystemSymbolName:folded ? @"chevron.down" : @"chevron.up"
+                                     accessibilityDescription:nil];
+        chevron = [chevron imageWithSymbolConfiguration:
+            [NSImageSymbolConfiguration configurationWithPointSize:9.0 weight:NSFontWeightSemibold]];
+        if (chevron) {
+            NSImageView *imageView = [NSImageView imageViewWithImage:chevron];
+            imageView.contentTintColor = palette.textTertiary;
+            imageView.imageScaling = NSImageScaleProportionallyDown;
+            imageView.frame = NSMakeRect(chevronX, (QDDenseHeaderHeight - chevronSize) / 2.0, chevronSize, chevronSize);
+            [view addSubview:imageView];
+        }
+    }
+    if (folded) {
+        NSTextField *count = [self label:[NSString stringWithFormat:@"+%ld", (long)hiddenCount]
+                                fontSize:11.0
+                                  weight:NSFontWeightMedium
+                                   color:palette.textTertiary];
+        count.font = [NSFont monospacedDigitSystemFontOfSize:11.0 weight:NSFontWeightMedium];
+        count.alignment = NSTextAlignmentRight;
+        count.frame = NSMakeRect(0, (QDDenseHeaderHeight - 14.0) / 2.0, chevronX - 2.0, 14.0);
+        [view addSubview:count];
+    }
+    return view;
+}
+
 - (void)addFullWidthTearAtY:(CGFloat)midY color:(NSColor *)color toView:(NSView *)view {
     CGFloat markHeight = 4.0;
     QDTearMarkView *mark = [[QDTearMarkView alloc] initWithFrame:NSMakeRect(
         0, midY - markHeight / 2.0, QDPanelWidth, markHeight)];
     mark.dashColor = color;
     [view addSubview:mark];
+}
+
+/// Cards shows at most four accounts; the denser layouts have room for all of them.
+- (NSUInteger)shownAccountCount:(NSArray *)accounts {
+    return QDIsDenseLayout(self.state) ? accounts.count : MIN(accounts.count, QDMaxAccounts);
+}
+
+/// The account in the panel's layout, sized to its content.
+- (NSView *)buildAccount:(NSDictionary *)account
+                   width:(CGFloat)width
+                 palette:(QDPalette)palette
+        remainingDisplay:(BOOL)remainingDisplay {
+    if (!QDIsDenseLayout(self.state)) {
+        return [self buildAccountCard:account width:width palette:palette remainingDisplay:remainingDisplay];
+    }
+    return [self buildDenseAccount:account
+                             width:width
+                           palette:palette
+                  remainingDisplay:remainingDisplay
+                       reserveFold:[QDLayoutName(self.state) isEqualToString:@"OneLine"]];
 }
 
 - (CGFloat)heightForAccountsContent:(NSArray *)accounts moreAccounts:(NSInteger)moreAccounts {
@@ -1588,6 +1932,10 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
 }
 
 - (void)rebuildPanelContent {
+    // An open panel rebuilds for new data and for folds; keep the reader's place in the list.
+    CGFloat previousScrollY = [self isPanelVisible] && self.accountsScroll
+        ? NSMinY(self.accountsScroll.contentView.bounds)
+        : 0.0;
     BOOL darkTheme = QDResolveDarkTheme(self.state);
     QDPalette palette = QDPaletteForDark(darkTheme);
     NSColor *dashColor = [palette.textTertiary colorWithAlphaComponent:0.8];
@@ -1690,7 +2038,7 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
         [empty addSubview:emptyBody];
         [root addSubview:empty];
     } else {
-        NSUInteger count = MIN(accounts.count, QDMaxAccounts);
+        NSUInteger count = [self shownAccountCount:accounts];
         QDFlippedView *document = [[QDFlippedView alloc] initWithFrame:NSMakeRect(0, 0, QDPanelWidth, intrinsicContentHeight)];
         document.wantsLayer = YES;
 #if QD_DEBUG_LAYOUT
@@ -1702,11 +2050,11 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
         NSMutableArray<NSNumber *> *tearOffsets = [NSMutableArray arrayWithCapacity:count];
         for (NSUInteger i = 0; i < count; i++) {
             NSDictionary *account = [accounts[i] isKindOfClass:[NSDictionary class]] ? accounts[i] : @{};
-            CGFloat h = [self heightForAccount:account];
-            NSView *card = [self buildAccountCard:account
-                                            width:contentWidth
-                                          palette:palette
-                                 remainingDisplay:remainingDisplay];
+            NSView *card = [self buildAccount:account
+                                        width:contentWidth
+                                      palette:palette
+                             remainingDisplay:remainingDisplay];
+            CGFloat h = NSHeight(card.frame);
             card.frame = NSMakeRect(QDOuterPad, cursor, contentWidth, h);
             [document addSubview:card];
             cursor += h;
@@ -1754,8 +2102,9 @@ typedef NS_ENUM(NSInteger, QDButtonStyle) {
             scroll.automaticallyAdjustsContentInsets = NO;
             scroll.borderType = NSNoBorder;
             scroll.documentView = document;
-            [document scrollPoint:NSMakePoint(0, 0)];
+            [document scrollPoint:NSMakePoint(0, previousScrollY)];
             [root addSubview:scroll];
+            self.accountsScroll = scroll;
         } else {
             document.frame = NSMakeRect(0, contentTop, QDPanelWidth, builtHeight);
 #if QD_DEBUG_LAYOUT

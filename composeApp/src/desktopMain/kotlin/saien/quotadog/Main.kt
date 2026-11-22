@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
@@ -30,6 +31,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -54,8 +56,19 @@ import org.jetbrains.compose.resources.painterResource
 import quotadog.composeapp.generated.resources.Res
 import quotadog.composeapp.generated.resources.quotadog_app_icon
 import kotlinx.datetime.Clock
+import saien.quotadog.app.AccountHeaderLine
 import saien.quotadog.app.App
+import saien.quotadog.app.CompactActionSize
+import saien.quotadog.app.CompactWindows
+import saien.quotadog.app.FoldIndicator
+import saien.quotadog.app.FoldToggleUi
+import saien.quotadog.app.QUIET_REMAINING_RATIO
 import saien.quotadog.app.QuotaDogBackgroundEffects
+import saien.quotadog.app.foldToggle
+import saien.quotadog.app.foldableRowCount
+import saien.quotadog.app.foldedLabel
+import saien.quotadog.app.remainingTime
+import saien.quotadog.app.tightestWindow
 import saien.quotadog.app.components.QdButton
 import saien.quotadog.app.components.QdButtonSize
 import saien.quotadog.app.components.QdButtonVariant
@@ -166,6 +179,7 @@ fun main() = application {
                 manageBackgroundEffects = false,
                 versionLabel = "v${desktopMetadata.version} (${desktopMetadata.sequence})",
                 updatesContent = updater?.let { { DesktopUpdateSettings(it) } },
+                revealActionsOnHover = true,
             )
         }
     }
@@ -224,6 +238,7 @@ private fun QuotaDogTray(
     val emailPrivacyMode by preferences.emailPrivacyMode.collectAsState()
     val usageDisplayMode by preferences.usageDisplayMode.collectAsState()
     val sinkExhaustedAccounts by preferences.sinkExhaustedAccounts.collectAsState()
+    val dashboardLayout by preferences.dashboardLayout.collectAsState()
     val themeMode by preferences.themeMode.collectAsState()
     val systemDark = rememberSystemDarkTheme()
     val darkTheme = when (themeMode) {
@@ -231,6 +246,8 @@ private fun QuotaDogTray(
         ThemeMode.Light -> false
         ThemeMode.Dark -> true
     }
+    // Accounts opened by hand in a layout that folds them, kept while the app runs.
+    val expandedTrayAccounts = remember { mutableStateMapOf<AccountKey, Boolean>() }
     var panelVisible by remember { mutableStateOf(false) }
     var selectedStatusBarProvider by remember { mutableStateOf<ProviderId?>(null) }
     val panelState = rememberWindowState(
@@ -262,6 +279,7 @@ private fun QuotaDogTray(
         usageDisplayMode = usageDisplayMode,
         sinkExhaustedAccounts = sinkExhaustedAccounts,
         darkTheme = darkTheme,
+        layout = dashboardLayout,
     )
 
     LaunchedEffect(availableProviders) {
@@ -334,6 +352,9 @@ private fun QuotaDogTray(
                 emailPrivacyMode = emailPrivacyMode,
                 usageDisplayMode = usageDisplayMode,
                 sinkExhaustedAccounts = sinkExhaustedAccounts,
+                dashboardLayout = dashboardLayout,
+                isExpanded = { expandedTrayAccounts[it] == true },
+                onToggleExpanded = { expandedTrayAccounts[it] = expandedTrayAccounts[it] != true },
                 onSelectProvider = { selectedStatusBarProvider = it },
                 onRefresh = { store.startRefreshAll() },
                 onRefreshAccount = { store.startRefresh(it) },
@@ -376,6 +397,9 @@ private fun QuotaDogTrayPanel(
     emailPrivacyMode: EmailPrivacyMode,
     usageDisplayMode: UsageDisplayMode,
     sinkExhaustedAccounts: Boolean,
+    dashboardLayout: DashboardLayout,
+    isExpanded: (AccountKey) -> Boolean,
+    onToggleExpanded: (AccountKey) -> Unit,
     onSelectProvider: (ProviderId?) -> Unit,
     onRefresh: () -> Unit,
     onRefreshAccount: (AccountKey) -> Unit,
@@ -401,6 +425,9 @@ private fun QuotaDogTrayPanel(
             emailPrivacyMode = emailPrivacyMode,
             usageDisplayMode = usageDisplayMode,
             sinkExhaustedAccounts = sinkExhaustedAccounts,
+            dashboardLayout = dashboardLayout,
+            isExpanded = isExpanded,
+            onToggleExpanded = onToggleExpanded,
             onSelectProvider = onSelectProvider,
             onRefresh = onRefresh,
             onRefreshAccount = onRefreshAccount,
@@ -421,6 +448,9 @@ private fun QuotaDogTrayPanelContent(
     emailPrivacyMode: EmailPrivacyMode,
     usageDisplayMode: UsageDisplayMode,
     sinkExhaustedAccounts: Boolean,
+    dashboardLayout: DashboardLayout,
+    isExpanded: (AccountKey) -> Boolean,
+    onToggleExpanded: (AccountKey) -> Unit,
     onSelectProvider: (ProviderId?) -> Unit,
     onRefresh: () -> Unit,
     onRefreshAccount: (AccountKey) -> Unit,
@@ -431,7 +461,12 @@ private fun QuotaDogTrayPanelContent(
     val colors = QdTheme.colors
     val typo = QdTheme.typography
     val spacing = QdTheme.spacing
-    val visibleAccounts = accounts.take(TRAY_ACCOUNT_LIMIT)
+    // Cards keeps its short list; the denser layouts have room for every account.
+    val visibleAccounts = if (dashboardLayout == DashboardLayout.Cards) {
+        accounts.take(TRAY_ACCOUNT_LIMIT)
+    } else {
+        accounts
+    }
     val refreshBusy = refreshableAccounts.any { it.busy }
     val refreshEnabled = refreshableAccounts.isNotEmpty() && !refreshBusy
 
@@ -504,17 +539,53 @@ private fun QuotaDogTrayPanelContent(
                         .verticalScroll(rememberScrollState()),
                     verticalArrangement = Arrangement.spacedBy(spacing.sm),
                 ) {
-                    visibleAccounts.forEach { account ->
-                        TrayAccountCard(
+                    @Composable
+                    fun denseAccount(account: AccountUiState) {
+                        TrayDenseAccount(
                             account = account,
+                            layout = dashboardLayout,
+                            expanded = isExpanded(account.accountKey),
+                            onToggleExpanded = { onToggleExpanded(account.accountKey) },
                             emailPrivacyMode = emailPrivacyMode,
                             usageDisplayMode = usageDisplayMode,
                             sinkExhaustedAccounts = sinkExhaustedAccounts,
                             onRefresh = { onRefreshAccount(account.accountKey) },
                         )
                     }
-                    if (accounts.size > TRAY_ACCOUNT_LIMIT) {
-                        val moreAccounts = accounts.size - TRAY_ACCOUNT_LIMIT
+                    when (dashboardLayout) {
+                        DashboardLayout.Cards -> visibleAccounts.forEach { account ->
+                            TrayAccountCard(
+                                account = account,
+                                emailPrivacyMode = emailPrivacyMode,
+                                usageDisplayMode = usageDisplayMode,
+                                sinkExhaustedAccounts = sinkExhaustedAccounts,
+                                onRefresh = { onRefreshAccount(account.accountKey) },
+                            )
+                        }
+                        DashboardLayout.Compact, DashboardLayout.FoldFull -> visibleAccounts.forEach { denseAccount(it) }
+                        // One line is a single bordered list, as in the main window.
+                        DashboardLayout.OneLine -> Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(QdTheme.shapes.md)
+                                .background(colors.surface)
+                                .border(1.dp, colors.border, QdTheme.shapes.md),
+                        ) {
+                            visibleAccounts.forEachIndexed { index, account ->
+                                if (index > 0) {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .height(1.dp)
+                                            .background(colors.border),
+                                    )
+                                }
+                                denseAccount(account)
+                            }
+                        }
+                    }
+                    if (accounts.size > visibleAccounts.size) {
+                        val moreAccounts = accounts.size - visibleAccounts.size
                         Text(
                             text = "+$moreAccounts more account${if (moreAccounts == 1) "" else "s"} in the app",
                             style = typo.caption,
@@ -683,6 +754,103 @@ private fun TrayAccountCard(
     }
 }
 
+/**
+ * One account in Compact, Fold full, or One line, built from the main window's one-line header and
+ * window rows. Refresh shows on hover, and clicking an account that can fold opens or closes it.
+ */
+@Composable
+private fun TrayDenseAccount(
+    account: AccountUiState,
+    layout: DashboardLayout,
+    expanded: Boolean,
+    onToggleExpanded: () -> Unit,
+    emailPrivacyMode: EmailPrivacyMode,
+    usageDisplayMode: UsageDisplayMode,
+    sinkExhaustedAccounts: Boolean,
+    onRefresh: () -> Unit,
+) {
+    val colors = QdTheme.colors
+    val typo = QdTheme.typography
+    val spacing = QdTheme.spacing
+    val windows = account.snapshot?.windows.orEmpty()
+    val resetSummary = account.snapshot?.codexResetSummary()
+    val hiddenCount = foldableRowCount(layout, windows, resetSummary != null)
+    val folded = hiddenCount > 0 && !expanded
+    val hover = remember { MutableInteractionSource() }
+    val hovered by hover.collectIsHoveredAsState()
+    val refreshable = account.canRefreshFromTray()
+
+    val content: @Composable () -> Unit = {
+        Column(verticalArrangement = Arrangement.spacedBy(spacing.xs)) {
+            AccountHeaderLine(
+                state = account,
+                emailPrivacyMode = emailPrivacyMode,
+                trailing = {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(spacing.sm),
+                    ) {
+                        FoldIndicator(
+                            fold = if (hiddenCount > 0) FoldToggleUi(folded, hiddenCount) else null,
+                            reserveSpace = layout == DashboardLayout.OneLine,
+                        )
+                        // Hidden rather than removed, so the header does not shift on hover.
+                        QdIconButton(
+                            onClick = onRefresh,
+                            enabled = refreshable && !account.busy,
+                            diameter = CompactActionSize,
+                            modifier = Modifier.alpha(if (refreshable && (hovered || account.busy)) 1f else 0f),
+                        ) {
+                            val rotation = rememberTrayRefreshRotation(active = account.busy)
+                            QdRefreshIcon(
+                                tint = colors.textSecondary,
+                                size = 14.dp,
+                                modifier = Modifier.rotate(rotation),
+                            )
+                        }
+                    }
+                },
+            )
+            account.trayAlertLabel()?.let { alert ->
+                Text(
+                    text = alert,
+                    style = typo.caption,
+                    color = colors.warning,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            CompactWindows(
+                state = account,
+                windows = windows,
+                resetSummary = resetSummary,
+                folded = folded,
+                usageDisplayMode = usageDisplayMode,
+                showProjectedUsage = false,
+            )
+        }
+    }
+
+    val modifier = Modifier
+        .fillMaxWidth()
+        .alpha(if (sinkExhaustedAccounts && account.isQuotaExhausted()) EXHAUSTED_ACCOUNT_ALPHA else 1f)
+        .hoverable(hover)
+        .foldToggle(hiddenCount > 0, folded, onToggleExpanded)
+    if (layout == DashboardLayout.OneLine) {
+        Box(modifier = modifier.padding(horizontal = spacing.md, vertical = spacing.xs)) {
+            content()
+        }
+    } else {
+        QdCard(
+            modifier = modifier,
+            padding = PaddingValues(horizontal = spacing.md, vertical = spacing.sm),
+            background = colors.surface,
+            elevated = false,
+            content = content,
+        )
+    }
+}
+
 @Composable
 private fun TrayUsageWindowRow(window: UsageWindow, displayMode: UsageDisplayMode) {
     val colors = QdTheme.colors
@@ -831,15 +999,33 @@ private fun AccountUiState.canRefreshFromTray(): Boolean {
 }
 
 private fun AccountUiState.trayAccountTitle(emailPrivacyMode: EmailPrivacyMode): String {
-    val email = snapshot?.accountEmail?.takeIf { it.isNotBlank() }
-        ?: accountKey.accountId.takeUnless { accountKey.isPending || it == "default" }
-    val displayEmail = if (emailPrivacyMode == EmailPrivacyMode.Masked) {
-        email?.maskEmailForTray()
-    } else {
-        email
-    }
+    val displayEmail = trayEmail(emailPrivacyMode)
     return if (displayEmail == null) providerId.displayName else "${providerId.displayName} · $displayEmail"
 }
+
+private fun AccountUiState.trayEmail(emailPrivacyMode: EmailPrivacyMode): String? {
+    val email = snapshot?.accountEmail?.takeIf { it.isNotBlank() }
+        ?: accountKey.accountId.takeUnless { accountKey.isPending || it == "default" }
+    return if (emailPrivacyMode == EmailPrivacyMode.Masked) email?.maskEmailForTray() else email
+}
+
+/**
+ * A problem worth its own line in the denser layouts, which leave out the usual "updated" time.
+ * An account without windows already shows its message in their place.
+ */
+private fun AccountUiState.trayAlertLabel(): String? {
+    if (busy || snapshot?.windows.isNullOrEmpty()) return null
+    val needsAttention = loginStart != null || authState in TRAY_ALERT_STATES
+    return if (needsAttention) trayStatusLabel() else null
+}
+
+private val TRAY_ALERT_STATES = setOf(
+    AuthState.TokenExpired,
+    AuthState.Unauthorized,
+    AuthState.RequiresRelogin,
+    AuthState.RateLimited,
+    AuthState.Error,
+)
 
 private fun List<AccountUiState>.toDesktopStatusBarState(
     allAccounts: List<AccountUiState>,
@@ -850,8 +1036,10 @@ private fun List<AccountUiState>.toDesktopStatusBarState(
     usageDisplayMode: UsageDisplayMode,
     sinkExhaustedAccounts: Boolean,
     darkTheme: Boolean,
+    layout: DashboardLayout,
 ): DesktopStatusBarState {
-    val visibleAccounts = take(STATUS_BAR_ACCOUNT_LIMIT)
+    // Cards keeps its short list; the denser layouts have room for every account.
+    val visibleAccounts = if (layout == DashboardLayout.Cards) take(STATUS_BAR_ACCOUNT_LIMIT) else this
     val refreshBusy = refreshableAccounts.any { it.busy }
     return DesktopStatusBarState(
         tooltip = allAccounts.traySummaryLabel(usageDisplayMode),
@@ -866,26 +1054,36 @@ private fun List<AccountUiState>.toDesktopStatusBarState(
                 },
         selectedProvider = selectedProvider?.name.orEmpty(),
         accounts = visibleAccounts.map { account ->
+            val windows = account.snapshot?.windows.orEmpty()
             val resetSummary = account.snapshot?.codexResetSummary()
+            val tightest = windows.tightestWindow()
             DesktopStatusBarAccount(
                 id = account.accountKey.toStatusBarId(),
                 title = account.trayAccountTitle(emailPrivacyMode),
+                name = account.providerId.displayName,
+                subtitle = account.trayEmail(emailPrivacyMode).orEmpty(),
                 planLabel = account.snapshot?.displayPlanLabel().orEmpty(),
                 status = account.trayStatusLabel(),
+                alert = account.trayAlertLabel().orEmpty(),
                 emptyLabel = account.trayEmptyLabel(),
                 provider = account.providerId.name,
                 busy = account.busy || account.loginStart != null,
                 refreshable = account.canRefreshFromTray(),
                 exhausted = sinkExhaustedAccounts && account.isQuotaExhausted(),
-                windows = account.snapshot?.windows.orEmpty().map { window ->
+                windows = windows.map { window ->
                     DesktopStatusBarUsageWindow(
                         label = window.trayWindowLabel(),
                         usedPct = (window.usedRatio * 100).roundToInt().coerceIn(0, 100),
                         remainingPct = (window.remainingRatio * 100).roundToInt().coerceIn(0, 100),
                         resetLabel = window.trayResetLabel(),
                         resetTooltip = window.resetsAt?.exactLocalTimeLabel(),
+                        compactResetLabel = if (window.resetsAt == null) "" else window.remainingTime(),
+                        quiet = window.remainingRatio >= QUIET_REMAINING_RATIO,
                     )
                 },
+                foldedHiddenCount = foldableRowCount(layout, windows, resetSummary != null),
+                tightestIndex = if (tightest == null) -1 else windows.indexOf(tightest),
+                foldedLabel = tightest?.let { windows.foldedLabel(it) }.orEmpty(),
                 resetAvailable = resetSummary?.availableCount ?: 0,
                 resetLabel = resetSummary?.compactLabel(),
                 resetTooltip = resetSummary?.nearestExpiresAt?.exactLocalTimeLabel(),
@@ -905,6 +1103,7 @@ private fun List<AccountUiState>.toDesktopStatusBarState(
         refreshBusy = refreshBusy,
         darkTheme = darkTheme,
         usageDisplayMode = usageDisplayMode.name,
+        layout = layout.name,
     )
 }
 

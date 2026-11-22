@@ -11,6 +11,9 @@ enum class UsageDisplayMode { Used, Remaining }
 
 enum class EmailPrivacyMode { Visible, Masked }
 
+/** How much of each account the dashboard shows, from full cards to one row per account. */
+enum class DashboardLayout { Cards, Compact, FoldFull, OneLine }
+
 /**
  * Persistent, observable user preferences.
  *
@@ -49,6 +52,9 @@ class AppPreferences(
 
     private val _sinkExhaustedAccounts = MutableStateFlow(loadSinkExhaustedAccounts())
     val sinkExhaustedAccounts: StateFlow<Boolean> = _sinkExhaustedAccounts
+
+    private val _dashboardLayout = MutableStateFlow(loadDashboardLayout())
+    val dashboardLayout: StateFlow<DashboardLayout> = _dashboardLayout
 
     fun setThemeMode(mode: ThemeMode) {
         settings.putString(KEY_THEME, mode.name)
@@ -109,6 +115,12 @@ class AppPreferences(
         _sinkExhaustedAccounts.value = enabled
     }
 
+    fun setDashboardLayout(layout: DashboardLayout) {
+        settings.putString(KEY_DASHBOARD_LAYOUT, layout.name)
+        settings.putLong(updatedAtKey(KEY_DASHBOARD_LAYOUT), nowMillis())
+        _dashboardLayout.value = layout
+    }
+
     fun exportForSync(): CloudSyncPreferencesRecord {
         return CloudSyncPreferencesRecord(
             themeMode = CloudSyncStringPreference(
@@ -146,6 +158,10 @@ class AppPreferences(
             sinkExhaustedAccounts = CloudSyncBooleanPreference(
                 value = _sinkExhaustedAccounts.value,
                 updatedAtEpochMillis = preferenceUpdatedAt(KEY_SINK_EXHAUSTED_ACCOUNTS)
+            ),
+            dashboardLayout = CloudSyncStringPreference(
+                value = _dashboardLayout.value.name,
+                updatedAtEpochMillis = preferenceUpdatedAt(KEY_DASHBOARD_LAYOUT)
             )
         )
     }
@@ -197,6 +213,11 @@ class AppPreferences(
             settings.putLong(updatedAtKey(KEY_SINK_EXHAUSTED_ACCOUNTS), it.updatedAtEpochMillis)
             _sinkExhaustedAccounts.value = it.value
         }
+        merged.dashboardLayout?.let {
+            val value = runCatching { DashboardLayout.valueOf(it.value) }.getOrNull() ?: return@let
+            importString(KEY_DASHBOARD_LAYOUT, value.name, it.updatedAtEpochMillis)
+            _dashboardLayout.value = value
+        }
     }
 
     private fun loadThemeMode(): ThemeMode {
@@ -239,6 +260,11 @@ class AppPreferences(
         return settings.getBooleanOrNull(KEY_SINK_EXHAUSTED_ACCOUNTS) ?: true
     }
 
+    private fun loadDashboardLayout(): DashboardLayout {
+        val raw = settings.getStringOrNull(KEY_DASHBOARD_LAYOUT) ?: return DashboardLayout.Compact
+        return runCatching { DashboardLayout.valueOf(raw) }.getOrDefault(DashboardLayout.Compact)
+    }
+
     private fun importString(key: String, value: String, updatedAtEpochMillis: Long) {
         settings.putString(key, value)
         settings.putLong(updatedAtKey(key), updatedAtEpochMillis)
@@ -267,5 +293,6 @@ class AppPreferences(
         const val KEY_ACCOUNT_MANUAL_ORDER = "pref_account_manual_order"
         const val KEY_ACCOUNT_SORT_REVERSED = "pref_account_sort_reversed"
         const val KEY_SINK_EXHAUSTED_ACCOUNTS = "pref_sink_exhausted_accounts"
+        const val KEY_DASHBOARD_LAYOUT = "pref_dashboard_layout"
     }
 }

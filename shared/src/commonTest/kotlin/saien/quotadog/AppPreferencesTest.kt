@@ -23,6 +23,27 @@ class AppPreferencesTest {
     }
 
     @Test
+    fun dashboardLayoutDefaultsToCompactAndSyncsTheNewestChoice() {
+        val settings = MapSettings()
+        val preferences = AppPreferences(settings)
+
+        assertEquals(DashboardLayout.Compact, preferences.dashboardLayout.value)
+
+        preferences.setDashboardLayout(DashboardLayout.FoldFull)
+
+        assertEquals(DashboardLayout.FoldFull, AppPreferences(settings).dashboardLayout.value)
+        val other = AppPreferences(MapSettings())
+        other.importForSync(preferences.exportForSync())
+        assertEquals(DashboardLayout.FoldFull, other.dashboardLayout.value)
+
+        // An older edit from another device does not replace the local choice.
+        preferences.importForSync(
+            CloudSyncPreferencesRecord(dashboardLayout = CloudSyncStringPreference("OneLine", 1))
+        )
+        assertEquals(DashboardLayout.FoldFull, preferences.dashboardLayout.value)
+    }
+
+    @Test
     fun projectedUsageDisplayDefaultsOff() {
         val preferences = AppPreferences(MapSettings())
 

@@ -10,7 +10,9 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.interaction.collectIsPressedAsState
@@ -28,6 +30,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
@@ -55,10 +58,15 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.pointerHoverIcon
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -66,6 +74,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 import kotlinx.datetime.Clock
+import kotlinx.datetime.Instant
 import saien.quotadog.AccountKey
 import saien.quotadog.AccountSortMode
 import saien.quotadog.AccountUiState
@@ -74,6 +83,7 @@ import saien.quotadog.AuthState
 import saien.quotadog.CloudSyncCoordinator
 import saien.quotadog.CloudSyncLocalRepository
 import saien.quotadog.CodexResetSummary
+import saien.quotadog.DashboardLayout
 import saien.quotadog.DashboardState
 import saien.quotadog.EmailPrivacyMode
 import saien.quotadog.PlatformTokenStore
@@ -114,6 +124,7 @@ import saien.quotadog.app.components.QdSnackbarTone
 import saien.quotadog.app.components.QdSortAscendingIcon
 import saien.quotadog.app.components.QdSortDescendingIcon
 import saien.quotadog.app.components.QdTimestamp
+import saien.quotadog.app.components.label
 import saien.quotadog.app.components.rememberQdSnackbarController
 import saien.quotadog.app.theme.QdTheme
 import saien.quotadog.app.theme.QuotaDogTheme
@@ -169,6 +180,9 @@ fun App(
     manageBackgroundEffects: Boolean = true,
     versionLabel: String = "v1.0.0",
     updatesContent: (@Composable () -> Unit)? = null,
+    // Pointer platforms show each account's refresh and menu only while it is hovered in the
+    // denser layouts. Touch platforms keep them visible.
+    revealActionsOnHover: Boolean = false,
 ) {
     val themeMode by preferences.themeMode.collectAsState()
     val systemDark = rememberSystemDarkTheme()
@@ -182,7 +196,7 @@ fun App(
         if (manageBackgroundEffects) {
             QuotaDogBackgroundEffects(store = store, preferences = preferences, cloudSync = cloudSync)
         }
-        QuotaDogScreen(store, preferences, cloudSync, versionLabel, updatesContent)
+        QuotaDogScreen(store, preferences, cloudSync, versionLabel, updatesContent, revealActionsOnHover)
     }
 }
 
@@ -242,6 +256,7 @@ private fun QuotaDogScreen(
     cloudSync: CloudSyncCoordinator,
     versionLabel: String,
     updatesContent: (@Composable () -> Unit)?,
+    revealActionsOnHover: Boolean,
 ) {
     val state by store.state.collectAsState()
     val themeMode by preferences.themeMode.collectAsState()
@@ -250,6 +265,7 @@ private fun QuotaDogScreen(
     val showProjectedUsage by preferences.showProjectedUsage.collectAsState()
     val sinkExhaustedAccounts by preferences.sinkExhaustedAccounts.collectAsState()
     val emailPrivacyMode by preferences.emailPrivacyMode.collectAsState()
+    val dashboardLayout by preferences.dashboardLayout.collectAsState()
     val accountSortMode by preferences.accountSortMode.collectAsState()
     val accountSortReversed by preferences.accountSortReversed.collectAsState()
     val accountManualOrder by preferences.accountManualOrder.collectAsState()
@@ -412,6 +428,8 @@ private fun QuotaDogScreen(
                 AccountCards(
                     accounts = visibleAccounts,
                     isDesktop = isDesktop,
+                    layout = dashboardLayout,
+                    revealActionsOnHover = revealActionsOnHover,
                     manualReorder = manualReorderEditing,
                     usageDisplayMode = usageDisplayMode,
                     showProjectedUsage = showProjectedUsage,
@@ -619,6 +637,15 @@ private fun QuotaDogScreen(
                 preferences.setThemeMode(it)
                 cloudSync.startPushLocalChanges()
                 snackbar.show("Theme set to ${it.name.lowercase()}")
+            },
+            dashboardLayout = dashboardLayout,
+            onDashboardLayoutChange = {
+                preferences.setDashboardLayout(it)
+                cloudSync.startPushLocalChanges()
+                snackbar.show(
+                    text = "Layout set to ${it.label.lowercase()}",
+                    tone = QdSnackbarTone.Success,
+                )
             },
             usageDisplayMode = usageDisplayMode,
             onUsageDisplayModeChange = {
@@ -1102,6 +1129,8 @@ private fun sortChangeLabel(mode: AccountSortMode, reversed: Boolean): String = 
 private fun AccountCards(
     accounts: List<AccountUiState>,
     isDesktop: Boolean,
+    layout: DashboardLayout,
+    revealActionsOnHover: Boolean,
     manualReorder: Boolean,
     usageDisplayMode: UsageDisplayMode,
     showProjectedUsage: Boolean,
@@ -1117,53 +1146,93 @@ private fun AccountCards(
     onMove: (AccountKey, Int, Boolean) -> Unit,
     onMoveFinished: () -> Unit,
 ) {
+    val colors = QdTheme.colors
     val spacing = QdTheme.spacing
     val dragState = rememberAccountReorderDragState()
     val visibleKeys = accounts.map { it.accountKey }
+    // Accounts the user opened or closed by hand in a layout that folds them.
+    val expandedAccounts = remember { mutableStateMapOf<AccountKey, Boolean>() }
+    // One line separates rows with a 1 dp rule instead of a gap.
+    val itemSpacing = if (layout == DashboardLayout.OneLine) 1.dp else spacing.md
 
     @Composable
-    fun cardAt(index: Int, providerState: AccountUiState, modifier: Modifier) {
+    fun cardAt(index: Int, providerState: AccountUiState, inline: Boolean, modifier: Modifier) {
+        val accountKey = providerState.accountKey
         val reorder = if (manualReorder) {
             AccountReorderControls(
                 canMoveUp = index > 0,
                 canMoveDown = index < accounts.lastIndex,
                 handleModifier = Modifier.accountDragHandle(
-                    accountKey = providerState.accountKey,
+                    accountKey = accountKey,
                     dragState = dragState,
                     visibleKeys = visibleKeys,
-                    itemSpacing = spacing.md,
+                    itemSpacing = itemSpacing,
                     onMove = { key, delta -> onMove(key, delta, false) },
                     onDragFinished = onMoveFinished,
                 ),
-                onMoveUp = { onMove(providerState.accountKey, -1, true) },
-                onMoveDown = { onMove(providerState.accountKey, 1, true) },
+                onMoveUp = { onMove(accountKey, -1, true) },
+                onMoveDown = { onMove(accountKey, 1, true) },
             )
         } else {
             null
         }
         val cardModifier = if (manualReorder) {
             modifier
-                .reportAccountReorderHeight(providerState.accountKey, dragState)
-                .accountReorderVisual(providerState.accountKey, dragState)
+                .reportAccountReorderHeight(accountKey, dragState)
+                .accountReorderVisual(accountKey, dragState)
         } else {
             modifier
         }
         AccountCard(
             state = providerState,
+            layout = layout,
+            inline = inline,
+            expanded = expandedAccounts[accountKey] == true,
+            onToggleExpanded = { expandedAccounts[accountKey] = expandedAccounts[accountKey] != true },
+            revealActionsOnHover = revealActionsOnHover,
             usageDisplayMode = usageDisplayMode,
             showProjectedUsage = showProjectedUsage,
             sinkExhaustedAccounts = sinkExhaustedAccounts,
             emailPrivacyMode = emailPrivacyMode,
-            callbackInput = callbackInput(providerState.accountKey),
-            onCallbackChange = { onCallbackChange(providerState.accountKey, it) },
-            onCompleteLogin = { onCompleteLogin(providerState.accountKey) },
-            onReopenLogin = { onReopenLogin(providerState.accountKey) },
+            callbackInput = callbackInput(accountKey),
+            onCallbackChange = { onCallbackChange(accountKey, it) },
+            onCompleteLogin = { onCompleteLogin(accountKey) },
+            onReopenLogin = { onReopenLogin(accountKey) },
             onSignInAgain = { onSignInAgain(providerState.providerId) },
             onRefresh = { onRefresh(providerState) },
-            onRequestDelete = { onRequestDelete(providerState.accountKey) },
+            onRequestDelete = { onRequestDelete(accountKey) },
             reorder = reorder,
             modifier = cardModifier,
         )
+    }
+
+    // One line is a single list at every width; spent accounts already sit at its end.
+    if (layout == DashboardLayout.OneLine) {
+        BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+            val inline = maxWidth >= LineInlineMinWidth
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(QdTheme.shapes.md)
+                    .background(colors.backgroundElevated)
+                    .border(1.dp, colors.border, QdTheme.shapes.md),
+            ) {
+                accounts.forEachIndexed { index, providerState ->
+                    key(providerState.accountKey) {
+                        if (index > 0) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(1.dp)
+                                    .background(colors.border),
+                            )
+                        }
+                        cardAt(index, providerState, inline, Modifier.fillMaxWidth())
+                    }
+                }
+            }
+        }
+        return
     }
 
     // Manual order is a single column so up, down, and drag all move along one axis.
@@ -1171,7 +1240,7 @@ private fun AccountCards(
         Column(verticalArrangement = Arrangement.spacedBy(spacing.md)) {
             accounts.forEachIndexed { index, providerState ->
                 key(providerState.accountKey) {
-                    cardAt(index, providerState, Modifier.fillMaxWidth())
+                    cardAt(index, providerState, false, Modifier.fillMaxWidth())
                 }
             }
         }
@@ -1189,24 +1258,50 @@ private fun AccountCards(
 
     Column(verticalArrangement = Arrangement.spacedBy(spacing.md)) {
         listOf(0 to usableAccounts, usableAccounts.size to spentAccounts).forEach { (offset, group) ->
-            group.chunked(2).forEachIndexed { rowIndex, rowAccounts ->
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(IntrinsicSize.Min),
-                    horizontalArrangement = Arrangement.spacedBy(spacing.md),
-                ) {
-                    rowAccounts.forEachIndexed { columnIndex, providerState ->
-                        key(providerState.accountKey) {
-                            cardAt(
-                                offset + rowIndex * 2 + columnIndex,
-                                providerState,
-                                Modifier.weight(1f).fillMaxHeight(),
-                            )
+            if (group.isEmpty()) return@forEach
+            if (layout == DashboardLayout.Cards) {
+                group.chunked(2).forEachIndexed { rowIndex, rowAccounts ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(IntrinsicSize.Min),
+                        horizontalArrangement = Arrangement.spacedBy(spacing.md),
+                    ) {
+                        rowAccounts.forEachIndexed { columnIndex, providerState ->
+                            key(providerState.accountKey) {
+                                cardAt(
+                                    offset + rowIndex * 2 + columnIndex,
+                                    providerState,
+                                    false,
+                                    Modifier.weight(1f).fillMaxHeight(),
+                                )
+                            }
+                        }
+                        if (rowAccounts.size == 1) {
+                            Box(modifier = Modifier.weight(1f))
                         }
                     }
-                    if (rowAccounts.size == 1) {
-                        Box(modifier = Modifier.weight(1f))
+                }
+            } else {
+                // Compact cards fill two columns on their own, so a short card leaves no gap.
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(spacing.md),
+                    verticalAlignment = Alignment.Top,
+                ) {
+                    for (column in 0..1) {
+                        Column(
+                            modifier = Modifier.weight(1f),
+                            verticalArrangement = Arrangement.spacedBy(spacing.md),
+                        ) {
+                            group.forEachIndexed { index, providerState ->
+                                if (index % 2 == column) {
+                                    key(providerState.accountKey) {
+                                        cardAt(offset + index, providerState, false, Modifier.fillMaxWidth())
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -1224,9 +1319,61 @@ private data class AccountReorderControls(
 
 private const val EXHAUSTED_ACCOUNT_ALPHA = 0.5f
 
+/** A window with at least this much left reads as untouched: gray in compact rows, folded in Fold full. */
+internal const val QUIET_REMAINING_RATIO = 0.9
+
+internal val CompactActionSize = 24.dp
+private val CompactBarWidth = 96.dp
+private val CompactPercentWidth = 70.dp
+private val CompactResetWidth = 52.dp
+private val FoldToggleWidth = 40.dp
+private val LineIdentityWidth = 190.dp
+private val LineLabelWidth = 160.dp
+
+/** Below this width, One line rows show the tightest window on a second line. */
+private val LineInlineMinWidth = 820.dp
+
+/**
+ * Rows that [layout] hides behind an account's tightest window while the account is folded, or
+ * 0 when it always shows them. Fold full folds only accounts that look untouched everywhere.
+ * The dashboard and both desktop trays fold by this rule.
+ */
+internal fun foldableRowCount(layout: DashboardLayout, windows: List<UsageWindow>, hasResetSummary: Boolean): Int {
+    val hidden = windows.size - 1 + if (hasResetSummary) 1 else 0
+    val folds = when (layout) {
+        DashboardLayout.FoldFull -> windows.all { it.remainingRatio >= QUIET_REMAINING_RATIO }
+        DashboardLayout.OneLine -> true
+        DashboardLayout.Cards, DashboardLayout.Compact -> false
+    }
+    return if (folds && hidden > 0) hidden else 0
+}
+
+/** Clicking anywhere on a [foldable] account opens or closes it. */
+internal fun Modifier.foldToggle(foldable: Boolean, folded: Boolean, onToggle: () -> Unit): Modifier =
+    if (foldable) {
+        pointerHoverIcon(PointerIcon.Hand).clickable(
+            interactionSource = null,
+            indication = null,
+            onClickLabel = if (folded) "Show all windows" else "Hide windows",
+            role = Role.Button,
+            onClick = onToggle,
+        )
+    } else {
+        this
+    }
+
+/**
+ * One account in the chosen [layout]. [inline] puts One line's tightest window beside the
+ * account name. Fold full and One line show only the tightest window until [expanded].
+ */
 @Composable
 private fun AccountCard(
     state: AccountUiState,
+    layout: DashboardLayout,
+    inline: Boolean,
+    expanded: Boolean,
+    onToggleExpanded: () -> Unit,
+    revealActionsOnHover: Boolean,
     usageDisplayMode: UsageDisplayMode,
     showProjectedUsage: Boolean,
     sinkExhaustedAccounts: Boolean,
@@ -1242,200 +1389,575 @@ private fun AccountCard(
     modifier: Modifier = Modifier,
 ) {
     val colors = QdTheme.colors
-    val typo = QdTheme.typography
     val spacing = QdTheme.spacing
     var menuExpanded by remember { mutableStateOf(false) }
+    val hover = remember { MutableInteractionSource() }
+    val hovered by hover.collectIsHoveredAsState()
+    var focused by remember { mutableStateOf(false) }
 
-    QdCard(
-        modifier = modifier
-            .fillMaxWidth()
-            .alpha(if (sinkExhaustedAccounts && state.isQuotaExhausted()) EXHAUSTED_ACCOUNT_ALPHA else 1f),
-        padding = PaddingValues(spacing.md),
-        background = colors.backgroundElevated,
-    ) {
+    val windows = state.snapshot?.windows.orEmpty()
+    val resetSummary = state.snapshot?.codexResetSummary()
+    val hiddenCount = foldableRowCount(layout, windows, resetSummary != null)
+    val foldable = hiddenCount > 0
+    val folded = foldable && !expanded
+    val actionsVisible = !revealActionsOnHover || hovered || focused || menuExpanded || state.busy
+
+    val surfaceModifier = modifier
+        .fillMaxWidth()
+        .alpha(if (sinkExhaustedAccounts && state.isQuotaExhausted()) EXHAUSTED_ACCOUNT_ALPHA else 1f)
+        .hoverable(hover)
+        .onFocusChanged { focused = it.hasFocus }
+        .focusGroup()
+        .foldToggle(foldable, folded, onToggleExpanded)
+
+    val content: @Composable () -> Unit = {
         Column(verticalArrangement = Arrangement.spacedBy(spacing.sm)) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(spacing.sm),
-            ) {
-                QdProviderAvatar(state.providerId, size = 20.dp)
-
-                Column(
-                    modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(1.dp),
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(spacing.xs),
-                    ) {
-                        Text(
-                            state.providerId.displayName,
-                            style = typo.caption,
-                            color = colors.textTertiary,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f, fill = false),
-                        )
-                        state.snapshot?.displayPlanLabel()?.let { plan ->
-                            QdPlanLabel(plan)
-                        }
+            if (layout == DashboardLayout.Cards) {
+                AccountCardHeader(
+                    state = state,
+                    emailPrivacyMode = emailPrivacyMode,
+                    menuExpanded = menuExpanded,
+                    onMenuExpandedChange = { menuExpanded = it },
+                    onRefresh = onRefresh,
+                    onReopenLogin = onReopenLogin,
+                    onRequestDelete = onRequestDelete,
+                    reorder = reorder,
+                )
+                if (windows.isNotEmpty() || resetSummary != null) {
+                    Column(verticalArrangement = Arrangement.spacedBy(spacing.sm)) {
+                        windows.forEach { UsageWindowRow(it, usageDisplayMode, showProjectedUsage) }
+                        resetSummary?.let { CodexResetCreditsBlock(it) }
                     }
-                    AccountEmailTitle(state.accountSubtitle(), emailPrivacyMode)
-                }
-
-                QdIconButton(onClick = onRefresh, enabled = !state.busy, diameter = 28.dp) {
-                    val rotation = rememberRefreshRotation(active = state.busy)
-                    QdRefreshIcon(
-                        modifier = Modifier.rotate(rotation),
-                        tint = colors.textSecondary,
-                        size = 16.dp,
-                    )
-                }
-
-                Box {
-                    QdIconButton(onClick = { menuExpanded = true }, diameter = 28.dp) {
-                        QdMoreIcon(tint = colors.textSecondary, size = 16.dp)
-                    }
-                    DropdownMenu(
-                        expanded = menuExpanded,
-                        onDismissRequest = { menuExpanded = false },
-                    ) {
-                        if (state.loginStart != null || state.deviceLogin != null) {
-                            DropdownMenuItem(onClick = {
-                                menuExpanded = false
-                                onReopenLogin()
-                            }) {
-                                Text("Reopen authorization page", style = typo.bodyMedium)
-                            }
-                        }
-                        DropdownMenuItem(onClick = {
-                            menuExpanded = false
-                            onRequestDelete()
-                        }) {
-                            Text("Remove account", color = colors.danger, style = typo.bodyMedium)
-                        }
-                    }
-                }
-                if (reorder != null) {
-                    QdIconButton(
-                        onClick = reorder.onMoveUp,
-                        enabled = reorder.canMoveUp,
-                        diameter = 28.dp,
-                    ) {
-                        QdChevronUpIcon(
-                            tint = if (reorder.canMoveUp) colors.textSecondary else colors.textTertiary.copy(alpha = 0.35f),
-                            size = 16.dp,
-                        )
-                    }
-                    QdIconButton(
-                        onClick = reorder.onMoveDown,
-                        enabled = reorder.canMoveDown,
-                        diameter = 28.dp,
-                    ) {
-                        QdChevronDownIcon(
-                            tint = if (reorder.canMoveDown) colors.textSecondary else colors.textTertiary.copy(alpha = 0.35f),
-                            size = 16.dp,
-                        )
-                    }
-                    QdReorderHandle(modifier = reorder.handleModifier)
-                }
-            }
-
-            val windows = state.snapshot?.windows.orEmpty()
-            val resetSummary = state.snapshot?.codexResetSummary()
-            if (windows.isNotEmpty() || resetSummary != null) {
-                Column(verticalArrangement = Arrangement.spacedBy(spacing.sm)) {
-                    windows.forEach { UsageWindowRow(it, usageDisplayMode, showProjectedUsage) }
-                    resetSummary?.let { CodexResetCreditsBlock(it) }
+                } else {
+                    InlineStatus(state.emptyStatusText())
                 }
             } else {
-                val statusMessage = state.message?.takeIf { it.isNotBlank() }
-                InlineStatus(
-                    text = when {
-                        statusMessage != null -> statusMessage
-                        state.deviceLogin != null && state.busy ->
-                            "Approve access in the browser, then return here."
-                        state.deviceLogin != null ->
-                            "xAI sign-in is waiting. Reopen the authorization page or sign in again."
-                        state.loginStart == null ->
-                            "No usage data yet - tap refresh to fetch the latest."
-                        state.busy ->
-                            "Authorization page opened - waiting for the automatic callback."
-                        else ->
-                            "Automatic callback not received. Use the manual fallback below."
-                    },
-                )
-            }
-
-            state.deviceLogin?.let { device ->
-                Column(verticalArrangement = Arrangement.spacedBy(spacing.sm)) {
-                    Text(
-                        "Code ${device.userCode}",
-                        style = typo.titleMedium,
-                        color = colors.textPrimary,
+                val trailing: @Composable () -> Unit = {
+                    AccountTrailingControls(
+                        state = state,
+                        fold = if (foldable) FoldToggleUi(folded, hiddenCount) else null,
+                        reserveFoldSpace = layout == DashboardLayout.OneLine,
+                        actionsVisible = actionsVisible,
+                        menuExpanded = menuExpanded,
+                        onMenuExpandedChange = { menuExpanded = it },
+                        onRefresh = onRefresh,
+                        onReopenLogin = onReopenLogin,
+                        onRequestDelete = onRequestDelete,
+                        reorder = reorder,
                     )
-                    Text(
-                        device.authorizationUrl,
-                        style = typo.caption,
-                        color = colors.textTertiary,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
+                }
+                if (inline) {
+                    InlineLineAccount(
+                        state = state,
+                        windows = windows,
+                        resetSummary = resetSummary,
+                        folded = folded,
+                        usageDisplayMode = usageDisplayMode,
+                        showProjectedUsage = showProjectedUsage,
+                        emailPrivacyMode = emailPrivacyMode,
+                        trailing = trailing,
                     )
-                    if (!state.busy) {
-                        QdButton(
-                            text = "Open auth page",
-                            onClick = onReopenLogin,
-                            size = QdButtonSize.Small,
-                        )
-                    }
+                } else {
+                    AccountHeaderLine(state = state, emailPrivacyMode = emailPrivacyMode, trailing = trailing)
+                    CompactWindows(
+                        state = state,
+                        windows = windows,
+                        resetSummary = resetSummary,
+                        folded = folded,
+                        usageDisplayMode = usageDisplayMode,
+                        showProjectedUsage = showProjectedUsage,
+                    )
                 }
             }
-
-            state.loginStart?.let {
-                if (!state.busy) {
-                    Column(verticalArrangement = Arrangement.spacedBy(spacing.sm)) {
-                        OutlinedTextField(
-                            value = callbackInput,
-                            onValueChange = onCallbackChange,
-                            modifier = Modifier.fillMaxWidth(),
-                            label = { Text("Paste callback URL", style = typo.caption) },
-                            singleLine = true,
-                            shape = QdTheme.shapes.md,
-                            colors = TextFieldDefaults.outlinedTextFieldColors(
-                                focusedBorderColor = colors.primary,
-                                unfocusedBorderColor = colors.border,
-                                cursorColor = colors.primary,
-                                focusedLabelColor = colors.primary,
-                                unfocusedLabelColor = colors.textTertiary,
-                            ),
-                        )
-                        QdButton(
-                            text = "Finish sign-in",
-                            onClick = onCompleteLogin,
-                            size = QdButtonSize.Small,
-                        )
-                    }
-                }
-            }
-
-            AccountStatusRow(
+            AccountSignInDetails(
                 state = state,
+                callbackInput = callbackInput,
+                onCallbackChange = onCallbackChange,
+                onCompleteLogin = onCompleteLogin,
                 onReopenLogin = onReopenLogin,
                 onSignInAgain = onSignInAgain,
             )
         }
     }
+
+    when (layout) {
+        DashboardLayout.Cards -> QdCard(
+            modifier = surfaceModifier,
+            padding = PaddingValues(spacing.md),
+            background = colors.backgroundElevated,
+            content = content,
+        )
+        DashboardLayout.Compact, DashboardLayout.FoldFull -> QdCard(
+            modifier = surfaceModifier,
+            padding = PaddingValues(horizontal = spacing.md, vertical = spacing.sm),
+            background = colors.backgroundElevated,
+            content = content,
+        )
+        // Rows sit inside one bordered list; the background keeps a dragged row opaque.
+        DashboardLayout.OneLine -> Box(
+            modifier = surfaceModifier
+                .background(colors.backgroundElevated)
+                .padding(horizontal = spacing.md, vertical = spacing.xs),
+        ) {
+            content()
+        }
+    }
+}
+
+/** Two-line header of the Cards layout: provider and plan above the account email. */
+@Composable
+private fun AccountCardHeader(
+    state: AccountUiState,
+    emailPrivacyMode: EmailPrivacyMode,
+    menuExpanded: Boolean,
+    onMenuExpandedChange: (Boolean) -> Unit,
+    onRefresh: () -> Unit,
+    onReopenLogin: () -> Unit,
+    onRequestDelete: () -> Unit,
+    reorder: AccountReorderControls?,
+) {
+    val colors = QdTheme.colors
+    val typo = QdTheme.typography
+    val spacing = QdTheme.spacing
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(spacing.sm),
+    ) {
+        QdProviderAvatar(state.providerId, size = 20.dp)
+
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(1.dp),
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(spacing.xs),
+            ) {
+                Text(
+                    state.providerId.displayName,
+                    style = typo.caption,
+                    color = colors.textTertiary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+                state.snapshot?.displayPlanLabel()?.let { plan ->
+                    QdPlanLabel(plan)
+                }
+            }
+            AccountEmailTitle(state.accountSubtitle(), emailPrivacyMode)
+        }
+
+        AccountActionButtons(
+            state = state,
+            diameter = 28.dp,
+            iconSize = 16.dp,
+            menuExpanded = menuExpanded,
+            onMenuExpandedChange = onMenuExpandedChange,
+            onRefresh = onRefresh,
+            onReopenLogin = onReopenLogin,
+            onRequestDelete = onRequestDelete,
+        )
+        reorder?.let { AccountReorderButtons(it) }
+    }
+}
+
+/**
+ * One-line header of the denser layouts: provider, plan, and email, then optional [cells]
+ * and [trailing] controls. [identityWidth] lines up the emails of One line rows.
+ */
+@Composable
+internal fun AccountHeaderLine(
+    state: AccountUiState,
+    emailPrivacyMode: EmailPrivacyMode,
+    identityWidth: Dp? = null,
+    cells: (@Composable () -> Unit)? = null,
+    trailing: (@Composable () -> Unit)? = null,
+) {
+    val colors = QdTheme.colors
+    val typo = QdTheme.typography
+    val spacing = QdTheme.spacing
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = CompactActionSize),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(spacing.sm),
+    ) {
+        QdProviderAvatar(state.providerId, size = 16.dp)
+        // Only the account part is weighted, so on a narrow row the email and then the
+        // name give way before any cell or control is squeezed.
+        Row(
+            modifier = Modifier.weight(1f),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(spacing.sm),
+        ) {
+            Row(
+                modifier = if (identityWidth != null) Modifier.width(identityWidth) else Modifier,
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(spacing.sm),
+            ) {
+                Text(
+                    state.providerId.displayName,
+                    style = typo.labelLarge,
+                    color = colors.textPrimary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+                state.snapshot?.displayPlanLabel()?.let { plan ->
+                    QdPlanLabel(plan)
+                }
+            }
+            Box(modifier = Modifier.weight(1f)) {
+                AccountEmailTitle(
+                    state.accountSubtitle(),
+                    emailPrivacyMode,
+                    style = typo.bodyMedium,
+                    color = colors.textTertiary,
+                )
+            }
+        }
+        cells?.invoke()
+        trailing?.invoke()
+    }
+}
+
+/** One line on a wide window: the tightest window sits beside the account, the rest below it. */
+@Composable
+private fun InlineLineAccount(
+    state: AccountUiState,
+    windows: List<UsageWindow>,
+    resetSummary: CodexResetSummary?,
+    folded: Boolean,
+    usageDisplayMode: UsageDisplayMode,
+    showProjectedUsage: Boolean,
+    emailPrivacyMode: EmailPrivacyMode,
+    trailing: @Composable () -> Unit,
+) {
+    val spacing = QdTheme.spacing
+    val tightest = windows.tightestWindow()
+    Row(
+        verticalAlignment = Alignment.Top,
+        horizontalArrangement = Arrangement.spacedBy(spacing.sm),
+    ) {
+        // The trailing controls stay outside this column, so detail rows end where the
+        // tightest window ends and their columns line up with it.
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(spacing.xs),
+        ) {
+            AccountHeaderLine(
+                state = state,
+                emailPrivacyMode = emailPrivacyMode,
+                identityWidth = LineIdentityWidth,
+                cells = tightest?.let { window ->
+                    {
+                        CompactUsageWindowRow(
+                            window = window,
+                            displayMode = usageDisplayMode,
+                            showProjectedUsage = showProjectedUsage,
+                            label = windows.foldedLabel(window),
+                            labelWidth = LineLabelWidth,
+                        )
+                    }
+                },
+            )
+            if (windows.isEmpty() && resetSummary == null) {
+                InlineStatus(state.emptyStatusText())
+            } else if (!folded) {
+                val rest = if (tightest == null || windows.allShareTightest()) windows else windows - tightest
+                if (rest.isNotEmpty() || resetSummary != null) {
+                    val cellsWidth = LineLabelWidth + CompactBarWidth + CompactPercentWidth +
+                        CompactResetWidth + spacing.md * 3
+                    Row(modifier = Modifier.fillMaxWidth()) {
+                        Spacer(modifier = Modifier.weight(1f))
+                        Column(verticalArrangement = Arrangement.spacedBy(spacing.xs)) {
+                            rest.forEach { window ->
+                                CompactUsageWindowRow(
+                                    window = window,
+                                    displayMode = usageDisplayMode,
+                                    showProjectedUsage = showProjectedUsage,
+                                    labelWidth = LineLabelWidth,
+                                )
+                            }
+                            resetSummary?.let { summary ->
+                                Box(modifier = Modifier.width(cellsWidth)) { CodexResetCreditsBlock(summary) }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        trailing()
+    }
+}
+
+/** Window rows of Compact, Fold full, and narrow One line: one line each, or the tightest one when [folded]. */
+@Composable
+internal fun CompactWindows(
+    state: AccountUiState,
+    windows: List<UsageWindow>,
+    resetSummary: CodexResetSummary?,
+    folded: Boolean,
+    usageDisplayMode: UsageDisplayMode,
+    showProjectedUsage: Boolean,
+) {
+    if (windows.isEmpty() && resetSummary == null) {
+        InlineStatus(state.emptyStatusText())
+        return
+    }
+    val tightest = windows.tightestWindow()
+    Column(verticalArrangement = Arrangement.spacedBy(QdTheme.spacing.xs)) {
+        if (folded && tightest != null) {
+            CompactUsageWindowRow(
+                window = tightest,
+                displayMode = usageDisplayMode,
+                showProjectedUsage = showProjectedUsage,
+                label = windows.foldedLabel(tightest),
+            )
+        } else {
+            windows.forEach { CompactUsageWindowRow(it, usageDisplayMode, showProjectedUsage) }
+            resetSummary?.let { CodexResetCreditsBlock(it) }
+        }
+    }
+}
+
+internal class FoldToggleUi(val folded: Boolean, val hiddenCount: Int)
+
+/**
+ * "+N ˅" while [fold] hides rows, "˄" once the account is open. [reserveSpace] keeps the slot
+ * for an account that cannot fold, so One line rows stay aligned.
+ */
+@Composable
+internal fun FoldIndicator(fold: FoldToggleUi?, reserveSpace: Boolean) {
+    if (fold == null && !reserveSpace) return
+    val colors = QdTheme.colors
+    // The whole account toggles the fold; this only shows the state.
+    Row(
+        modifier = if (reserveSpace) Modifier.width(FoldToggleWidth) else Modifier,
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(QdTheme.spacing.xxs, Alignment.End),
+    ) {
+        if (fold != null) {
+            if (fold.folded) {
+                Text("+${fold.hiddenCount}", style = QdTheme.typography.numeric, color = colors.textTertiary, maxLines = 1)
+                QdChevronDownIcon(tint = colors.textTertiary, size = 14.dp)
+            } else {
+                QdChevronUpIcon(tint = colors.textTertiary, size = 14.dp)
+            }
+        }
+    }
+}
+
+/**
+ * Fold state, then refresh and menu (revealed on hover when asked). While rearranging, the
+ * move controls take their place, so a narrow row still has room for the account.
+ */
+@Composable
+private fun AccountTrailingControls(
+    state: AccountUiState,
+    fold: FoldToggleUi?,
+    reserveFoldSpace: Boolean,
+    actionsVisible: Boolean,
+    menuExpanded: Boolean,
+    onMenuExpandedChange: (Boolean) -> Unit,
+    onRefresh: () -> Unit,
+    onReopenLogin: () -> Unit,
+    onRequestDelete: () -> Unit,
+    reorder: AccountReorderControls?,
+) {
+    val spacing = QdTheme.spacing
+    Row(
+        modifier = Modifier.heightIn(min = CompactActionSize),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(spacing.sm),
+    ) {
+        if (reorder != null) {
+            AccountReorderButtons(reorder, compact = true)
+        } else {
+            FoldIndicator(fold, reserveFoldSpace)
+            Row(
+                modifier = Modifier.alpha(if (actionsVisible) 1f else 0f),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(spacing.xxs),
+            ) {
+                AccountActionButtons(
+                    state = state,
+                    diameter = CompactActionSize,
+                    iconSize = 14.dp,
+                    menuExpanded = menuExpanded,
+                    onMenuExpandedChange = onMenuExpandedChange,
+                    onRefresh = onRefresh,
+                    onReopenLogin = onReopenLogin,
+                    onRequestDelete = onRequestDelete,
+                )
+            }
+        }
+    }
 }
 
 @Composable
-private fun AccountEmailTitle(value: String, privacyMode: EmailPrivacyMode) {
+private fun AccountActionButtons(
+    state: AccountUiState,
+    diameter: Dp,
+    iconSize: Dp,
+    menuExpanded: Boolean,
+    onMenuExpandedChange: (Boolean) -> Unit,
+    onRefresh: () -> Unit,
+    onReopenLogin: () -> Unit,
+    onRequestDelete: () -> Unit,
+) {
     val colors = QdTheme.colors
     val typo = QdTheme.typography
+    QdIconButton(onClick = onRefresh, enabled = !state.busy, diameter = diameter) {
+        val rotation = rememberRefreshRotation(active = state.busy)
+        QdRefreshIcon(
+            modifier = Modifier.rotate(rotation),
+            tint = colors.textSecondary,
+            size = iconSize,
+        )
+    }
+
+    Box {
+        QdIconButton(onClick = { onMenuExpandedChange(true) }, diameter = diameter) {
+            QdMoreIcon(tint = colors.textSecondary, size = iconSize)
+        }
+        DropdownMenu(
+            expanded = menuExpanded,
+            onDismissRequest = { onMenuExpandedChange(false) },
+        ) {
+            if (state.loginStart != null || state.deviceLogin != null) {
+                DropdownMenuItem(onClick = {
+                    onMenuExpandedChange(false)
+                    onReopenLogin()
+                }) {
+                    Text("Reopen authorization page", style = typo.bodyMedium)
+                }
+            }
+            DropdownMenuItem(onClick = {
+                onMenuExpandedChange(false)
+                onRequestDelete()
+            }) {
+                Text("Remove account", color = colors.danger, style = typo.bodyMedium)
+            }
+        }
+    }
+}
+
+@Composable
+private fun AccountReorderButtons(reorder: AccountReorderControls, compact: Boolean = false) {
+    val colors = QdTheme.colors
+    val diameter = if (compact) CompactActionSize else 28.dp
+    val iconSize = if (compact) 14.dp else 16.dp
+    QdIconButton(
+        onClick = reorder.onMoveUp,
+        enabled = reorder.canMoveUp,
+        diameter = diameter,
+    ) {
+        QdChevronUpIcon(
+            tint = if (reorder.canMoveUp) colors.textSecondary else colors.textTertiary.copy(alpha = 0.35f),
+            size = iconSize,
+        )
+    }
+    QdIconButton(
+        onClick = reorder.onMoveDown,
+        enabled = reorder.canMoveDown,
+        diameter = diameter,
+    ) {
+        QdChevronDownIcon(
+            tint = if (reorder.canMoveDown) colors.textSecondary else colors.textTertiary.copy(alpha = 0.35f),
+            size = iconSize,
+        )
+    }
+    QdReorderHandle(modifier = reorder.handleModifier, size = if (compact) CompactActionSize else 32.dp)
+}
+
+/** Device-code and callback sign-in steps, then the account's status, the same in every layout. */
+@Composable
+private fun AccountSignInDetails(
+    state: AccountUiState,
+    callbackInput: String,
+    onCallbackChange: (String) -> Unit,
+    onCompleteLogin: () -> Unit,
+    onReopenLogin: () -> Unit,
+    onSignInAgain: () -> Unit,
+) {
+    val colors = QdTheme.colors
+    val typo = QdTheme.typography
+    val spacing = QdTheme.spacing
+
+    state.deviceLogin?.let { device ->
+        Column(verticalArrangement = Arrangement.spacedBy(spacing.sm)) {
+            Text(
+                "Code ${device.userCode}",
+                style = typo.titleMedium,
+                color = colors.textPrimary,
+            )
+            Text(
+                device.authorizationUrl,
+                style = typo.caption,
+                color = colors.textTertiary,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (!state.busy) {
+                QdButton(
+                    text = "Open auth page",
+                    onClick = onReopenLogin,
+                    size = QdButtonSize.Small,
+                )
+            }
+        }
+    }
+
+    state.loginStart?.let {
+        if (!state.busy) {
+            Column(verticalArrangement = Arrangement.spacedBy(spacing.sm)) {
+                OutlinedTextField(
+                    value = callbackInput,
+                    onValueChange = onCallbackChange,
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Paste callback URL", style = typo.caption) },
+                    singleLine = true,
+                    shape = QdTheme.shapes.md,
+                    colors = TextFieldDefaults.outlinedTextFieldColors(
+                        focusedBorderColor = colors.primary,
+                        unfocusedBorderColor = colors.border,
+                        cursorColor = colors.primary,
+                        focusedLabelColor = colors.primary,
+                        unfocusedLabelColor = colors.textTertiary,
+                    ),
+                )
+                QdButton(
+                    text = "Finish sign-in",
+                    onClick = onCompleteLogin,
+                    size = QdButtonSize.Small,
+                )
+            }
+        }
+    }
+
+    AccountStatusRow(
+        state = state,
+        onReopenLogin = onReopenLogin,
+        onSignInAgain = onSignInAgain,
+    )
+}
+
+@Composable
+private fun AccountEmailTitle(
+    value: String,
+    privacyMode: EmailPrivacyMode,
+    style: TextStyle = QdTheme.typography.titleMedium,
+    color: Color = QdTheme.colors.textPrimary,
+) {
+    val colors = QdTheme.colors
     if (privacyMode == EmailPrivacyMode.Visible || !value.canMaskEmail()) {
         Text(
             value,
-            style = typo.titleMedium,
-            color = colors.textPrimary,
+            style = style,
+            color = color,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
@@ -1446,8 +1968,8 @@ private fun AccountEmailTitle(value: String, privacyMode: EmailPrivacyMode) {
     Box(modifier = Modifier.clipToBounds()) {
         Text(
             value,
-            style = typo.titleMedium,
-            color = colors.textPrimary,
+            style = style,
+            color = color,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
@@ -1563,6 +2085,83 @@ private fun UsageWindowRow(window: UsageWindow, displayMode: UsageDisplayMode, s
             progress = progress.toFloat(),
             fill = progressFill,
         )
+    }
+}
+
+/**
+ * One line per window for the denser layouts: label, a short bar, the value, and the reset.
+ * [labelWidth] fixes the label column so One line rows line up; otherwise it takes the slack.
+ */
+@Composable
+private fun CompactUsageWindowRow(
+    window: UsageWindow,
+    displayMode: UsageDisplayMode,
+    showProjectedUsage: Boolean,
+    label: String = window.infoLabel(),
+    labelWidth: Dp? = null,
+) {
+    val colors = QdTheme.colors
+    val typo = QdTheme.typography
+    val progress = window.displayRatio(displayMode)
+    val pct = (progress * 100).toInt()
+    val projectedPct = if (showProjectedUsage) {
+        window.projectedUsedRatio()?.let { (it * 100).toInt() }
+    } else {
+        null
+    }
+    val quiet = window.remainingRatio >= QUIET_REMAINING_RATIO
+    Row(
+        modifier = if (labelWidth == null) Modifier.fillMaxWidth() else Modifier,
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(QdTheme.spacing.md),
+    ) {
+        Row(
+            modifier = if (labelWidth == null) Modifier.weight(1f) else Modifier.width(labelWidth),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                label,
+                style = typo.caption,
+                color = colors.textSecondary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false),
+            )
+            if (projectedPct != null) {
+                Text(
+                    " est $projectedPct%",
+                    style = typo.numeric,
+                    color = colors.textTertiary,
+                    maxLines = 1,
+                )
+            }
+        }
+        QdProgressBar(
+            progress = progress.toFloat(),
+            modifier = Modifier.width(CompactBarWidth),
+            fill = window.progressFill(displayMode),
+        )
+        Text(
+            when (displayMode) {
+                UsageDisplayMode.Used -> "$pct% used"
+                UsageDisplayMode.Remaining -> "$pct% left"
+            },
+            style = typo.numeric.copy(fontWeight = if (quiet) FontWeight.Medium else FontWeight.SemiBold),
+            color = window.compactValueColor(displayMode),
+            maxLines = 1,
+            textAlign = TextAlign.End,
+            modifier = Modifier.width(CompactPercentWidth),
+        )
+        QdTimestamp(window.resetsAt) {
+            Text(
+                if (window.resetsAt == null) "" else window.remainingTime(),
+                style = typo.numeric,
+                color = colors.textTertiary,
+                maxLines = 1,
+                textAlign = TextAlign.End,
+                modifier = Modifier.width(CompactResetWidth),
+            )
+        }
     }
 }
 
@@ -2035,17 +2634,64 @@ private fun UsageWindow.displayRatio(mode: UsageDisplayMode): Double = when (mod
     UsageDisplayMode.Remaining -> remainingRatio
 }
 
+private fun UsageWindow.riskRatio(mode: UsageDisplayMode): Double = when (mode) {
+    UsageDisplayMode.Used -> usedRatio
+    UsageDisplayMode.Remaining -> 1.0 - remainingRatio
+}
+
 @Composable
 private fun UsageWindow.progressFill(mode: UsageDisplayMode): Color {
     val colors = QdTheme.colors
-    val riskRatio = when (mode) {
-        UsageDisplayMode.Used -> usedRatio
-        UsageDisplayMode.Remaining -> 1.0 - remainingRatio
-    }
+    val riskRatio = riskRatio(mode)
     return when {
         riskRatio >= 0.9 -> colors.danger
         riskRatio >= 0.7 -> colors.warning
         else -> colors.meter
+    }
+}
+
+/** Value color in compact rows: warnings as on the bar, gray when nearly untouched, bright otherwise. */
+@Composable
+private fun UsageWindow.compactValueColor(mode: UsageDisplayMode): Color {
+    val colors = QdTheme.colors
+    val riskRatio = riskRatio(mode)
+    return when {
+        riskRatio >= 0.9 -> colors.danger
+        riskRatio >= 0.7 -> colors.warning
+        remainingRatio >= QUIET_REMAINING_RATIO -> colors.textTertiary
+        else -> colors.textPrimary
+    }
+}
+
+private fun UsageWindow.remainingPercent(): Int = (remainingRatio * 100).toInt()
+
+/** The window with the least left, and of those the one that resets first. */
+internal fun List<UsageWindow>.tightestWindow(): UsageWindow? = minWithOrNull(
+    compareBy<UsageWindow> { it.remainingPercent() }.thenBy { it.resetsAt ?: Instant.DISTANT_FUTURE },
+)
+
+internal fun List<UsageWindow>.allShareTightest(): Boolean =
+    size > 1 && all { it.remainingPercent() == first().remainingPercent() }
+
+/** Label of a folded account's only row; equal windows read as one. */
+internal fun List<UsageWindow>.foldedLabel(tightest: UsageWindow): String =
+    if (allShareTightest()) "All $size windows" else tightest.infoLabel()
+
+/** What an account without usage windows shows in their place. */
+private fun AccountUiState.emptyStatusText(): String {
+    val statusMessage = message?.takeIf { it.isNotBlank() }
+    return when {
+        statusMessage != null -> statusMessage
+        deviceLogin != null && busy ->
+            "Approve access in the browser, then return here."
+        deviceLogin != null ->
+            "xAI sign-in is waiting. Reopen the authorization page or sign in again."
+        loginStart == null ->
+            "No usage data yet - tap refresh to fetch the latest."
+        busy ->
+            "Authorization page opened - waiting for the automatic callback."
+        else ->
+            "Automatic callback not received. Use the manual fallback below."
     }
 }
 
@@ -2062,7 +2708,7 @@ private fun UsageWindow.infoLabel(): String = when (id) {
     else -> label
 }
 
-private fun UsageWindow.remainingTime(): String {
+internal fun UsageWindow.remainingTime(): String {
     val resetAtMillis = resetsAt?.toEpochMilliseconds() ?: return "-"
     val remainingMillis = (resetAtMillis - Clock.System.now().toEpochMilliseconds()).coerceAtLeast(0)
     return remainingMillis.formatCompactDuration()
