@@ -13,12 +13,13 @@ import java.net.URI
 import kotlin.test.assertEquals
 import kotlin.test.assertNotEquals
 
-/** Requires the local relay, counted Devin fixture and dedicated Android AVD (scripts/host-sync/local-e2e.sh). */
+/** Runs the same authorization and refresh contract through either mobile app's real UI. */
 class LocalHostFlowTest {
     @get:Rule val desktop = createComposeRule()
 
-    @Test fun androidUsesOnlyTheAuthorizedDesktopSource() {
-        assumeTrue(System.getenv("QD_TEST_SERIAL") != null)
+    @Test fun phoneUsesOnlyTheAuthorizedDesktopSource() {
+        val iphone = System.getenv("QD_IOS_SIM") != null
+        assumeTrue(iphone || System.getenv("QD_TEST_SERIAL") != null)
         val profile = File(System.getenv("QD_LOCAL_PROFILE"))
         val f = LocalHost(profile)
         val qr = profile.resolve("invitation.png")
@@ -84,9 +85,13 @@ class LocalHostFlowTest {
             assertNotEquals(collected, phone("collected")); assertEquals("4", upstream("count"))
             record("Interrupted after upstream accepted request #4. Phone restart retained 38%; reconnect delivered 53% without a 5th call or another QR.")
 
-            // The forwarded socket stays routable. Only Android's default-network change tells
-            // a foreground app to retire it. A changed grant distinguishes resync from stale UI.
-            try {
+            if (iphone) {
+                phone("background"); click("View only"); phone("foreground")
+                phone("expect", "Computer connected", "View only", "53% used"); phone("absent", "Refresh on computer")
+                assertEquals("4", upstream("count"))
+                record("iPhone returned from background with the new view-only grant and no repeated query.")
+            } else try {
+                // The forwarded socket stays routable; only Android's default network change retires it.
                 phone("network", "offline"); phone("expect", "Computer unavailable", "53% used")
                 click("View only"); phone("network", "cellular")
                 phone("expect", "Computer connected", "View only", "53% used"); phone("absent", "Refresh on computer")

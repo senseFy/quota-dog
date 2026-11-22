@@ -134,11 +134,9 @@ kotlin {
         androidMain.dependencies {
             implementation(libs.androidx.activity.compose)
         }
-        androidMain.get().kotlin.srcDir("src/hostSyncUi/kotlin")
         val desktopMain by getting {
             resources.srcDir(macStatusBarResourcesDir)
             resources.srcDir(desktopBuildProperties)
-            kotlin.srcDir("src/hostSyncUi/kotlin")
             if (hostSyncVariant.isNotEmpty()) {
                 kotlin.srcDir("src/hostSyncDesktop/kotlin")
                 dependencies {

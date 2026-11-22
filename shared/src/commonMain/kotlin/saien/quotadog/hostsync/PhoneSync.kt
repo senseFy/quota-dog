@@ -5,9 +5,10 @@ import io.ktor.websocket.Frame
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.io.IOException
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
-import java.io.IOException
+import kotlin.random.Random
 
 /** An outer 403 is an admission failure, not an authenticated instruction to erase a cache. */
 class RelayTicketRejected : IOException()
@@ -45,19 +46,27 @@ class PhoneSync(private val client: HttpClient, private val identity: DeviceIden
             reconnect() // A newer network or a pause can arrive during cancellation; use the latest.
         }
     } }
-    fun forget() { scope.launch {
-        running?.cancelAndJoin(); running = null; save(null); ui.value = PhoneState(note = "Computer disconnected")
-    } }
+    private suspend fun clearPairing(note: String): Boolean {
+        running?.cancelAndJoin(); running = null
+        try { save(null) } catch (_: Exception) {
+            ui.value = ui.value.copy(online = false, busy = false, note = "Could not remove pairing. Unlock the phone and retry.")
+            return false
+        }
+        ui.value = PhoneState(note = note)
+        return true
+    }
+    fun forget() { scope.launch { clearPairing("Computer disconnected") } }
     fun cancelPairing() { scope.launch {
         if (saved?.confirmed == true) return@launch
-        running?.cancelAndJoin(); running = null; save(null); ui.value = PhoneState()
+        clearPairing("Connect your computer")
     } }
     fun pair(qr: String) { scope.launch {
-        if (network == null || saved?.confirmed == true || (saved == null && running?.isActive == true)) return@launch
+        if (saved?.confirmed == true || (saved == null && running?.isActive == true)) return@launch
+        if (network == null) { ui.value = PhoneState(note = "Connect to a network and scan again"); return@launch }
         val invite = Invite.parse(qr)
         if (invite == null) { ui.value = PhoneState(note = "Not a QuotaDog pairing QR"); return@launch }
         if (saved != null) {
-            running?.cancelAndJoin(); save(null) // A new scan can replace an unfinished ticket.
+            if (!clearPairing("Connect your computer")) return@launch // Replace an unfinished ticket.
             if (network == null) { ui.value = PhoneState(note = "Connect to a network and scan again"); return@launch }
         }
         running = scope.launch {
@@ -87,7 +96,7 @@ class PhoneSync(private val client: HttpClient, private val identity: DeviceIden
                 }
                 if (saved == null) break
                 disconnected()
-                delay(wait + random.nextInt(400)); wait = (wait * 2).coerceAtMost(60_000)
+                delay(wait + Random.nextInt(400)); wait = (wait * 2).coerceAtMost(60_000)
             }
         }
     }

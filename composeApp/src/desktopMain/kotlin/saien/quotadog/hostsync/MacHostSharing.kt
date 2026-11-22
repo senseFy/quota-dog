@@ -90,7 +90,7 @@ internal fun HostSharingCard(s: HostState, sources: Map<AccountKey, String>, hos
             Hint(issue ?: when {
                 s.saveFailed -> "Sharing is paused. Unlock your Mac keychain and retry to save the change."
                 !s.enabled && s.phones.isNotEmpty() -> "Host paused. You can change access or revoke a phone without reconnecting."
-                !s.enabled -> "Pair an Android phone to see your Devin quota. Nothing is shared until you choose an account."
+                !s.enabled -> "Pair your iPhone or Android phone to see your Devin quota. Nothing is shared until you choose an account."
                 s.online -> "$hostSyncLabel relay connected · Devices verify each other directly."
                 else -> "Connecting to the relay…"
             })
@@ -110,7 +110,7 @@ internal fun HostSharingCard(s: HostState, sources: Map<AccountKey, String>, hos
                     for (y in 0 until matrix.height) for (x in 0 until matrix.width) if (matrix[x,y])
                         drawRect(Color.Black, Offset((inset + x * unit).toFloat(), (inset + y * unit).toFloat()), Size(unit.toFloat(), unit.toFloat()))
                 }
-                Hint("On Android, open Add account → Connect my computer. Scan within 5 minutes.")
+                Hint("On your phone, open Add account → Connect my computer. Scan within 5 minutes.")
                 QdButton("Cancel invitation", { host?.cancelInvite() }, variant = QdButtonVariant.Ghost)
             }
             s.digits?.let { digits ->

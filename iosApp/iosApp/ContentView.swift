@@ -18,13 +18,21 @@ struct ContentView: View {
 }
 
 private struct ComposeContainer: UIViewControllerRepresentable {
+    func makeCoordinator() -> HostSyncPlatform { HostSyncPlatform() }
+
     func makeUIViewController(context: Context) -> UIViewController {
         NativeOAuthHandlerRegistry.registerIfNeeded()
         AppearanceHandlerRegistry.registerIfNeeded()
-        return MainViewControllerKt.MainViewController()
+        let controller = MainViewControllerKt.MainViewController(platform: context.coordinator)
+        context.coordinator.presenter = controller
+        return controller
     }
 
     func updateUIViewController(_ uiViewController: UIViewController, context: Context) {
+    }
+
+    static func dismantleUIViewController(_ uiViewController: UIViewController, coordinator: HostSyncPlatform) {
+        coordinator.detach()
     }
 }
 

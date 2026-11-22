@@ -10,16 +10,17 @@ import androidx.compose.ui.unit.dp
 import kotlinx.datetime.Instant
 import saien.quotadog.AppPreferences
 import saien.quotadog.ProviderId
+import saien.quotadog.QuotaDogStore
 import saien.quotadog.UsageDisplayMode
 import saien.quotadog.app.App
 import saien.quotadog.app.components.*
 import saien.quotadog.app.theme.QdTheme
 import saien.quotadog.exactLocalTimeLabel
-import java.util.Locale
+import saien.quotadog.formatDevinDollars
 import kotlin.math.roundToInt
 
 @Composable
-fun PhoneDashboard(phone: PhoneSync?, onScan: () -> Unit, onOpenImage: () -> Unit, version: String) {
+fun PhoneDashboard(phone: PhoneSync?, onScan: () -> Unit, onOpenImage: () -> Unit, version: String, store: QuotaDogStore? = null) {
     val prefs = remember { AppPreferences() }
     val mode by prefs.usageDisplayMode.collectAsState()
     val s = phone?.state?.collectAsState()?.value
@@ -29,7 +30,7 @@ fun PhoneDashboard(phone: PhoneSync?, onScan: () -> Unit, onOpenImage: () -> Uni
     var pairing by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(s?.paired) { if (s?.paired == true) pairing = false }
     val showConnection = pilot || pairing || digits != null || s?.paired == true
-    App(preferences = prefs, versionLabel = if (pilot) "$hostSyncLabel host-sync build" else version,
+    App(store = store, preferences = prefs, versionLabel = if (pilot) "$hostSyncLabel host-sync build" else version,
         showLocalEmptyState = if (pilot) s?.card == null else !showConnection,
         onConnectComputer = if (!pilot && s?.paired != true) ({ pairing = true }) else null,
         hostSyncContent = panel@{
@@ -87,7 +88,7 @@ fun PhoneDashboard(phone: PhoneSync?, onScan: () -> Unit, onOpenImage: () -> Uni
                             QdProgressBar(ratio.toFloat())
                             period.resetsAt?.let { Hint("Resets ${Instant.fromEpochMilliseconds(it).exactLocalTimeLabel().substringBefore('\n')}") }
                         }
-                        value.extraUsd?.let { Hint("Extra balance · USD ${String.format(Locale.ROOT, "%.2f", it)}") }
+                        value.extraUsd?.let { Hint("Extra balance · ${formatDevinDollars(it, "USD ")}") }
                         val timestamp = Instant.fromEpochMilliseconds(value.collectedAt).exactLocalTimeLabel().substringBefore('\n')
                         Hint("Collected · $timestamp")
                     }

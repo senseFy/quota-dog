@@ -7,6 +7,7 @@ plugins {
 }
 
 val hostSyncVariant = rootProject.extra["hostSyncVariant"] as String
+val hostSyncNative = rootProject.file("native/host-sync")
 
 kotlin {
     jvmToolchain(21)
@@ -31,6 +32,22 @@ kotlin {
         iosArm64(),
         iosSimulatorArm64()
     ).forEach { target ->
+        val slice = target.name
+        val out = hostSyncNative.resolve("build/$slice")
+        val buildTls = tasks.register<Exec>("buildHostTls${slice.replaceFirstChar { it.uppercase() }}") {
+            workingDir(hostSyncNative)
+            commandLine("bash", "build-local.sh", slice)
+            inputs.files(fileTree(hostSyncNative) { include("Cargo.*", "src/**", "include/**", "build-local.sh") })
+            outputs.file(out.resolve("libquotadog_host_tls.a"))
+        }
+        val interop = target.compilations.getByName("main").cinterops.create("hostTls") {
+            includeDirs(hostSyncNative.resolve("include"))
+            extraOpts("-libraryPath", out.absolutePath, "-staticLibrary", "libquotadog_host_tls.a")
+        }
+        tasks.named(interop.interopProcessingTaskName) {
+            dependsOn(buildTls)
+            inputs.file(out.resolve("libquotadog_host_tls.a"))
+        }
         target.binaries.framework {
             baseName = "Shared"
             isStatic = true
@@ -63,8 +80,9 @@ kotlin {
             }
         }
         val relay = hostSyncVariant.ifEmpty { "hostSyncProduction" }
+        commonMain.get().kotlin.srcDir("src/$relay/kotlin")
         listOf(androidMain.get(), desktopMain).forEach {
-            it.kotlin.srcDirs("src/hostSyncJvm/kotlin", "src/$relay/kotlin")
+            it.kotlin.srcDir("src/hostSyncJvm/kotlin")
         }
         if (hostSyncVariant == "hostSyncLocal") getByName("desktopTest").kotlin.srcDir("src/hostSyncTest/kotlin")
     }

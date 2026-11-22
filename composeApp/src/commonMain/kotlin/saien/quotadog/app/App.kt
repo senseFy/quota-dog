@@ -167,14 +167,7 @@ fun App(
             )
         )
     },
-    store: QuotaDogStore = remember {
-        QuotaDogStore(
-            client = QuotaDogClient(tokenStore = tokenStore),
-            usageSnapshotStore = usageSnapshotStore,
-            onLocalDataChanged = { cloudSync.startPushLocalChanges() },
-            onLocalAccountDeleted = { cloudSync.recordAccountDeleted(it) },
-        )
-    },
+    store: QuotaDogStore? = null,
     // Desktop tray keeps the process alive after the main window is hidden; host those
     // effects outside App so refresh/detect/sync session survive window teardown.
     manageBackgroundEffects: Boolean = true,
@@ -187,6 +180,14 @@ fun App(
     showLocalEmptyState: Boolean = true,
     onConnectComputer: (() -> Unit)? = null,
 ) {
+    val activeStore = store ?: remember {
+        QuotaDogStore(
+            client = QuotaDogClient(tokenStore = tokenStore),
+            usageSnapshotStore = usageSnapshotStore,
+            onLocalDataChanged = { cloudSync.startPushLocalChanges() },
+            onLocalAccountDeleted = { cloudSync.recordAccountDeleted(it) },
+        )
+    }
     val themeMode by preferences.themeMode.collectAsState()
     val systemDark = rememberSystemDarkTheme()
     val effectiveDark = when (themeMode) {
@@ -197,10 +198,10 @@ fun App(
     QuotaDogTheme(darkTheme = effectiveDark) {
         ApplyPlatformSystemBars(darkAppearance = effectiveDark)
         if (manageBackgroundEffects) {
-            QuotaDogBackgroundEffects(store = store, preferences = preferences, cloudSync = cloudSync)
+            QuotaDogBackgroundEffects(store = activeStore, preferences = preferences, cloudSync = cloudSync)
         }
         QuotaDogScreen(
-            store, preferences, cloudSync, versionLabel, platformSettings,
+            activeStore, preferences, cloudSync, versionLabel, platformSettings,
             revealActionsOnHover = revealActionsOnHover,
             hostSyncContent = hostSyncContent,
             showLocalEmptyState = showLocalEmptyState,

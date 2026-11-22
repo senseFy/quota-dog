@@ -1,0 +1,4 @@
+headers = qd_host_tls.h
+headerFilter = qd_host_tls.h
+package = saien.quotadog.hostsync.native
+linkerOpts = -framework Security -framework Foundation

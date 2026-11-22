@@ -2079,11 +2079,11 @@ private fun formatCursorSpend(usedCents: Int?, limitCents: Int?): String? {
     return "${formatCursorCents(usedCents)} / ${formatCursorCents(limitCents)} included"
 }
 
-private fun formatDevinDollars(dollars: Double): String {
+fun formatDevinDollars(dollars: Double, prefix: String = "$"): String {
     val cents = kotlin.math.round(dollars * 100).toLong()
     val whole = cents / 100
     val remainder = cents % 100
-    return "$$whole.${remainder.toString().padStart(2, '0')}"
+    return "$prefix$whole.${remainder.toString().padStart(2, '0')}"
 }
 
 private fun formatDroidCents(cents: Long): String {

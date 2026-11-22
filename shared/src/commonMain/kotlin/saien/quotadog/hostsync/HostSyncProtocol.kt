@@ -16,17 +16,13 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import saien.quotadog.ProviderId
 import saien.quotadog.ProviderUsageSnapshot
-import java.nio.ByteBuffer
-import java.security.KeyPair
-import java.security.MessageDigest
-import java.security.SecureRandom
-import java.security.Signature
+import saien.quotadog.secureRandomBytes
+import saien.quotadog.sha256
 
 // Each build has one origin. A QR or stored pairing can never redirect credentials.
 val hostSyncStaging = hostSyncLabel == "Staging"
-internal val random = SecureRandom()
-internal fun randomHex(bytes: Int) = ByteArray(bytes).also(random::nextBytes).toHexString()
-internal fun digest(bytes: ByteArray) = MessageDigest.getInstance("SHA-256").digest(bytes).toHexString()
+internal fun randomHex(bytes: Int) = secureRandomBytes(bytes).toHexString()
+internal fun digest(bytes: ByteArray) = sha256(bytes).toHexString()
 internal fun String.isHex(bytes: Int) = length == bytes * 2 && all { it in '0'..'9' || it in 'a'..'f' }
 
 interface SyncVault {
@@ -34,15 +30,10 @@ interface SyncVault {
     fun write(key: String, value: String?)
 }
 
-class DeviceIdentity(private val keys: KeyPair) {
-    val spki: ByteArray = keys.public.encoded
+class DeviceIdentity(val spki: ByteArray, private val signMessage: (ByteArray) -> ByteArray) {
     val pin: String = digest(spki)
-    // Called by rustls through JNI. Android's key is deliberately not exportable.
-    fun sign(message: ByteArray): ByteArray = Signature.getInstance("SHA256withECDSA").run {
-        initSign(keys.private)
-        update(message)
-        sign()
-    }
+    // rustls signs through the platform keystore; it never receives private key bytes.
+    fun sign(message: ByteArray): ByteArray = signMessage(message)
 }
 
 internal class Invite(val route: String, val pin: String, val secret: String) {
@@ -91,9 +82,8 @@ internal fun WebSocketSession.emit(frame: Frame) {
 // Development diagnostics are categories only: never print an exception message, URL, QR or frame.
 internal fun localFailure(stage: String, e: Exception) {
     if (hostSyncLabel == "QuotaDog") return
-    val frame = e.stackTrace.firstOrNull()
     val status = Regex("\\b(?:400|401|403|404|426|429|500|503)\\b").find(e.message.orEmpty())?.value ?: "-"
-    System.err.println("QuotaDog sync: $stage / ${e.javaClass.simpleName} / ${frame?.className}.${frame?.methodName}:${frame?.lineNumber} / $status")
+    println("QuotaDog sync: $stage / ${e::class.simpleName} / $status")
 }
 
 enum class Access { Off, View, Refresh }
@@ -129,32 +119,34 @@ internal fun ProviderUsageSnapshot.reading(): DevinReading? {
 }
 @Serializable internal enum class RefreshStatus { Updated, Denied, Failed, Busy }
 
-internal object NativeHostTls {
-    external fun open(server: Boolean, spki: ByteArray, signer: Any, peerPin: ByteArray?): Long
-    external fun receive(id: Long, ciphertext: ByteArray)
-    external fun send(id: Long, plaintext: ByteArray)
-    external fun outbound(id: Long): ByteArray
-    external fun plaintext(id: Long): ByteArray
-    external fun peerPin(id: Long): ByteArray?
-    external fun close(id: Long)
+internal expect class PlatformTls(server: Boolean, identity: DeviceIdentity, pin: ByteArray?) : AutoCloseable {
+    fun receive(bytes: ByteArray)
+    fun send(bytes: ByteArray)
+    fun outbound(): ByteArray
+    fun plaintext(): ByteArray
+    fun peerPin(): ByteArray?
+    override fun close()
 }
 
 /** TLS is a byte stream, independent of both record and WebSocket frame boundaries. */
 internal class SecureChannel(server: Boolean, identity: DeviceIdentity, pin: String?, private val emit: (ByteArray) -> Unit) : AutoCloseable {
-    private val handle = NativeHostTls.open(server, identity.spki, identity, pin?.hexToByteArray())
+    private val tls = PlatformTls(server, identity, pin?.hexToByteArray())
     private var buffered = byteArrayOf()
-    val peer get() = NativeHostTls.peerPin(handle)?.toHexString()
-    fun flush() { NativeHostTls.outbound(handle).takeIf { it.isNotEmpty() }?.let(emit) }
+    val peer get() = tls.peerPin()?.toHexString()
+    fun flush() {
+        while (true) emit(tls.outbound().takeIf { it.isNotEmpty() } ?: break)
+    }
     fun receive(bytes: ByteArray): List<Msg> {
         require(bytes.size in 1..65_536)
-        NativeHostTls.receive(handle, bytes)
+        tls.receive(bytes)
         flush()
         if (peer == null) return emptyList()
-        buffered += NativeHostTls.plaintext(handle)
+        while (true) buffered += tls.plaintext().takeIf { it.isNotEmpty() } ?: break
         return buildList {
             var pos = 0
             while (buffered.size - pos >= 4) {
-                val n = ByteBuffer.wrap(buffered, pos, 4).int
+                require(buffered[pos] == 0.toByte() && buffered[pos + 1] == 0.toByte())
+                val n = ((buffered[pos + 2].toInt() and 255) shl 8) or (buffered[pos + 3].toInt() and 255)
                 require(n in 1..16_384)
                 if (buffered.size - pos - 4 < n) break
                 add(Json.decodeFromString<Msg>(buffered.decodeToString(pos + 4, pos + 4 + n, throwOnInvalidSequence = true)))
@@ -167,8 +159,8 @@ internal class SecureChannel(server: Boolean, identity: DeviceIdentity, pin: Str
         check(peer != null)
         val data = Json.encodeToString<Msg>(msg).encodeToByteArray()
         require(data.size in 1..16_384)
-        NativeHostTls.send(handle, ByteBuffer.allocate(4 + data.size).putInt(data.size).put(data).array())
+        tls.send(byteArrayOf(0, 0, (data.size ushr 8).toByte(), data.size.toByte()) + data)
         flush()
     }
-    override fun close() = NativeHostTls.close(handle)
+    override fun close() = tls.close()
 }
