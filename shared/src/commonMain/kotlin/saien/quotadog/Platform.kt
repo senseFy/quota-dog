@@ -8,10 +8,17 @@ interface TokenStore {
     suspend fun load(accountKey: AccountKey): OAuthTokenBundle?
     suspend fun save(providerId: ProviderId, token: OAuthTokenBundle): AccountKey
     suspend fun save(accountKey: AccountKey, token: OAuthTokenBundle)
+    /** Atomically check the exact local login/credential revision before renewing it or publishing a reading. */
+    suspend fun commitIfCurrent(
+        accountKey: AccountKey,
+        expected: OAuthTokenBundle,
+        replacement: OAuthTokenBundle = expected,
+        commit: () -> Unit = {},
+    ): Boolean
     suspend fun delete(accountKey: AccountKey)
     suspend fun exportTokensForSync(): List<CloudSyncAccountRecord>
     suspend fun importTokenForSync(accountKey: AccountKey, token: OAuthTokenBundle, updatedAtEpochMillis: Long)
-    suspend fun deleteForSync(accountKey: AccountKey)
+    suspend fun deleteForSync(accountKey: AccountKey, throughEpochMillis: Long? = null)
 }
 
 interface BrowserLauncher {

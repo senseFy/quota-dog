@@ -17,6 +17,7 @@ import io.ktor.http.isSuccess
 import kotlinx.coroutines.async
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.coroutineScope
@@ -38,10 +39,14 @@ import kotlinx.serialization.Transient
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlin.io.encoding.Base64
+import saien.quotadog.hostsync.LocalQuota
 
 enum class ProviderId(val displayName: String) {
     CODEX("Codex"),
@@ -97,8 +102,10 @@ data class OAuthTokenBundle(
     val expiresAtEpochMillis: Long,
     val lastRefreshEpochMillis: Long = Clock.System.now().toEpochMilliseconds(),
     val apiServerUrl: String? = null,
-    // Local token-row generation, stripped from Dropbox exports; a deleted grant must not revive on import.
-    internal val devinLoginGeneration: String? = null,
+    // Keep the 1.0.17 storage spelling: existing Devin grants refer to this exact generation.
+    @SerialName("devinLoginGeneration") internal val loginGeneration: String? = null,
+    internal val quotaIdentityHash: String? = null,
+    val principalId: String? = null,
 ) {
     fun isExpired(bufferMillis: Long = 60_000): Boolean {
         return Clock.System.now().toEpochMilliseconds() + bufferMillis >= expiresAtEpochMillis
@@ -151,13 +158,13 @@ data class ProviderUsageSnapshot(
     val resetCreditsApplicable: Int? = null,
     val resetCredits: List<CodexResetCredit> = emptyList(),
     val devinExtraBalanceUsd: Double? = null,
-    // Only a reading collected locally can be granted to a phone. Never export this binding.
-    @Transient val devinLoginTag: String? = null,
+    // A cached or synced reading is never evidence of the login or quota target that produced it.
+    @Transient val loginTag: String? = null,
+    @Transient val localQuota: LocalQuota? = null,
+    @Transient val ampWorkspaceName: String? = null, // Local grant picker only, never a wire label or match key.
+    @Transient val quotaTarget: String? = null,
+    @Transient val quotaIdentity: String? = localQuota?.matchParts?.let { Json.encodeToString(it) },
 )
-
-private fun OAuthTokenBundle.devinLoginTag() = devinLoginGeneration ?: base64UrlNoPadding(sha256(
-    "${apiServerUrl.orEmpty()}\u0000$expiresAtEpochMillis\u0000$accessToken".encodeToByteArray(),
-))
 
 data class StoredToken(
     val accountKey: AccountKey,
@@ -272,14 +279,16 @@ private object ProviderSpecs {
 
 data class DetectedAccount(
     val accountKey: AccountKey,
-    val authState: AuthState
+    val authState: AuthState,
+    val login: String,
 )
 
 class QuotaDogClient(
     private val tokenStore: TokenStore = PlatformTokenStore(),
     private val browserLauncher: BrowserLauncher = PlatformBrowserLauncher(),
     private val callbackServer: OAuthCallbackServer = PlatformOAuthCallbackServer(),
-    private val httpClient: HttpClient = createHttpClient()
+    private val httpClient: HttpClient = saien.quotadog.hostsync.providerClient(),
+    private val cursorCredentials: () -> OAuthTokenBundle = ::loadCursorCredentialsFromLocalApp,
 ) {
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -287,7 +296,8 @@ class QuotaDogClient(
         return tokenStore.list().map { stored ->
             DetectedAccount(
                 accountKey = stored.accountKey,
-                authState = if (stored.token.isExpired(bufferMillis = 0)) AuthState.TokenExpired else AuthState.LoggedIn
+                authState = if (stored.token.isExpired(bufferMillis = 0)) AuthState.TokenExpired else AuthState.LoggedIn,
+                login = checkNotNull(stored.token.loginGeneration),
             )
         }
     }
@@ -396,7 +406,7 @@ class QuotaDogClient(
     }
 
     suspend fun importCursorAccount(): AccountKey {
-        var token = loadCursorCredentialsFromLocalApp()
+        var token = cursorCredentials()
         if (token.email.isNullOrBlank()) {
             val email = runCatching {
                 CursorUsageFetcher.fetchUserEmail(httpClient, token.accessToken)
@@ -416,7 +426,7 @@ class QuotaDogClient(
                 token.accessToken
             } else if (token.refreshToken.isNotBlank()) {
                 val refreshed = AntigravityUsageFetcher.refreshAccessToken(httpClient, token.refreshToken)
-                    .withIdentityFrom(token)
+                    .withIdentityFrom(token, ProviderId.ANTIGRAVITY)
                 token = refreshed
                 refreshed.accessToken
             } else {
@@ -484,8 +494,35 @@ class QuotaDogClient(
     }
 
     suspend fun refreshUsage(accountKey: AccountKey): ProviderUsageSnapshot {
-        val token = ensureFreshToken(accountKey)
-        return when (accountKey.providerId) {
+        val login = currentLogin(accountKey) ?: throw ProviderException(AuthState.NotConfigured, "Login not found.")
+        return collectUsage(accountKey, login) {} ?: throw ProviderException(AuthState.RequiresRelogin, "The login changed during refresh.")
+    }
+
+    internal suspend fun currentLogin(key: AccountKey): String? =
+        if (key.isPending) null else tokenStore.load(key)?.loginGeneration
+
+    internal suspend fun ifCurrentLogin(key: AccountKey, login: String, commit: () -> Unit): Boolean {
+        val stored = tokenStore.load(key)?.takeIf { it.loginGeneration == login } ?: return false
+        return tokenStore.commitIfCurrent(key, stored, commit = commit)
+    }
+
+    internal suspend fun collectUsage(
+        key: AccountKey, login: String, publish: (ProviderUsageSnapshot) -> Unit,
+    ): ProviderUsageSnapshot? {
+        val stored = tokenStore.load(key)?.takeIf { it.loginGeneration == login } ?: return null
+        if (key.providerId == ProviderId.AMP && stored.apiServerUrl != null && AmpAuthParser.cleanServerUrl(stored.apiServerUrl) == null) {
+            throw changedTarget() // Never send a custom instance's key to the default service.
+        }
+        val source = when (key.providerId) {
+            ProviderId.CODEX -> stored.withCodexTarget()
+            ProviderId.DROID -> stored.withDroidTarget()
+            else -> stored
+        }
+        val token = ensureFreshToken(key.providerId, source)
+        // A refresh grant may be single-use. Save the bound renewal even if the quota API is down.
+        if (!tokenStore.commitIfCurrent(key, stored, token)) return null
+
+        val reading = when (key.providerId) {
             ProviderId.CODEX -> fetchCodexUsage(token)
             ProviderId.CLAUDE_CODE -> fetchClaudeUsage(token)
             ProviderId.GROK -> fetchGrokUsage(token)
@@ -495,237 +532,38 @@ class QuotaDogClient(
             ProviderId.DROID -> fetchDroidUsage(token)
             ProviderId.AMP -> fetchAmpUsage(token)
         }
+        if (key.providerId == ProviderId.DROID && token.accountId != null && reading.quotaTarget != null &&
+            reading.quotaTarget.substringAfter(':') != token.accountId) throw changedTarget()
+        // The locally queried bearer may now see a different effective quota target, or the
+        // provider may no longer identify it. Preserve that *new local* observation, but make
+        // the old grant unusable before publication. Null/null is itself an observed scope.
+        val scope = Json.encodeToString(listOf(reading.quotaIdentity, reading.quotaTarget))
+        val identityHash = base64UrlNoPadding(sha256(scope.encodeToByteArray()))
+        val nextLogin = if (stored.quotaIdentityHash != null && identityHash != stored.quotaIdentityHash) {
+            base64UrlNoPadding(secureRandomBytes(16))
+        } else login
+        val snapshot = reading.copy(loginTag = nextLogin)
+        val replacement = token.copy(loginGeneration = nextLogin, quotaIdentityHash = identityHash)
+        return if (tokenStore.commitIfCurrent(key, token, replacement) { publish(snapshot) }) snapshot else null
     }
 
-    internal suspend fun currentDevinLogin(accountKey: AccountKey): String? {
-        require(accountKey.providerId == ProviderId.DEVIN && !accountKey.isPending)
-        return tokenStore.load(accountKey)?.devinLoginTag()
-    }
-
-    internal suspend fun refreshSharedDevin(accountKey: AccountKey, loginTag: String): ProviderUsageSnapshot? {
-        require(accountKey.providerId == ProviderId.DEVIN && !accountKey.isPending)
-        val token = tokenStore.load(accountKey)?.takeIf { it.devinLoginTag() == loginTag } ?: return null
-        return fetchDevinUsage(token)
-    }
-
-    private suspend fun ensureFreshToken(accountKey: AccountKey): OAuthTokenBundle {
-        return when (accountKey.providerId) {
-            ProviderId.GROK -> ensureFreshGrokToken(accountKey)
-            ProviderId.CURSOR -> ensureFreshCursorToken(accountKey)
-            ProviderId.ANTIGRAVITY -> ensureFreshAntigravityToken(accountKey)
-            // Both local and remote refresh use the imported login and service instance, not today's CLI file.
-            ProviderId.DEVIN -> tokenStore.load(accountKey)
-                ?: throw ProviderException(AuthState.NotConfigured, "Devin login not found. Import it on your computer.")
-            ProviderId.DROID -> ensureFreshDroidToken(accountKey)
-            ProviderId.AMP -> ensureFreshAmpToken(accountKey)
-            ProviderId.CODEX, ProviderId.CLAUDE_CODE -> {
-                val token = tokenStore.load(accountKey)
-                    ?: throw ProviderException(AuthState.NotConfigured, "Not signed in to ${accountKey.providerId.displayName}")
-                if (!token.isExpired()) return token
-                val refreshed = refreshToken(accountKey.providerId, token.refreshToken).withIdentityFrom(token)
-                tokenStore.save(accountKey, refreshed)
-                refreshed
+    private suspend fun ensureFreshToken(provider: ProviderId, stored: OAuthTokenBundle): OAuthTokenBundle {
+        if (!stored.isExpired() || provider == ProviderId.DEVIN) return stored
+        if (stored.refreshToken.isBlank()) throw ProviderException(AuthState.RequiresRelogin,
+            "${provider.displayName} credentials expired. Sign in or import this account again.")
+        // Cursor delegates renewals to its app. A display email or subscription tier is never
+        // proof that its active CLI login is our stored grant. Do not query that bearer's API
+        // unless the refresh grant itself and the available target claims match.
+        val renewed = if (provider == ProviderId.CURSOR) {
+            val candidate = cursorCredentials()
+            val claims = listOf("iss", "sub", "team_id", "organization_id")
+            if (candidate.isExpired() || candidate.refreshToken != stored.refreshToken || candidate.accountId != stored.accountId ||
+                candidate.apiServerUrl != stored.apiServerUrl || claims.any { candidate.accessToken.jwtStringClaim(it) != stored.accessToken.jwtStringClaim(it) }) {
+                throw changedTarget()
             }
-        }
-    }
-
-    private suspend fun ensureFreshGrokToken(accountKey: AccountKey): OAuthTokenBundle {
-        val stored = tokenStore.load(accountKey)
-            ?: throw ProviderException(AuthState.NotConfigured, "Not signed in to ${accountKey.providerId.displayName}")
-        if (!stored.isExpired()) return stored
-        if (stored.refreshToken.isNotBlank()) {
-            val refreshed = runCatching {
-                GrokOAuth.refresh(httpClient, stored.refreshToken).withIdentityFrom(stored)
-            }.getOrNull()
-            if (refreshed != null) {
-                tokenStore.save(accountKey, refreshed)
-                return refreshed
-            }
-        }
-        if (grokCliImportAvailable()) {
-            val reloaded = runCatching { loadGrokCredentialsFromCli() }.getOrNull()
-            if (reloaded != null && !reloaded.isExpired()) {
-                val reloadedKey = accountKeyForToken(ProviderId.GROK, reloaded)
-                if (reloadedKey != accountKey) {
-                    throw ProviderException(
-                        AuthState.RequiresRelogin,
-                        "Grok CLI is signed in as a different account. Remove this account and import again.",
-                    )
-                }
-                val merged = reloaded.withIdentityFrom(stored)
-                tokenStore.save(accountKey, merged)
-                return merged
-            }
-        }
-        throw ProviderException(
-            AuthState.RequiresRelogin,
-            "Grok credentials expired. Sign in with xAI again."
-        )
-    }
-
-    private suspend fun ensureFreshCursorToken(accountKey: AccountKey): OAuthTokenBundle {
-        val stored = tokenStore.load(accountKey)
-            ?: throw ProviderException(AuthState.NotConfigured, "Not signed in to ${accountKey.providerId.displayName}")
-        val reloaded = runCatching { loadCursorCredentialsFromLocalApp() }.getOrNull()
-        if (reloaded != null && !reloaded.isExpired()) {
-            val reloadedKey = accountKeyForToken(ProviderId.CURSOR, reloaded)
-            if (reloadedKey != accountKey) {
-                if (!stored.isExpired()) return stored
-                throw ProviderException(
-                    AuthState.RequiresRelogin,
-                    "Cursor is signed in as a different account. Remove this account and import again.",
-                )
-            }
-            val merged = reloaded.withIdentityFrom(stored)
-            tokenStore.save(accountKey, merged)
-            return merged
-        }
-        if (!stored.isExpired()) {
-            return stored
-        }
-        throw ProviderException(
-            AuthState.RequiresRelogin,
-            "Cursor credentials expired. Sign in to Cursor again, then re-import."
-        )
-    }
-
-    private suspend fun ensureFreshAntigravityToken(accountKey: AccountKey): OAuthTokenBundle {
-        val stored = tokenStore.load(accountKey)
-            ?: throw ProviderException(AuthState.NotConfigured, "Not signed in to ${accountKey.providerId.displayName}")
-        if (!stored.isExpired()) {
-            return stored
-        }
-        var refreshError: Throwable? = null
-        if (stored.refreshToken.isNotBlank()) {
-            val refreshResult = runCatching {
-                AntigravityUsageFetcher.refreshAccessToken(httpClient, stored.refreshToken)
-                    .withIdentityFrom(stored)
-            }
-            refreshResult.getOrNull()?.let { refreshed ->
-                tokenStore.save(accountKey, refreshed)
-                return refreshed
-            }
-            refreshError = refreshResult.exceptionOrNull()
-        }
-        if (antigravityCliImportAvailable()) {
-            val reloaded = runCatching { loadAntigravityCredentialsFromCli() }.getOrNull()
-            if (reloaded != null) {
-                val candidate = if (reloaded.isExpired() &&
-                    reloaded.refreshToken.isNotBlank() &&
-                    reloaded.refreshToken != stored.refreshToken
-                ) {
-                    runCatching {
-                        AntigravityUsageFetcher.refreshAccessToken(httpClient, reloaded.refreshToken)
-                            .withIdentityFrom(reloaded)
-                    }.getOrNull() ?: reloaded
-                } else {
-                    reloaded
-                }
-                if (!candidate.isExpired()) {
-                    val resolvedEmail = candidate.email
-                        ?: runCatching {
-                            AntigravityUsageFetcher.fetchUserEmail(httpClient, candidate.accessToken)
-                        }.getOrNull()
-                    val candidateWithEmail = if (!resolvedEmail.isNullOrBlank()) {
-                        candidate.copy(email = resolvedEmail)
-                    } else {
-                        candidate
-                    }
-                    val reloadedKey = accountKeyForToken(ProviderId.ANTIGRAVITY, candidateWithEmail)
-                    if (reloadedKey == accountKey) {
-                        val merged = candidateWithEmail.withIdentityFrom(stored)
-                        tokenStore.save(accountKey, merged)
-                        return merged
-                    }
-                }
-            }
-        }
-        if (refreshError is ProviderException) {
-            throw refreshError
-        }
-        throw ProviderException(
-            AuthState.RequiresRelogin,
-            "Antigravity credentials expired. Sign in with Google again or re-import from `agy`.",
-        )
-    }
-
-    private suspend fun ensureFreshDroidToken(accountKey: AccountKey): OAuthTokenBundle {
-        val stored = tokenStore.load(accountKey)
-            ?: throw ProviderException(AuthState.NotConfigured, "Not signed in to ${accountKey.providerId.displayName}")
-        if (!stored.isExpired()) return stored
-        // Prefer the WorkOS refresh grant so accounts synced to devices without the
-        // droid CLI keep working; the CLI also rotates tokens on its own.
-        if (stored.refreshToken.isNotBlank()) {
-            val refreshed = runCatching {
-                DroidOAuth.refresh(httpClient, stored.refreshToken).withIdentityFrom(stored)
-            }.getOrNull()
-            if (refreshed != null) {
-                tokenStore.save(accountKey, refreshed)
-                return refreshed
-            }
-        }
-        val reloaded = runCatching { loadDroidCredentialsFromCli() }.getOrNull()
-        if (reloaded != null) {
-            // The CLI rotates WorkOS tokens on its own, so the file's refresh token
-            // can be newer than the stored one — refresh with it when the file's
-            // access token is already expired.
-            val fresh = if (reloaded.isExpired() &&
-                reloaded.refreshToken.isNotBlank() &&
-                reloaded.refreshToken != stored.refreshToken
-            ) {
-                runCatching {
-                    DroidOAuth.refresh(httpClient, reloaded.refreshToken).withIdentityFrom(reloaded)
-                }.getOrNull() ?: reloaded
-            } else {
-                reloaded
-            }
-            if (!fresh.isExpired()) {
-                val freshWithEmail = if (fresh.email.isNullOrBlank() && !stored.email.isNullOrBlank()) {
-                    fresh.copy(email = stored.email)
-                } else {
-                    fresh
-                }
-                val reloadedKey = accountKeyForToken(ProviderId.DROID, freshWithEmail)
-                if (reloadedKey != accountKey) {
-                    throw ProviderException(
-                        AuthState.RequiresRelogin,
-                        "droid CLI is signed in as a different account. Remove this account and import again.",
-                    )
-                }
-                val merged = freshWithEmail.withIdentityFrom(stored)
-                tokenStore.save(accountKey, merged)
-                return merged
-            }
-        }
-        throw ProviderException(
-            AuthState.RequiresRelogin,
-            "Droid credentials expired. Run `droid`, sign in, then re-import.",
-        )
-    }
-
-    private suspend fun ensureFreshAmpToken(accountKey: AccountKey): OAuthTokenBundle {
-        val stored = tokenStore.load(accountKey)
-            ?: throw ProviderException(AuthState.NotConfigured, "Not signed in to ${accountKey.providerId.displayName}")
-        if (!stored.isExpired()) return stored
-        if (ampCliImportAvailable()) {
-            val reloaded = runCatching { loadAmpCredentialsFromCli() }.getOrNull()
-            if (reloaded != null && !reloaded.isExpired()) {
-                val email = reloaded.email
-                    ?: runCatching {
-                        AmpUsageFetcher.fetchUserEmail(httpClient, reloaded.accessToken, reloaded.apiServerUrl)
-                    }.getOrNull()
-                val withEmail = if (!email.isNullOrBlank()) reloaded.copy(email = email) else reloaded
-                if (accountKeyForToken(ProviderId.AMP, withEmail) == accountKey) {
-                    val merged = withEmail.withIdentityFrom(stored)
-                    tokenStore.save(accountKey, merged)
-                    return merged
-                }
-            }
-        }
-        throw ProviderException(
-            AuthState.RequiresRelogin,
-            "Amp credentials expired. Sign in with Amp again or re-import from `amp login`.",
-        )
+            candidate
+        } else refreshToken(provider, stored)
+        return renewed.withIdentityFrom(stored, provider)
     }
 
     private suspend fun exchangeCode(
@@ -799,7 +637,8 @@ class QuotaDogClient(
         }
     }
 
-    private suspend fun refreshToken(providerId: ProviderId, refreshToken: String): OAuthTokenBundle {
+    private suspend fun refreshToken(providerId: ProviderId, stored: OAuthTokenBundle): OAuthTokenBundle {
+        val refreshToken = stored.refreshToken
         return when (providerId) {
             ProviderId.CODEX -> {
                 val spec = ProviderSpecs.forProvider(providerId)
@@ -837,7 +676,7 @@ class QuotaDogClient(
                 AuthState.RequiresRelogin,
                 "Devin API keys do not expire. Run `devin auth login`, then re-import."
             )
-            ProviderId.DROID -> DroidOAuth.refresh(httpClient, refreshToken)
+            ProviderId.DROID -> DroidOAuth.refresh(httpClient, refreshToken, stored.accountId).withDroidTarget()
             ProviderId.AMP -> throw ProviderException(
                 AuthState.RequiresRelogin,
                 "Amp API keys do not refresh automatically. Sign in with Amp again or re-import from `amp login`."
@@ -850,6 +689,8 @@ class QuotaDogClient(
             applyCodexWhamHeaders(token)
         }.expectSuccessBody("Codex usage")
         val parsed = CodexUsageParser.parseUsage(text)
+        checkIdentity(token.accountId, parsed.accountId)
+        checkIdentity(token.principalId, parsed.userId)
         val details = if ((parsed.resetCreditsAvailable ?: 0) > 0) {
             runCatching {
                 val detailsText = httpClient.get("https://chatgpt.com/backend-api/wham/rate-limit-reset-credits") {
@@ -875,6 +716,9 @@ class QuotaDogClient(
             resetCreditsAvailable = merged.availableCount,
             resetCreditsApplicable = merged.applicableCount,
             resetCredits = merged.credits,
+            localQuota = parsed.localQuota(token, merged),
+            quotaTarget = if (parsed.userId == null && parsed.accountId == null) null
+                else Json.encodeToString(listOf(parsed.userId, parsed.accountId)),
         )
     }
 
@@ -910,6 +754,7 @@ class QuotaDogClient(
             accountEmail = token.email,
             message = "Source: xAI billing",
             planLabel = formatGrokPlanLabel(tier),
+            localQuota = billing.localQuota,
         )
     }
 
@@ -952,27 +797,28 @@ class QuotaDogClient(
                 append("Source: Cursor (${cursorAuthFileHint()})")
             },
             planLabel = formatCursorPlanLabel(rawPlan),
+            localQuota = usage.localQuota,
         )
     }
 
     private suspend fun fetchAntigravityUsage(token: OAuthTokenBundle): ProviderUsageSnapshot {
         val usage = AntigravityUsageFetcher.fetch(httpClient, token.accessToken)
-        val email = token.email
-            ?: runCatching { AntigravityUsageFetcher.fetchUserEmail(httpClient, token.accessToken) }.getOrNull()
         return ProviderUsageSnapshot(
             providerId = ProviderId.ANTIGRAVITY,
             authState = AuthState.LoggedIn,
             windows = usage.windows,
             collectedAt = Clock.System.now(),
-            accountEmail = email,
+            accountEmail = usage.email ?: token.email,
             message = "Source: Google Cloud Code",
             planLabel = formatAntigravityPlanLabel(usage.planLabel),
+            localQuota = usage.localQuota,
+            quotaTarget = usage.projectId,
         )
     }
 
     private suspend fun fetchDevinUsage(token: OAuthTokenBundle): ProviderUsageSnapshot {
         val usage = DevinUsageFetcher.fetch(httpClient, token.accessToken, token.apiServerUrl)
-        if (usage.windows.isEmpty()) throw ProviderException(AuthState.Error, "Devin did not report quota data for this account.")
+        if (!usage.localQuota.hasAccountReading) throw ProviderException(AuthState.Error, "Devin did not report quota data for this account.")
         return ProviderUsageSnapshot(
             providerId = ProviderId.DEVIN,
             authState = AuthState.LoggedIn,
@@ -988,7 +834,7 @@ class QuotaDogClient(
             },
             planLabel = formatSubscriptionPlanLabel(usage.planName),
             devinExtraBalanceUsd = usage.overageBalanceDollars,
-            devinLoginTag = token.devinLoginTag(),
+            localQuota = usage.localQuota,
         )
     }
 
@@ -1008,6 +854,8 @@ class QuotaDogClient(
                 append("Source: droid CLI (${droidAuthFileHint()})")
             },
             planLabel = formatDroidPlanLabel(usage.planLabel),
+            localQuota = usage.localQuota,
+            quotaTarget = usage.quotaTarget,
         )
     }
 
@@ -1032,6 +880,8 @@ class QuotaDogClient(
                 append("Source: Amp")
             },
             planLabel = formatSubscriptionPlanLabel(usage.planName),
+            localQuota = usage.localQuota,
+            ampWorkspaceName = usage.workspaceName,
         )
     }
 
@@ -1055,7 +905,8 @@ class QuotaDogClient(
             authState = AuthState.LoggedIn,
             windows = windows,
             collectedAt = Clock.System.now(),
-            accountEmail = token.email
+            accountEmail = token.email,
+            localQuota = claudeLocalQuota(root, token.principalId, token.accountId),
         )
     }
 
@@ -1085,7 +936,7 @@ class QuotaDogStore(
 ) {
     private val storeScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val refreshMutex = Mutex()
-    private val activeRefreshes = mutableMapOf<AccountKey, Any>()
+    private val activeRefreshes = mutableMapOf<AccountKey, Pair<String, Deferred<Boolean>>>()
     private var detectStarted = false
     private var grokDeviceLoginJob: Job? = null
     private var droidDeviceLoginJob: Job? = null
@@ -1251,25 +1102,23 @@ class QuotaDogStore(
     }
 
     suspend fun detectAll() {
-        val accounts = client.detectAccounts()
-        accounts.forEach { account ->
-            val shouldRefresh = account.authState == AuthState.LoggedIn || account.authState == AuthState.TokenExpired
-            val cachedSnapshot = usageSnapshotStore.load(account.accountKey)
-                ?.asCachedSnapshot(account.authState)
-            update(account.accountKey) {
-                it.copy(
-                    added = true,
-                    authState = account.authState,
-                    snapshot = cachedSnapshot ?: it.snapshot,
-                    busy = shouldRefresh,
-                    message = null
-                )
+        val accounts = refreshMutex.withLock {
+            val found = client.detectAccounts()
+            val known = found.map { it.accountKey }.toSet()
+            _state.update { current -> current.copy(accounts = current.accounts.filterKeys { it.isPending || it in known }) }
+            for (account in found) client.ifCurrentLogin(account.accountKey, account.login) {
+                val cached = usageSnapshotStore.load(account.accountKey)?.asCachedSnapshot(account.authState)
+                update(account.accountKey) {
+                    it.copy(added = true, authState = account.authState, message = null,
+                        snapshot = it.snapshot?.takeIf { s -> s.loginTag == account.login } ?: cached)
+                }
             }
+            found
         }
         coroutineScope {
             accounts.forEach { account ->
                 if (account.authState == AuthState.LoggedIn || account.authState == AuthState.TokenExpired) {
-                    launch { refresh(account.accountKey) }
+                    launch { refresh(account.accountKey, account.login) }
                 }
             }
         }
@@ -1886,43 +1735,52 @@ class QuotaDogStore(
         refresh(savedKey)
     }
 
-    internal suspend fun currentDevinLogin(key: AccountKey) = client.currentDevinLogin(key)
+    suspend fun currentLogin(key: AccountKey): String? = client.currentLogin(key)
 
-    suspend fun refresh(accountKey: AccountKey, sharedDevinLogin: String? = null) {
-        val attempt = Any()
-        val login = refreshMutex.withLock {
-            if (accountKey in activeRefreshes) return
-            val stored = if (accountKey.providerId == ProviderId.DEVIN && !accountKey.isPending) currentDevinLogin(accountKey) else null
-            if (sharedDevinLogin != null && sharedDevinLogin != stored) return
-            activeRefreshes[accountKey] = attempt
-            update(accountKey) { it.copy(added = true, busy = true, message = null) }
-            stored
+    /** Local and authorized remote callers join the same login's query, including its failure. */
+    suspend fun refresh(key: AccountKey, sharedLogin: String? = null): Boolean {
+        val work = refreshMutex.withLock {
+            val login = currentLogin(key) ?: return false
+            if (sharedLogin != null && sharedLogin != login) return false
+            activeRefreshes[key]?.takeIf { it.first == login }?.let { return@withLock it.second }
+            if (!client.ifCurrentLogin(key, login) {
+                update(key) { it.copy(added = true, busy = true, message = null,
+                    snapshot = it.snapshot?.takeIf { s -> s.loginTag == null || s.loginTag == login }) }
+            }) return false
+            storeScope.async { refreshOnce(key, login) }.also { activeRefreshes[key] = login to it }
         }
+        return work.await() && (sharedLogin == null || currentLogin(key) == sharedLogin)
+    }
+
+    private suspend fun refreshOnce(key: AccountKey, login: String): Boolean {
         try {
-            val result = runCatching {
-                if (login == null) client.refreshUsage(accountKey) else client.refreshSharedDevin(accountKey, login)
+            // State and cache commit under the same token-store guard as renewal, sync and logout.
+            val result = client.collectUsage(key, login) { snapshot ->
+                usageSnapshotStore.save(key, snapshot)
+                update(key) { it.copy(added = true, authState = snapshot.authState, snapshot = snapshot, busy = false, message = snapshot.message) }
             }
-            refreshMutex.withLock {
-                // Deletion invalidates this attempt, even if the same key has already been re-added.
-                if (activeRefreshes[accountKey] !== attempt || (login != null && currentDevinLogin(accountKey) != login)) return
-                try {
-                    val snapshot = result.getOrThrow() ?: return
-                    usageSnapshotStore.save(accountKey, snapshot)
-                    onLocalDataChanged?.invoke()
-                    update(accountKey) { it.copy(added = true, authState = snapshot.authState, snapshot = snapshot, busy = false, message = snapshot.message) }
-                } catch (e: CancellationException) { throw e }
-                catch (error: Throwable) {
-                    val auth = (error as? ProviderException)?.state ?: AuthState.Error
-                    platformDebugLog("store refresh failed provider=${accountKey.providerId.name} state=$auth")
-                    update(accountKey) { it.copy(added = true, authState = auth, busy = false, message = safeUserMessage(error, "Refresh failed. Please try again.")) }
-                }
+            if (result != null) onLocalDataChanged?.invoke()
+            return result != null
+        } catch (e: CancellationException) { throw e }
+        catch (error: Exception) {
+            val auth = (error as? ProviderException)?.state ?: AuthState.Error
+            platformDebugLog("store refresh failed provider=${key.providerId.name} state=$auth")
+            client.ifCurrentLogin(key, login) {
+                update(key) { it.copy(authState = auth, busy = false, message = safeUserMessage(error, "Refresh failed. Please try again.")) }
             }
+            return false
         } finally {
             withContext(NonCancellable) {
                 refreshMutex.withLock {
-                    if (activeRefreshes[accountKey] === attempt) {
-                        activeRefreshes.remove(accountKey)
-                        if (state.value.accounts[accountKey]?.busy == true) update(accountKey) { it.copy(busy = false) }
+                    if (activeRefreshes[key]?.first == login) {
+                        activeRefreshes.remove(key)
+                        if (state.value.accounts[key]?.busy == true) {
+                            val current = currentLogin(key)
+                            if (current == null) _state.update { it.copy(accounts = it.accounts - key) }
+                            else client.ifCurrentLogin(key, current) {
+                                update(key) { if (current == login) it.copy(busy = false) else AccountUiState(key, added = true) }
+                            }
+                        }
                     }
                 }
             }
@@ -1962,20 +1820,14 @@ class QuotaDogStore(
         }
     }
 
-    private fun replacePendingWithAccount(pendingKey: AccountKey, accountKey: AccountKey, message: String) {
-        _state.update { current ->
-            val pending = current.accounts[pendingKey]
-            val existing = current.accounts[accountKey]
-            val merged = (existing ?: AccountUiState(accountKey)).copy(
-                added = true,
-                authState = AuthState.LoggedIn,
-                loginStart = null,
-                deviceLogin = null,
-                busy = true,
-                snapshot = existing?.snapshot ?: pending?.snapshot,
-                message = message
-            )
-            current.copy(accounts = (current.accounts - pendingKey) + (accountKey to merged))
+    private suspend fun replacePendingWithAccount(pendingKey: AccountKey, accountKey: AccountKey, message: String) {
+        val login = currentLogin(accountKey) ?: return
+        client.ifCurrentLogin(accountKey, login) {
+            _state.update { current ->
+                val merged = AccountUiState(accountKey, added = true, authState = AuthState.LoggedIn, busy = true,
+                    snapshot = current.accounts[accountKey]?.snapshot?.takeIf { it.loginTag == login }, message = message)
+                current.copy(accounts = (current.accounts - pendingKey) + (accountKey to merged))
+            }
         }
     }
 
@@ -2007,6 +1859,10 @@ private fun ProviderUsageSnapshot.asCachedSnapshot(authState: AuthState): Provid
     return copy(
         authState = authState,
         stale = true,
+        loginTag = null,
+        quotaIdentity = null,
+        quotaTarget = null,
+        localQuota = null,
         windows = windows.map { it.copy(source = UsageSource.Cached) }
     )
 }
@@ -2134,8 +1990,9 @@ private data class ParsedOAuthCallback(
 @Serializable
 private data class CodexTokenResponse(
     @SerialName("access_token") val accessToken: String,
-    @SerialName("refresh_token") val refreshToken: String,
+    @SerialName("refresh_token") val refreshToken: String = "",
     @SerialName("id_token") val idToken: String? = null,
+    @SerialName("account_id") val accountId: String? = null,
     @SerialName("expires_in") val expiresIn: Int = 3600
 ) {
     fun toBundle(): OAuthTokenBundle {
@@ -2143,9 +2000,10 @@ private data class CodexTokenResponse(
             accessToken = accessToken,
             refreshToken = refreshToken,
             idToken = idToken,
+            accountId = accountId,
             email = idToken?.jwtStringClaim("email"),
             expiresAtEpochMillis = Clock.System.now().plusSeconds(expiresIn.toLong()).toEpochMilliseconds()
-        )
+        ).withCodexTarget()
     }
 }
 
@@ -2169,15 +2027,23 @@ private data class ClaudeRefreshRequest(
 @Serializable
 private data class ClaudeTokenResponse(
     @SerialName("access_token") val accessToken: String,
-    @SerialName("refresh_token") val refreshToken: String,
+    @SerialName("refresh_token") val refreshToken: String = "",
     @SerialName("expires_in") val expiresIn: Int = 3600,
-    val account: ClaudeAccount? = null
+    val scope: String? = null,
+    val account: ClaudeAccount? = null,
+    val organization: ClaudeOrganization? = null,
 ) {
     fun toBundle(): OAuthTokenBundle {
+        // If omitted, OAuth grants the requested scope. A Console/API-key-only grant is not a subscription login.
+        if (scope != null && "user:inference" !in scope.split(' ')) {
+            throw ProviderException(AuthState.RequiresRelogin, "Sign in to a Claude subscription to read its usage.")
+        }
         return OAuthTokenBundle(
             accessToken = accessToken,
             refreshToken = refreshToken,
             email = account?.emailAddress,
+            principalId = account?.uuid?.lowercase(),
+            accountId = organization?.uuid?.lowercase(),
             expiresAtEpochMillis = Clock.System.now().plusSeconds(expiresIn.toLong()).toEpochMilliseconds()
         )
     }
@@ -2185,44 +2051,83 @@ private data class ClaudeTokenResponse(
 
 @Serializable
 private data class ClaudeAccount(
-    @SerialName("email_address") val emailAddress: String? = null
+    @SerialName("email_address") val emailAddress: String? = null,
+    val uuid: String? = null,
 )
+
+@Serializable private data class ClaudeOrganization(val uuid: String? = null)
 
 private fun Instant.plusSeconds(seconds: Long): Instant {
     return Instant.fromEpochMilliseconds(toEpochMilliseconds() + seconds * 1000)
 }
 
-private fun OAuthTokenBundle.withIdentityFrom(previous: OAuthTokenBundle): OAuthTokenBundle {
+private fun changedTarget() = ProviderException(AuthState.RequiresRelogin,
+    "The account or quota target could not be verified. Sign in or import this account again.")
+
+private fun checkIdentity(before: String?, after: String?) {
+    if (before != null && after != null && before != after) throw changedTarget()
+}
+
+private fun OAuthTokenBundle.withDroidTarget(): OAuthTokenBundle {
+    val org = accessToken.jwtStringClaim("org_id")
+    checkIdentity(accountId, org)
+    return copy(accountId = accountId ?: org)
+}
+
+private fun OAuthTokenBundle.withIdentityFrom(previous: OAuthTokenBundle, provider: ProviderId): OAuthTokenBundle {
+    checkIdentity(previous.accountId, accountId)
+    checkIdentity(previous.principalId, principalId)
+    checkIdentity(previous.apiServerUrl, apiServerUrl)
+    for (claim in listOf("iss", "sub", "team_id", "org_id", "organization_id")) {
+        val before = listOfNotNull(previous.accessToken.jwtStringClaim(claim), previous.idToken?.jwtStringClaim(claim))
+        val after = listOfNotNull(accessToken.jwtStringClaim(claim), idToken?.jwtStringClaim(claim))
+        if ((before + after).distinct().size > 1) throw changedTarget()
+    }
+    // Factory selects the organization in the bearer, not a billing request header. The
+    // renewed WorkOS credential must confirm the organization requested with the stored grant.
+    if (provider == ProviderId.DROID && previous.accountId != null && accountId == null) throw changedTarget()
     return copy(
+        refreshToken = refreshToken.ifBlank { previous.refreshToken },
         idToken = idToken ?: previous.idToken,
         accountId = accountId ?: previous.accountId,
+        // A restored org is a request hint, not evidence. Never combine it with a lone
+        // subscriber UUID from a partial refresh to manufacture a Claude subscription match.
+        principalId = if (provider == ProviderId.CLAUDE_CODE && previous.principalId == null && accountId == null) null
+            else principalId ?: previous.principalId,
         email = email ?: previous.email,
-        apiServerUrl = apiServerUrl ?: previous.apiServerUrl
+        apiServerUrl = apiServerUrl ?: previous.apiServerUrl,
+        loginGeneration = previous.loginGeneration,
+        quotaIdentityHash = previous.quotaIdentityHash,
     )
 }
 
-private fun String.jwtStringClaim(name: String): String? {
-    val payload = split(".").getOrNull(1) ?: return null
-    val decoded = runCatching { base64UrlDecode(payload).decodeToString() }.getOrNull() ?: return null
-    val claims = runCatching { Json.parseToJsonElement(decoded).jsonObject }.getOrNull() ?: return null
-    return claims[name]?.jsonPrimitive?.contentOrNull
-}
-
-private fun base64UrlDecode(input: String): ByteArray {
-    val alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
-    val clean = input.trimEnd('=')
-    val output = mutableListOf<Byte>()
-    var buffer = 0
-    var bits = 0
-    for (char in clean) {
-        val value = alphabet.indexOf(char)
-        if (value < 0) continue
-        buffer = (buffer shl 6) or value
-        bits += 6
-        if (bits >= 8) {
-            bits -= 8
-            output.add(((buffer shr bits) and 0xff).toByte())
+/** This is a request selector from the credential obtained at login, not verified quota identity.
+ * Never pick an organization out of an available-workspaces list. Conflicting selectors fail closed. */
+private fun OAuthTokenBundle.withCodexTarget(): OAuthTokenBundle {
+    val selectors = mutableSetOf<String>()
+    val users = mutableSetOf<String>()
+    accountId?.let(selectors::add)
+    principalId?.let(users::add)
+    for (jwt in listOfNotNull(idToken, accessToken)) {
+        val auth = jwt.jwtClaims()?.get("https://api.openai.com/auth") ?: continue
+        if (auth !is JsonObject) throw changedTarget()
+        for ((name, values) in listOf("chatgpt_account_id" to selectors, "chatgpt_user_id" to users, "user_id" to users)) {
+            val hint = auth[name] ?: continue
+            val text = (hint as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull ?: throw changedTarget()
+            values.add(text)
         }
     }
-    return output.toByteArray()
+    if (selectors.size > 1 || users.size > 1 || (selectors + users).any { it.isBlank() || it.any { c -> c <= ' ' || c == '\u007f' } }) {
+        throw changedTarget()
+    }
+    return copy(accountId = selectors.singleOrNull(), principalId = users.singleOrNull())
+}
+
+private fun String.jwtStringClaim(name: String): String? =
+    (jwtClaims()?.get(name) as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
+
+private fun String.jwtClaims(): JsonObject? = split('.').takeIf { it.size == 3 }?.let { parts ->
+    runCatching {
+        Json.parseToJsonElement(Base64.UrlSafe.withPadding(Base64.PaddingOption.ABSENT_OPTIONAL).decode(parts[1]).decodeToString()).jsonObject
+    }.getOrNull()
 }

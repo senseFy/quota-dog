@@ -10,27 +10,35 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import saien.quotadog.AccountKey
-import saien.quotadog.AuthState
 import saien.quotadog.ProviderId
+import saien.quotadog.ProviderUsageSnapshot
 import saien.quotadog.QuotaDogStore
 import java.security.MessageDigest
 import kotlin.time.TimeSource
 import kotlin.time.Duration.Companion.minutes
 
-data class PhoneGrant(val id: String, val access: Access, val sourceId: String?)
+data class PhoneGrant(val id: String, val grants: Map<AccountKey, GrantPermission>, val workspaceGrants: Map<AccountKey, GrantPermission>,
+    val cards: List<SharedCard>, val online: Boolean, val legacy: Boolean, val busyRefs: Set<String>, val clockConflict: Boolean)
 data class HostState(val enabled: Boolean = false, val online: Boolean = false, val qr: String? = null,
                      val digits: String? = null, val phones: List<PhoneGrant> = emptyList(), val saveFailed: Boolean = false)
 
 const val MAX_PAIRED_PHONES = 32 // Matches the relay's per-route verifier capacity.
 
 @Serializable private data class Trust(val pin: String, val sourceId: String? = null, val ref: String? = null,
-                                      val access: Access = Access.Off, val revision: Long = 0, val loginTag: String? = null) {
-    val source: AccountKey? get() = sourceId?.let { AccountKey(ProviderId.DEVIN, it) }
+    val access: Access = Access.Off, val revision: Long = 0, val loginTag: String? = null,
+    val outgoing: LocalShares = LocalShares(), val incoming: ReceivedShares = ReceivedShares()) {
+    fun migrate(): Trust {
+        if (sourceId == null && revision == 0L) return this
+        val legacy = if (sourceId != null && ref != null && loginTag != null && access != Access.Off)
+            listOf(LocalGrant(AccountKey(ProviderId.DEVIN, sourceId), loginTag, ref, access)) else emptyList()
+        return Trust(pin, outgoing = LocalShares(revision, legacy), incoming = incoming)
+    }
 }
 private class Channel(val tls: SecureChannel, val grant: String?) {
     var syncing = false
+    var multi = false
+    val stream = ShareStream(tls)
     var lastManifest: Msg.Manifest? = null
-    var lastRequest = 0L
 }
 private class Enrollment(val invite: Invite) {
     val deadline = TimeSource.Monotonic.markNow() + 5.minutes
@@ -40,13 +48,12 @@ private class Enrollment(val invite: Invite) {
     var approved = false
 }
 
-/** Each phone receives at most one explicitly selected local Devin login. */
+/** Each paired device has two independent lists. Only local credentials can back outgoing grants. */
 class DesktopHost(private val client: HttpClient, private val identity: DeviceIdentity, private val vault: SyncVault,
-                  private val store: QuotaDogStore, private val defaultSource: AccountKey? = null,
-                  private val onStoragePause: () -> Unit = {}) : AutoCloseable {
+                  private val store: QuotaDogStore, private val onStoragePause: () -> Unit = {}) : AutoCloseable {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO.limitedParallelism(1))
     // A null entry keeps only the relay verifier until the relay confirms its removal.
-    private var trust = vault.read("phones")?.let { Json.decodeFromString<Map<String, Trust?>>(it) }.orEmpty()
+    private var trust = vault.read("phones")?.let { Json.decodeFromString<Map<String, Trust?>>(it) }.orEmpty().mapValues { it.value?.migrate() }
     private var retryWrite: (() -> Unit)? = null
     private val channels = mutableMapOf<String, Channel>()
     private var route = vault.read("route")?.let { Json.decodeFromString<Route>(it) }
@@ -68,11 +75,10 @@ class DesktopHost(private val client: HttpClient, private val identity: DeviceId
 
     private suspend fun validateSources() {
         for ((id, t) in trust) {
-            val source = t?.source ?: continue
-            // The imported login, not whether detectAll has produced a reading yet, owns the grant.
-            if (store.currentDevinLogin(source) != t.loginTag && trust[id] === t) {
-                if (!saveTrust(trust + (id to Trust(t.pin, revision = t.revision + 1)))) return
-            }
+            val prior = t?.outgoing ?: continue
+            val current = prior.valid(store)
+            val latest = trust[id] ?: continue
+            if (current !== prior && latest.outgoing === prior && !saveTrust(trust + (id to latest.copy(outgoing = current)))) return
         }
     }
 
@@ -95,7 +101,14 @@ class DesktopHost(private val client: HttpClient, private val identity: DeviceId
         retryWrite = null
         if (writeOrPause(write)) ui.value = ui.value.copy(saveFailed = false)
     } }
-    private fun publishPhones() { ui.value = ui.value.copy(phones = trust.mapNotNull { (id, t) -> t?.let { PhoneGrant(id, it.access, it.sourceId) } }) }
+    private fun publishPhones() { ui.value = ui.value.copy(phones = trust.mapNotNull { (id, t) -> t?.let {
+        val ch = channels.values.find { it.grant == id && it.syncing }
+        PhoneGrant(id, it.outgoing.permissions(false), it.outgoing.permissions(true), it.incoming.cards,
+            ch?.multi == true && ch.stream.receivedManifest && ui.value.online, ch != null && !ch.multi,
+            ch?.stream?.pending?.values?.toSet().orEmpty(), it.incoming.clockConflict)
+    } }) }
+
+    fun matchFor(id: String, snapshot: ProviderUsageSnapshot): String? = matchForPair(id, snapshot)
 
     fun enable() { scope.launch {
         if (ui.value.enabled || retryWrite != null) return@launch
@@ -132,6 +145,7 @@ class DesktopHost(private val client: HttpClient, private val identity: DeviceId
                     enrollment = null
                     socket?.cancel(); socket = null
                     ui.value = ui.value.copy(online = false, qr = null, digits = null)
+                    publishPhones()
                 }
                 delay(wait + random.nextInt(400)); wait = (wait * 2).coerceAtMost(60_000)
             }
@@ -176,19 +190,11 @@ class DesktopHost(private val client: HttpClient, private val identity: DeviceId
         ch.tls.send(Msg.Grant(ticket))
     } }
 
-    fun setAccess(id: String, access: Access, selected: AccountKey? = defaultSource) { scope.launch {
-        val old = trust[id] ?: return@launch
-        val source = selected.takeUnless { access == Access.Off }
-        val tag = if (access == Access.Off) null else {
-            if (source?.providerId != ProviderId.DEVIN || source.isPending) return@launch
-            store.state.value.accounts[source]?.takeIf { it.added }?.snapshot?.devinLoginTag ?: return@launch
-        }
-        if ((source != null && store.currentDevinLogin(source) != tag) || trust[id] !== old) return@launch
-        val sameLogin = old.sourceId == source?.accountId && old.loginTag == tag
-        if (old.access == access && sameLogin) return@launch
-        val next = old.copy(access = access, sourceId = source?.accountId, loginTag = tag,
-            ref = if (tag == null) null else old.ref?.takeIf { sameLogin } ?: randomHex(16), revision = old.revision + 1)
-        if (!saveTrust(trust + (id to next))) return@launch
+    fun setAccess(id: String, edit: GrantEdit) { scope.launch {
+        val source = edit.checkedSource(store)
+        val latest = trust[id] ?: return@launch
+        val next = latest.outgoing.change(id, edit, source)
+        if (next === latest.outgoing || !saveTrust(trust + (id to latest.copy(outgoing = next)))) return@launch
         channels.values.filter { it.grant == id && it.syncing }.forEach(::publish)
     } }
     fun revoke(id: String) { scope.launch {
@@ -204,6 +210,7 @@ class DesktopHost(private val client: HttpClient, private val identity: DeviceId
     private fun drop(key: String) {
         channels.remove(key)?.tls?.close()
         command("close $key")
+        publishPhones()
     }
     private fun control(text: String) {
         val p = text.split(' ')
@@ -224,6 +231,7 @@ class DesktopHost(private val client: HttpClient, private val identity: DeviceId
             }
             "left" -> if (p.size == 2) {
                 channels.remove(p[1])?.tls?.close()
+                publishPhones()
                 if (enrollment?.channel == p[1]) endInvite()
             }
             "denied" -> if (p.size == 2 && p[1] in trust && trust[p[1]] == null) {
@@ -247,8 +255,25 @@ class DesktopHost(private val client: HttpClient, private val identity: DeviceId
                 if (ch.grant == null) enroll(key, ch, msg) else {
                     check(trust[ch.grant]?.pin == ch.tls.peer)
                     when (msg) {
-                        Msg.Sync -> { check(!ch.syncing); validateSources(); ch.syncing = true; publish(ch) }
-                        is Msg.Refresh -> { check(ch.syncing); refresh(key, ch, msg) }
+                        Msg.Sync -> { check(!ch.syncing); validateSources(); ch.syncing = true; publish(ch); publishPhones() }
+                        is Msg.Refresh -> {
+                            check(ch.syncing)
+                            if (!ch.multi && msg.ref == CAPABILITIES && msg.revision == -1L && msg.id == "1") {
+                                ch.multi = true; ch.tls.send(Msg.Ready); publish(ch); publishPhones()
+                            } else { ch.stream.checkSequence(msg); refresh(key, ch, msg) }
+                        }
+                        is Msg.Sources, is Msg.Observation -> {
+                            check(ch.multi)
+                            val t = trust.getValue(ch.grant) ?: error("Removed phone")
+                            val next = if (msg is Msg.Sources) {
+                                ch.stream.receivedManifest = true
+                                t.incoming.manifest(msg)
+                            } else {
+                                check(ch.stream.receivedManifest); t.incoming.observation(msg as Msg.Observation)
+                            }
+                            if (next != t.incoming) saveTrust(trust + (ch.grant to t.copy(incoming = next))) else publishPhones()
+                        }
+                        is Msg.Result -> { check(ch.multi); ch.stream.pending.remove(msg.id); publishPhones() }
                         else -> error("Unexpected sync message")
                     }
                 }
@@ -281,39 +306,33 @@ class DesktopHost(private val client: HttpClient, private val identity: DeviceId
     private fun publish(ch: Channel) {
         if (!ui.value.online) return
         val t = trust[ch.grant] ?: return
-        val account = store.state.value.accounts[t.source]
-        val card = if (t.access != Access.Off && t.ref != null && t.loginTag != null) {
-            val reading = account?.snapshot?.takeIf { account.added && it.devinLoginTag == t.loginTag }?.reading()
-            SharedDevin(t.ref, t.access, reading)
-        } else null
-        val next = Msg.Manifest(t.revision, card)
+        if (ch.multi) { ch.stream.publish(t.outgoing, store); return }
+        val grant = t.outgoing.entries.firstOrNull { it.key.providerId == ProviderId.DEVIN }
+        val card = grant?.let {
+            val account = store.state.value.accounts[it.key]
+            SharedDevin(it.ref, it.access, account?.snapshot?.takeIf { s -> account.added && s.loginTag == it.login }?.reading())
+        }
+        val next = Msg.Manifest(t.outgoing.revision, card)
         if (ch.lastManifest == next) return
         ch.tls.send(next); ch.lastManifest = next
     }
     private fun refresh(key: String, ch: Channel, req: Msg.Refresh) {
-        // Request numbers are monotonic within this fresh TLS session; no cross-session retry queue.
-        val seq = req.id.toLongOrNull() ?: error("Invalid request")
-        check(seq > ch.lastRequest); ch.lastRequest = seq
-        val grant = trust[ch.grant]
-        val source = grant?.source
-        fun allowed() = ui.value.online && grant != null && grant.access == Access.Refresh && grant.ref == req.ref && grant.revision == req.revision &&
-            grant.loginTag != null && trust[ch.grant] == grant
-        val account = store.state.value.accounts[source]
-        if (source == null || grant.loginTag == null || !allowed()) { ch.tls.send(Msg.Result(req.id, RefreshStatus.Denied)); return }
-        if (account?.busy == true) { ch.tls.send(Msg.Result(req.id, RefreshStatus.Busy)); return }
-        val previous = account?.snapshot?.collectedAt
         scope.launch {
-            val current = store.currentDevinLogin(source)
-            if (channels[key] !== ch) return@launch
-            if (!allowed() || current != grant.loginTag) { ch.tls.send(Msg.Result(req.id, RefreshStatus.Denied)); return@launch }
-            store.refresh(source, grant.loginTag)
-            val after = store.currentDevinLogin(source)
-            if (channels[key] !== ch) return@launch
-            if (!allowed() || after != grant.loginTag) { ch.tls.send(Msg.Result(req.id, RefreshStatus.Denied)); return@launch }
-            val fresh = store.state.value.accounts[source]
-            val ok = fresh?.authState == AuthState.LoggedIn && fresh.snapshot?.devinLoginTag == grant.loginTag && fresh.snapshot.collectedAt != previous
-            publish(ch); ch.tls.send(Msg.Result(req.id, if (ok) RefreshStatus.Updated else RefreshStatus.Failed))
+            val status = refreshGranted(store, req) {
+                trust[ch.grant]?.outgoing?.takeIf { ui.value.online && channels[key] === ch && (ch.multi || ch.lastManifest?.card?.ref == req.ref) }
+            }
+            if (ch.multi) validateSources()
+            if (ui.value.online && channels[key] === ch) { publish(ch); ch.tls.send(Msg.Result(req.id, status)) }
         }
     }
+
+    fun refreshPhone(id: String, ref: String) { scope.launch {
+        val ch = channels.values.find { it.grant == id && it.multi && it.stream.receivedManifest } ?: return@launch
+        val incoming = trust[id]?.incoming ?: return@launch
+        val card = incoming.cards.find { it.ref == ref } ?: return@launch
+        val request = ch.stream.request(card, incoming.revision) ?: return@launch
+        publishPhones(); delay(30_000)
+        if (ch.stream.pending.remove(request) != null) publishPhones()
+    } }
     override fun close() { runBlocking { scope.coroutineContext.job.cancelAndJoin() }; client.close() }
 }

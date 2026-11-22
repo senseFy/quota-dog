@@ -15,15 +15,16 @@ The app currently focuses on a small workflow:
 - Refresh accounts, remove local account data, and optionally mask account emails in the UI.
 - Optionally sync encrypted account tokens, cached usage, and preferences through a user-provided Dropbox app folder.
 
-### View your Mac’s Devin quota on iPhone or Android
+### Share quota accounts between your Mac and phone
 
-1. Import your Devin CLI login in QuotaDog on the Mac and refresh it once. In **Settings → Share from this computer**, choose **Enable host → Pair a phone**.
+1. Sign in or import an account in QuotaDog on the Mac and refresh it once. In **Settings → Share from this computer**, choose **Enable host → Pair a phone**.
 2. In QuotaDog on your phone, choose **Add account → Connect my computer** and scan the QR. Compare the six digits on both screens and approve the phone on the Mac. Pairing alone shares no accounts.
-3. On the Mac, choose one Devin login for this phone and select **View only** or **Allow refresh**. Leave QuotaDog running and the Mac awake for new readings. After changing networks, reopen the phone app; it reconnects without another QR. Offline, it keeps the last received reading and collection time.
+3. On the Mac, choose **View only** or **Allow refresh** for each account you want that phone to see. All eight providers can share readings, including Cursor and Devin without a CLI on the phone. Amp workspace credits have their own permission. Change any grant back to **Not shared** to withdraw just that source.
+4. To see a phone account on your Mac, open **Share from this phone** and grant access separately. The Mac does not pass that account to other phones. For a new reading the collector must be available (Mac awake or phone app in the foreground). On reconnect the dashboard exchanges the last authorized readings without repeating a provider query.
 
-No Tailscale, QuotaDog account, Dropbox login or router setup is needed. The production relay is `sync.quotadog.saien.pro`; the Mac makes an outbound connection and does not expose its ports. This feature shares Devin quota readings, not provider credentials. You can pause the host and revoke a phone while offline.
+No Tailscale, QuotaDog account, Dropbox login or router setup is needed. The production relay is `sync.quotadog.saien.pro`; the Mac makes an outbound connection and does not expose its ports. This feature shares structured quota readings, not provider credentials. You can pause the host and revoke a phone while offline. A disconnected device can still see readings it already received.
 
-Local and phone-requested Devin refreshes use the login and server imported into QuotaDog. If you change the CLI login or its server, import it again and explicitly share the replacement. Switching the CLI alone never switches the account shown to a phone.
+Update both peers for multiple accounts and two-way sharing. A 1.0.17 peer only supports one Mac-owned Devin source. Independent logins stay separate unless QuotaDog can verify the same provider identity **and** quota scope; matching an email or workspace name is not enough. Switching a CLI login does not transfer its grants.
 
 ## Privacy, Security, And Limits
 

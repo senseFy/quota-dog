@@ -23,6 +23,9 @@ interface IosPhonePlatform {
     @Throws(Exception::class)
     fun readPairing(): String
     fun writePairing(value: String?): Boolean
+    @Throws(Exception::class)
+    fun readGrantLimits(): String
+    fun writeGrantLimits(value: String): Boolean
     fun selectQr(image: Boolean, completion: (String?) -> Unit)
     fun watchNetwork(listener: IosSyncNetworkListener)
     fun stopWatchingNetwork()
@@ -57,8 +60,16 @@ fun IosPhonePlatform.openPhoneSync(): PhoneSync? {
         checkNotNull(signature(data)).bytes(72)
     }
     val vault = object : SyncVault {
-        override fun read(key: String): String? { check(key == "host"); return readPairing().ifEmpty { null } }
-        override fun write(key: String, value: String?) { check(key == "host" && writePairing(value)) }
+        override fun read(key: String): String? = when (key) {
+            "host" -> readPairing()
+            PHONE_GRANT_LIMITS -> readGrantLimits()
+            else -> error("Unknown pairing record")
+        }.ifEmpty { null }
+        override fun write(key: String, value: String?) = check(when (key) {
+            "host" -> writePairing(value)
+            PHONE_GRANT_LIMITS -> writeGrantLimits(checkNotNull(value))
+            else -> false
+        })
     }
     val client = HttpClient(Darwin) {
         followRedirects = false

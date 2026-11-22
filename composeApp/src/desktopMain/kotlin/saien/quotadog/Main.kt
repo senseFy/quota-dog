@@ -63,6 +63,7 @@ import saien.quotadog.app.FoldIndicator
 import saien.quotadog.app.FoldToggleUi
 import saien.quotadog.app.QUIET_REMAINING_RATIO
 import saien.quotadog.app.QuotaDogBackgroundEffects
+import saien.quotadog.app.accountSubtitle
 import saien.quotadog.app.foldToggle
 import saien.quotadog.app.foldableRowCount
 import saien.quotadog.app.foldedLabel
@@ -85,7 +86,7 @@ import saien.quotadog.app.theme.QdTheme
 import saien.quotadog.app.theme.QuotaDogTheme
 import saien.quotadog.app.theme.SystemThemeRefresh
 import saien.quotadog.app.theme.rememberSystemDarkTheme
-import saien.quotadog.hostsync.rememberHostSettings
+import saien.quotadog.hostsync.rememberMacHostSharing
 import java.awt.Frame
 import java.awt.event.WindowAdapter
 import java.awt.event.WindowEvent
@@ -119,7 +120,7 @@ fun main() = application {
             onLocalAccountDeleted = { cloudSync.recordAccountDeleted(it) },
         )
     }
-    val hostSettings = if (isMacOs()) rememberHostSettings(store, preferences) else null
+    val hostSharing = if (isMacOs()) rememberMacHostSharing(store, preferences) else null
     val windowState = rememberWindowState(width = 1100.dp, height = 760.dp)
     var windowVisible by remember { mutableStateOf(true) }
     var mainWindowFocusToken by remember { mutableIntStateOf(0) }
@@ -180,7 +181,8 @@ fun main() = application {
                 store = store,
                 manageBackgroundEffects = false,
                 versionLabel = "v${desktopMetadata.version} (${desktopMetadata.sequence})",
-                platformSettings = { hostSettings?.invoke(); updater?.let { DesktopUpdateSettings(it) } },
+                platformSettings = { hostSharing?.settings?.invoke(); updater?.let { DesktopUpdateSettings(it) } },
+                syncPeers = hostSharing?.peers.orEmpty(),
                 revealActionsOnHover = true,
             )
         }
@@ -1013,8 +1015,7 @@ private fun AccountUiState.trayAccountTitle(emailPrivacyMode: EmailPrivacyMode):
 }
 
 private fun AccountUiState.trayEmail(emailPrivacyMode: EmailPrivacyMode): String? {
-    val email = snapshot?.accountEmail?.takeIf { it.isNotBlank() }
-        ?: accountKey.accountId.takeUnless { accountKey.isPending || it == "default" }
+    val email = accountSubtitle()
     return if (emailPrivacyMode == EmailPrivacyMode.Masked) email?.maskEmailForTray() else email
 }
 

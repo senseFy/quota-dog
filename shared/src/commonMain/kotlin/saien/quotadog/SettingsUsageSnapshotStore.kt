@@ -61,7 +61,9 @@ class SettingsUsageSnapshotStore(
         save(accountKey, snapshot, updatedAtEpochMillis)
     }
 
-    fun deleteForSync(accountKey: AccountKey) {
+    fun deleteForSync(accountKey: AccountKey, throughEpochMillis: Long) {
+        val snapshot = load(accountKey) ?: return
+        if (snapshotUpdatedAt(accountKey, snapshot) > throughEpochMillis) return
         delete(accountKey)
     }
 

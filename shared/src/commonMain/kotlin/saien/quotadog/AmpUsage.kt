@@ -17,6 +17,10 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.jsonObject
+import saien.quotadog.hostsync.LocalQuota
+import saien.quotadog.hostsync.QuotaDetails
+import saien.quotadog.hostsync.QuotaWindowKind
+import saien.quotadog.hostsync.quotaWindow
 
 internal data class AmpUsageSnapshot(
     val planName: String?,
@@ -25,6 +29,7 @@ internal data class AmpUsageSnapshot(
     val individualCreditsDollars: Double? = null,
     val workspaceCreditsDollars: Double? = null,
     val workspaceName: String? = null,
+    val localQuota: LocalQuota,
 )
 
 /**
@@ -35,7 +40,6 @@ internal object AmpUsageFetcher {
     private const val BALANCE_METHOD = "userDisplayBalanceInfo"
     private const val USER_INFO_METHOD = "getUserInfo"
     private const val DAY_SECONDS = 24L * 60L * 60L
-    private const val THIRTY_DAY_SECONDS = 30L * 24L * 60L * 60L
 
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -79,6 +83,13 @@ internal object AmpUsageFetcher {
         """^(.+?)\s+credits:\s*\$(\d+(?:,\d{3})*(?:\.\d+)?)\s+remaining""",
         RegexOption.IGNORE_CASE,
     )
+    private val workspaceBalanceRegex = Regex(
+        """^Workspace\s+(.+?):\s*\$(\d+(?:,\d{3})*(?:\.\d+)?)\s+remaining""", RegexOption.IGNORE_CASE,
+    )
+    // Only the RPC's trailing canonical workspace link can bind more than one observation. A
+    // workspace name or a URL embedded in arbitrary text/another URL is not a discriminator.
+    private val workspaceLink = Regex("""(?:\s+\([^()]*\))?\s+-\s+https://ampcode\.com/workspaces/([a-zA-Z0-9-]{1,80})(?:/[a-zA-Z0-9_-]+)*/?""")
+    private val individualSuffix = Regex("""(?:\s+\([^()]*\))?\s+-\s+https://ampcode\.com/settings(?:/[a-zA-Z0-9_-]+)*/?""")
 
     suspend fun fetch(
         httpClient: HttpClient,
@@ -181,12 +192,38 @@ internal object AmpUsageFetcher {
         var freeWindow: UsageWindow? = null
         val tierWindows = mutableListOf<UsageWindow>()
         var individualCredits: Double? = null
+        var individualLines = 0
+        var individualScoped = false
         var workspaceCredits: Double? = null
         var workspaceName: String? = null
+        var workspaceScope: String? = null
+        var workspaceLines = 0
+        var details = QuotaDetails.AmpIndividual()
 
         for (rawLine in displayText.lines()) {
             val line = rawLine.trim()
             if (line.isEmpty()) continue
+
+            // Parse balance lines before display-name or tier prefixes. A workspace may be named
+            // "Individual" or start with "Amp Free:". Its amount is never an individual grant.
+            (workspaceCreditsRegex.find(line) ?: workspaceBalanceRegex.find(line))?.let { balance ->
+                val suffix = line.substring(balance.range.last + 1)
+                val slug = workspaceLink.matchEntire(suffix)?.groupValues?.get(1)
+                val amount = parseAmount(balance.groupValues[2])
+                if (individualCreditsRegex.containsMatchIn(line) && slug == null) {
+                    individualLines++
+                    individualCredits = amount
+                    individualScoped = individualSuffix.matches(suffix)
+                } else {
+                    workspaceLines++
+                    workspaceCredits = amount
+                    workspaceName = balance.groupValues[1].trim().takeUnless { it.equals("Workspace", ignoreCase = true) }
+                    // A display name is not stable consent to observe this workspace across refreshes.
+                    workspaceScope = slug?.let { "amp-workspace-url:$it" }
+                        ?: "amp-workspace-observation:${secureRandomBytes(16).toHexString()}"
+                }
+                continue
+            }
 
             if (email == null) {
                 signedInRegex.find(line)?.let { match ->
@@ -197,28 +234,22 @@ internal object AmpUsageFetcher {
 
             if (line.startsWith("Amp Free:", ignoreCase = true)) {
                 parseFreeLine(line, now)?.let { freeWindow = it }
+                freeDollarsRegex.find(line)?.let { m ->
+                    details = details.copy(freeRemainingUsd = parseAmount(m.groupValues[1]), freeLimitUsd = parseAmount(m.groupValues[2]),
+                        replenishesUsdPerHour = replenishRegex.find(line)?.groupValues?.get(1)?.let(::parseAmount))
+                }
                 continue
             }
 
             tierLineRegex.find(line)?.let { match ->
                 planName = match.groupValues[1].trim().takeIf { it.isNotEmpty() }
-                tierWindows += parseTierLine(match.groupValues[2], now)
-                continue
-            }
-
-            individualCreditsRegex.find(line)?.let { match ->
-                individualCredits = parseAmount(match.groupValues[1])
-                continue
-            }
-
-            workspaceCreditsRegex.find(line)?.let { match ->
-                val label = match.groupValues[1].trim()
-                val amount = parseAmount(match.groupValues[2])
-                if (amount != null) {
-                    workspaceCredits = amount
-                    if (!label.equals("Workspace", ignoreCase = true)) {
-                        workspaceName = label
-                    }
+                val tier = match.groupValues[2]
+                tierWindows += parseTierLine(tier, now)
+                agentDollarsRegex.find(tier)?.let { m ->
+                    details = details.copy(agentRemainingUsd = parseAmount(m.groupValues[1]), agentLimitUsd = parseAmount(m.groupValues[2]))
+                }
+                orbHoursRegex.find(tier)?.let { m ->
+                    details = details.copy(orbRemainingHours = parseAmount(m.groupValues[1]), orbLimitHours = parseAmount(m.groupValues[2]))
                 }
                 continue
             }
@@ -228,6 +259,17 @@ internal object AmpUsageFetcher {
             addAll(tierWindows)
             freeWindow?.let { add(it) }
         }.toMutableList()
+
+        // Take the actual tier/free readings before the local card adds its synthetic pay-as-you-go bar.
+        val quotaWindows = windows.mapNotNull { w ->
+            when (w.id) {
+                "amp-free" -> w.quotaWindow(QuotaWindowKind.AmpFree)
+                "amp-agent" -> w.quotaWindow(QuotaWindowKind.AmpAgent)
+                "amp-orb" -> w.quotaWindow(QuotaWindowKind.AmpOrb)
+                else -> null
+            }
+        }.groupBy { it.kind }.values.mapNotNull { it.singleOrNull() }
+        details = details.copy(creditsUsd = individualCredits.takeIf { individualLines == 1 && individualScoped })
 
         if (windows.isEmpty()) {
             val anyCredits = individualCredits ?: workspaceCredits
@@ -254,6 +296,8 @@ internal object AmpUsageFetcher {
             individualCreditsDollars = individualCredits,
             workspaceCreditsDollars = workspaceCredits,
             workspaceName = workspaceName,
+            localQuota = LocalQuota(ProviderId.AMP, quotaWindows, details.takeUnless { it == QuotaDetails.AmpIndividual() },
+                ampWorkspaceUsd = workspaceCredits, ampWorkspaceScope = workspaceScope.takeIf { workspaceLines == 1 && workspaceCredits != null }),
         )
     }
 
@@ -273,7 +317,7 @@ internal object AmpUsageFetcher {
             val durationSeconds = if (replenishPerHour != null && replenishPerHour > 0.0) {
                 ((total / replenishPerHour) * 3_600.0).toLong().takeIf { it > 0L }
             } else {
-                DAY_SECONDS
+                null
             }
             return UsageWindow(
                 id = "amp-free",
@@ -290,7 +334,7 @@ internal object AmpUsageFetcher {
                 label = "Amp Free",
                 usedRatio = 1.0 - normalizePercent(pct),
                 resetsAt = null,
-                durationSeconds = DAY_SECONDS,
+                durationSeconds = DAY_SECONDS.takeIf { line.contains("today", true) || line.contains("daily", true) },
             )
         }
         return null
@@ -298,7 +342,7 @@ internal object AmpUsageFetcher {
 
     private fun parseTierLine(detail: String, now: Instant): List<UsageWindow> {
         var resetsAt: Instant? = null
-        var durationSeconds: Long = THIRTY_DAY_SECONDS
+        var durationSeconds: Long? = null
 
         periodDatesRegex.find(detail)?.let { match ->
             val start = runCatching { Instant.parse("${match.groupValues[1]}T00:00:00Z") }.getOrNull()
@@ -312,7 +356,7 @@ internal object AmpUsageFetcher {
         }
         if (resetsAt == null) {
             renewalDaysRegex.find(detail)?.groupValues?.get(1)?.toLongOrNull()?.let { days ->
-                if (days > 0) {
+                if (days in 1..366) {
                     resetsAt = Instant.fromEpochSeconds(now.epochSeconds + days * DAY_SECONDS)
                 }
             }
@@ -371,7 +415,7 @@ internal object AmpUsageFetcher {
     }
 
     private fun parseAmount(raw: String): Double? {
-        return raw.replace(",", "").trim().toDoubleOrNull()
+        return raw.replace(",", "").trim().toDoubleOrNull()?.takeIf { it.isFinite() && it >= 0 }
     }
 
     private fun JsonObject.stringField(name: String): String? {

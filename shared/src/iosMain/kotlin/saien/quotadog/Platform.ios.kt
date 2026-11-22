@@ -39,6 +39,10 @@ actual class PlatformTokenStore actual constructor() : TokenStore {
         delegate.save(accountKey, token)
     }
 
+    override suspend fun commitIfCurrent(
+        accountKey: AccountKey, expected: OAuthTokenBundle, replacement: OAuthTokenBundle, commit: () -> Unit,
+    ) = delegate.commitIfCurrent(accountKey, expected, replacement, commit)
+
     override suspend fun delete(accountKey: AccountKey) {
         delegate.delete(accountKey)
     }
@@ -53,8 +57,8 @@ actual class PlatformTokenStore actual constructor() : TokenStore {
         delegate.importTokenForSync(accountKey, token, updatedAtEpochMillis)
     }
 
-    override suspend fun deleteForSync(accountKey: AccountKey) {
-        delegate.deleteForSync(accountKey)
+    override suspend fun deleteForSync(accountKey: AccountKey, throughEpochMillis: Long?) {
+        delegate.deleteForSync(accountKey, throughEpochMillis)
     }
 }
 

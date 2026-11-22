@@ -5,16 +5,23 @@ import kotlinx.datetime.Instant
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.intOrNull
-import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
+import saien.quotadog.hostsync.LocalQuota
+import saien.quotadog.hostsync.QuotaDetails
+import saien.quotadog.hostsync.QuotaWindow
+import saien.quotadog.hostsync.QuotaWindowKind
+import saien.quotadog.hostsync.quotaWindow
+import kotlin.io.encoding.Base64
 
 data class CodexResetSummary(
     val availableCount: Int,
@@ -88,7 +95,45 @@ internal data class CodexUsageParseResult(
     val planType: String?,
     val resetCreditsAvailable: Int?,
     val resetCreditsApplicable: Int?,
-)
+    private val quotaWindows: List<QuotaWindow>,
+    val userId: String?,
+    val accountId: String?,
+) {
+    fun localQuota(token: OAuthTokenBundle, merged: CodexResetCreditsMerge): LocalQuota {
+        val expires = merged.credits.filter { it.isAvailable }.mapNotNull { it.expiresAt?.toEpochMilliseconds() }
+            .filter { it in 0..253402300799999L }.sorted().take(32)
+        val details = if (merged.availableCount != null || merged.applicableCount != null || expires.isNotEmpty()) {
+            QuotaDetails.Codex(merged.availableCount, merged.applicableCount, expires)
+        } else null
+        // The successful /wham/usage body is the authority. Credential hints can veto it, never supply a missing ID.
+        val knownId = Regex("[A-Za-z0-9_-]{1,128}")
+        val scope = if (userId?.matches(knownId) == true && accountId?.matches(knownId) == true && token.agreesWithWham(userId, accountId)) {
+            listOf(userId, accountId)
+        } else null
+        return LocalQuota(ProviderId.CODEX, quotaWindows, details, scope)
+    }
+}
+
+private fun OAuthTokenBundle.agreesWithWham(user: String, account: String): Boolean {
+    if (accountId != null && accountId != account) return false
+    if (principalId != null && principalId != user) return false
+    for (jwt in listOfNotNull(accessToken, idToken)) {
+        if (!jwt.contains('.') && jwt != idToken) continue // Opaque bearer; no claims to compare.
+        val segments = jwt.split('.')
+        if (segments.size != 3) return false
+        val claims = runCatching {
+            Json.parseToJsonElement(Base64.UrlSafe.withPadding(Base64.PaddingOption.ABSENT_OPTIONAL)
+                .decode(segments[1]).decodeToString()).jsonObject
+        }.getOrNull() ?: return false
+        val auth = claims["https://api.openai.com/auth"] ?: continue
+        if (auth !is JsonObject) return false
+        for ((key, expected) in listOf("chatgpt_user_id" to user, "user_id" to user, "chatgpt_account_id" to account)) {
+            val hint = auth[key] ?: continue
+            if (hint !is JsonPrimitive || !hint.isString || hint.content != expected) return false
+        }
+    }
+    return true
+}
 
 internal data class CodexResetCreditsDetails(
     val availableCount: Int,
@@ -111,16 +156,36 @@ internal object CodexUsageParser {
         }
         val rateLimit = root["rate_limit"]?.jsonObject
             ?: throw ProviderException(AuthState.Error, "Codex usage response is missing 'rate_limit'")
-        val windows = listOfNotNull(
-            parseWindow("primary", rateLimit["primary_window"]),
-            parseWindow("secondary", rateLimit["secondary_window"]),
-        ).sortedBy { it.resetsAt?.toEpochMilliseconds() ?: Long.MAX_VALUE }
-        val resetCredits = root["rate_limit_reset_credits"]?.jsonObject
+        val quotaWindows = listOfNotNull(
+            parseWindow(QuotaWindowKind.CodexPrimary, rateLimit["primary_window"]),
+            parseWindow(QuotaWindowKind.CodexSecondary, rateLimit["secondary_window"]),
+        )
+        val windows = quotaWindows.mapNotNull { w ->
+            val used = w.used ?: return@mapNotNull null
+            val seconds = w.durationSeconds
+            val label = when (seconds) {
+                18_000L -> "5-hour window"
+                604_800L -> "7-day window"
+                else -> if ((seconds ?: 0) >= 604_800) "Weekly window" else "Window ${seconds ?: "unknown"}s"
+            }
+            UsageWindow(if (w.kind == QuotaWindowKind.CodexPrimary) "primary" else "secondary", label, used,
+                w.resetsAt?.let(Instant::fromEpochMilliseconds), durationSeconds = seconds)
+        }.sortedBy { it.resetsAt?.toEpochMilliseconds() ?: Long.MAX_VALUE }
+        val resetCredits = root["rate_limit_reset_credits"] as? JsonObject
+        fun responseId(key: String): String? {
+            val value = root[key]?.takeUnless { it is JsonNull } ?: return null
+            // Keep opaque, unfamiliar IDs for local scope changes without using them for cross-device matches.
+            return (value as? JsonPrimitive)?.takeIf { it.isString }?.content?.takeIf { it.length in 1..256 && it.none { c -> c <= ' ' || c == '\u007f' } }
+                ?: throw ProviderException(AuthState.Error, "Codex returned an invalid quota identifier.")
+        }
         return CodexUsageParseResult(
             windows = windows,
             planType = root["plan_type"]?.jsonPrimitive?.contentOrNull,
             resetCreditsAvailable = resetCredits?.get("available_count").intCountOrNull(),
             resetCreditsApplicable = resetCredits?.get("applicable_available_count").intCountOrNull(),
+            quotaWindows = quotaWindows,
+            userId = responseId("user_id"),
+            accountId = responseId("account_id"),
         )
     }
 
@@ -128,12 +193,11 @@ internal object CodexUsageParser {
         val root = runCatching { json.parseToJsonElement(text).jsonObject }.getOrElse {
             throw ProviderException(AuthState.Error, "Codex reset credits response was not valid JSON.")
         }
-        val credits = root["credits"]
-            ?.let { element -> runCatching { element.jsonArray }.getOrNull() }
-            ?.mapNotNull(::parseCredit)
-            .orEmpty()
-        val availableFromCredits = credits.count { it.isAvailable }
-        val availableCount = root["available_count"].intCountOrNull() ?: availableFromCredits
+        val rows = root["credits"] as? JsonArray
+        val credits = rows?.mapNotNull(::parseCredit).orEmpty()
+        val availableCount = root["available_count"].intCountOrNull()
+            ?: rows?.takeIf { it.size == credits.size }?.let { credits.count { it.isAvailable } }
+            ?: throw ProviderException(AuthState.Error, "Codex did not report a reset credit count.")
         return CodexResetCreditsDetails(
             availableCount = availableCount.coerceAtLeast(0),
             applicableCount = root["applicable_available_count"].intCountOrNull(),
@@ -156,32 +220,18 @@ internal object CodexUsageParser {
         )
     }
 
-    private fun parseWindow(id: String, element: JsonElement?): UsageWindow? {
-        if (element == null || element is JsonNull) return null
-        val obj = element.jsonObject
-        val used = obj["used_percent"]?.jsonPrimitive?.doubleOrNull ?: return null
-        val seconds = obj["limit_window_seconds"]?.jsonPrimitive?.intOrNull
-        val label = when (seconds) {
-            18_000 -> "5-hour window"
-            604_800 -> "7-day window"
-            else -> if ((seconds ?: 0) >= 604_800) "Weekly window" else "Window ${seconds ?: "unknown"}s"
-        }
-        val resetAt = obj["reset_at"]?.jsonPrimitive?.contentOrNull?.toLongOrNull()
-            ?.let { Instant.fromEpochSeconds(it) }
-        return UsageWindow(
-            id = id,
-            label = label,
-            // Codex reports used_percent on a 0–100 scale (1 means 1%, not full).
-            usedRatio = normalizePercent(used),
-            resetsAt = resetAt,
-            durationSeconds = seconds?.toLong(),
-        )
+    private fun parseWindow(kind: QuotaWindowKind, element: JsonElement?): QuotaWindow? {
+        val obj = element as? JsonObject ?: return null
+        val used = (obj["used_percent"] as? JsonPrimitive)?.doubleOrNull?.takeIf { it.isFinite() && it >= 0 }
+        val seconds = (obj["limit_window_seconds"] as? JsonPrimitive)?.longOrNull
+        val resetAt = (obj["reset_at"] as? JsonPrimitive)?.longOrNull?.let(Instant::fromEpochSeconds)
+        return quotaWindow(kind, used?.let(::normalizePercent), resetAt, seconds)
     }
 
     private fun parseCredit(element: JsonElement): CodexResetCredit? {
         val obj = element as? JsonObject ?: runCatching { element.jsonObject }.getOrNull() ?: return null
         val id = obj["id"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() } ?: return null
-        val status = obj["status"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() } ?: "available"
+        val status = obj["status"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() } ?: return null
         return CodexResetCredit(
             id = id,
             status = status,
@@ -216,11 +266,7 @@ private val SHORT_MONTHS = arrayOf(
 private fun JsonElement?.intCountOrNull(): Int? {
     if (this == null || this is JsonNull) return null
     val primitive = runCatching { jsonPrimitive }.getOrNull() ?: return null
-    val value = primitive.intOrNull
-        ?: primitive.longOrNull?.coerceIn(0, Int.MAX_VALUE.toLong())?.toInt()
-        ?: primitive.contentOrNull?.toIntOrNull()
-        ?: return null
-    return value.coerceAtLeast(0)
+    return primitive.intOrNull?.takeIf { it >= 0 }
 }
 
 internal fun Instant.codexRemainingLabel(now: Instant = Clock.System.now()): String {

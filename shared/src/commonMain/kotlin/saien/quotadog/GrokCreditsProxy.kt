@@ -118,11 +118,12 @@ internal object GrokCreditsProxyFetcher {
         val config = response.config
             ?: throw ProviderException(AuthState.Error, "Grok billing response is missing config.")
 
-        val resetsAt = parseIsoInstant(config.currentPeriod?.end)
-            ?: parseIsoInstant(config.billingPeriodEnd)
+        val period = config.currentPeriod
+        val periodEnd = parseIsoInstant(period?.end)
+        val resetsAt = periodEnd ?: parseIsoInstant(config.billingPeriodEnd)
 
         val percent = config.creditUsagePercent
-            ?.takeIf { it.isFinite() }
+            ?.takeIf { it.isFinite() && it >= 0 }
             ?.let { it.coerceIn(0.0, 100.0) }
             ?: onDemandPercent(config.onDemandUsed?.value, config.onDemandCap?.value)
 
@@ -141,13 +142,15 @@ internal object GrokCreditsProxyFetcher {
         return GrokBillingSnapshot(
             usedPercent = usedPercent,
             resetsAt = resetsAt?.takeIf { it > now } ?: resetsAt,
-            periodType = config.currentPeriod?.type,
+            periodType = period?.type,
             subscriptionTier = subscriptionTier?.trim()?.takeIf { it.isNotEmpty() },
+            // The end of a billing cycle is not necessarily the end of a separately reported credits period.
+            localQuota = grokLocalQuota(percent, if (period == null) resetsAt else periodEnd, period?.type, parseIsoInstant(period?.start)),
         )
     }
 
     private fun onDemandPercent(used: Double?, cap: Double?): Double? {
-        if (used == null || cap == null || !used.isFinite() || !cap.isFinite() || cap <= 0.0) return null
+        if (used == null || cap == null || !used.isFinite() || used < 0 || !cap.isFinite() || cap <= 0.0) return null
         return ((used / cap) * 100.0).coerceIn(0.0, 100.0)
     }
 

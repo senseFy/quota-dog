@@ -134,7 +134,6 @@ import saien.quotadog.ampCliImportAvailable
 import saien.quotadog.antigravityAuthHint
 import saien.quotadog.antigravityCliImportAvailable
 import saien.quotadog.availableProviders
-import saien.quotadog.canonicalManualOrder
 import saien.quotadog.cliImportAvailable
 import saien.quotadog.codexResetSummary
 import saien.quotadog.displayPlanLabel
@@ -143,14 +142,12 @@ import saien.quotadog.droidCliImportAvailable
 import saien.quotadog.expiryLabel
 import saien.quotadog.grokAuthFileHint
 import saien.quotadog.grokCliImportAvailable
+import saien.quotadog.hostsync.localSourceLabel
 import saien.quotadog.isExpiringSoon
 import saien.quotadog.isQuotaExhausted
 import saien.quotadog.oauthAvailable
 import saien.quotadog.projectedUsedRatio
-import saien.quotadog.reorderDisplayedManualOrder
-import saien.quotadog.sortedAccounts
 import saien.quotadog.spentWindowResetAt
-import saien.quotadog.withExhaustedLast
 import kotlin.time.Duration.Companion.minutes
 
 @Composable
@@ -176,9 +173,10 @@ fun App(
     // Pointer platforms show each account's refresh and menu only while it is hovered in the
     // denser layouts. Touch platforms keep them visible.
     revealActionsOnHover: Boolean = false,
-    hostSyncContent: (@Composable () -> Unit)? = null,
+    hostSyncContent: (@Composable (QuotaDogStore) -> Unit)? = null,
     showLocalEmptyState: Boolean = true,
     onConnectComputer: (() -> Unit)? = null,
+    syncPeers: List<DashboardPeer> = emptyList(),
 ) {
     val activeStore = store ?: remember {
         QuotaDogStore(
@@ -206,6 +204,7 @@ fun App(
             hostSyncContent = hostSyncContent,
             showLocalEmptyState = showLocalEmptyState,
             onConnectComputer = onConnectComputer,
+            syncPeers = syncPeers,
         )
     }
 }
@@ -267,9 +266,10 @@ private fun QuotaDogScreen(
     versionLabel: String,
     platformSettings: (@Composable () -> Unit)?,
     revealActionsOnHover: Boolean,
-    hostSyncContent: (@Composable () -> Unit)?,
+    hostSyncContent: (@Composable (QuotaDogStore) -> Unit)?,
     showLocalEmptyState: Boolean,
     onConnectComputer: (() -> Unit)?,
+    syncPeers: List<DashboardPeer>,
 ) {
     val state by store.state.collectAsState()
     val themeMode by preferences.themeMode.collectAsState()
@@ -300,13 +300,16 @@ private fun QuotaDogScreen(
     val colors = QdTheme.colors
     val spacing = QdTheme.spacing
 
-    val accounts = state.accounts.values
-        .filter { it.shouldShowAccount() }
-        .sortedAccounts(accountSortMode, accountManualOrder, accountSortReversed)
-    val availableProviders = accounts.map { it.providerId }.distinct().sortedBy { it.ordinal }
-    val refreshableAccounts = accounts.filter { it.canRefreshUsage() }
-    val refreshAllBusy = refreshableAccounts.any { it.busy }
-    val refreshAllEnabled = refreshableAccounts.any { !it.busy }
+    val localAccounts = remember(state) { state.accounts.values.filter { it.shouldShowAccount() } }
+    val history = remember(store) { DashboardReadingHistory() }
+    val rows = remember(localAccounts, syncPeers, history) { dashboardAccounts(localAccounts, syncPeers, history = history) }
+    var sessionOrder by remember { mutableStateOf(emptyList<DashboardKey>()) }
+    val accounts = rows.inDashboardOrder(accountSortMode, accountManualOrder, sessionOrder, accountSortReversed)
+    val availableProviders = accounts.map { it.provider }.distinct().sortedBy { it.ordinal }
+    // Plan over all logical rows, not the active filter or every collector/copy independently.
+    val refreshAll = rows.refreshAllTargets()
+    val refreshAllBusy = rows.any { it.busy }
+    val refreshAllEnabled = refreshAll.isNotEmpty()
 
     LaunchedEffect(availableProviders) {
         if (selectedProvider != null && selectedProvider !in availableProviders) {
@@ -320,22 +323,17 @@ private fun QuotaDogScreen(
     val safeTop = safeInsets.calculateTopPadding()
     val safeBottom = safeInsets.calculateBottomPadding()
     val refreshAllAction = {
-        store.startRefreshAll()
+        refreshAll.forEach { target -> target.run { store.startRefresh(it.accountKey) } }
         snackbar.show(
             text = if (refreshAllBusy) "Refreshing remaining accounts..." else "Refreshing all accounts...",
             tone = QdSnackbarTone.Info,
         )
     }
     val selectSortMode = { mode: AccountSortMode ->
-        if (mode == AccountSortMode.Manual && accountManualOrder.isEmpty()) {
-            val displayed = accounts.map { it.accountKey }
-            val seed = if (accountSortReversed) displayed.reversed() else displayed
-            preferences.setAccountManualOrder(
-                canonicalManualOrder(
-                    state.accounts.values.filter { it.shouldShowAccount() },
-                    seed,
-                ),
-            )
+        if (mode == AccountSortMode.Manual && accountManualOrder.isEmpty() && sessionOrder.isEmpty()) {
+            val displayed = accounts.map { it.key }
+            sessionOrder = if (accountSortReversed) displayed.asReversed() else displayed
+            preferences.setAccountManualOrder(sessionOrder.filterIsInstance<DashboardKey.Local>().map { it.key })
         }
         if (mode != accountSortMode) {
             preferences.setAccountSortMode(mode)
@@ -367,17 +365,17 @@ private fun QuotaDogScreen(
         val activeProvider = selectedProvider?.takeIf { it in availableProviders }
         val contentMaxWidth = if (isDesktop) 1080.dp else maxWidth
         val horizontalPadding = if (isDesktop) spacing.xxl else spacing.lg
-        val topPadding = safeTop + if (isDesktop) spacing.xl else spacing.lg
-        val bottomPadding = safeBottom + if (isDesktop) spacing.xxxl else 88.dp
 
         Column(
             modifier = Modifier
                 .align(Alignment.TopCenter)
                 .widthIn(max = contentMaxWidth)
                 .fillMaxSize()
+                // Keep scrolled rows outside the status bar and the fixed mobile Add button.
+                .padding(top = safeTop, bottom = safeBottom + if (isDesktop) 0.dp else 72.dp)
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = horizontalPadding)
-                .padding(top = topPadding, bottom = bottomPadding),
+                .padding(top = if (isDesktop) spacing.xl else spacing.lg, bottom = if (isDesktop) spacing.xxxl else spacing.lg),
             verticalArrangement = Arrangement.spacedBy(if (isDesktop) spacing.lg else spacing.md),
         ) {
             DashboardHeader(
@@ -394,7 +392,7 @@ private fun QuotaDogScreen(
                 onOpenSettings = { showSettings = true },
             )
 
-            hostSyncContent?.invoke()
+            hostSyncContent?.invoke(store)
             if (accounts.isEmpty()) {
                 if (showLocalEmptyState) AccountsEmptyState(isDesktop = isDesktop)
             } else {
@@ -406,6 +404,7 @@ private fun QuotaDogScreen(
                 )
                 if (manualReorderEditing) {
                     ManualReorderBar(
+                        hasRemote = accounts.any { it is DashboardAccount.Remote },
                         onDone = {
                             manualReorderEditing = false
                             cloudSync.startPushLocalChanges()
@@ -413,34 +412,28 @@ private fun QuotaDogScreen(
                     )
                 }
                 val filteredAccounts = activeProvider?.let { selected ->
-                    accounts.filter { it.providerId == selected }
+                    accounts.filter { it.provider == selected }
                 } ?: accounts
                 // Manual editing keeps the saved order so a move matches the row on screen.
                 val visibleAccounts = if (manualReorderEditing || !sinkExhaustedAccounts) {
                     filteredAccounts
                 } else {
-                    filteredAccounts.withExhaustedLast()
+                    filteredAccounts.sortedBy { it.exhausted }
                 }
-                val moveVisibleAccount = { key: AccountKey, delta: Int, pushSync: Boolean ->
-                    val pool = store.state.value.accounts.values.filter { it.shouldShowAccount() }
-                    val active = selectedProvider?.takeIf { chosen ->
-                        pool.any { it.providerId == chosen }
-                    }
-                    val updated = reorderDisplayedManualOrder(
-                        accounts = pool,
-                        stored = preferences.accountManualOrder.value,
-                        reversed = preferences.accountSortReversed.value,
-                        provider = active,
-                        key = key,
-                        delta = delta,
-                    )
-                    if (updated != preferences.accountManualOrder.value) {
-                        preferences.setAccountManualOrder(updated)
+                val moveVisibleAccount = { key: DashboardKey, delta: Int, pushSync: Boolean ->
+                    val reversed = preferences.accountSortReversed.value
+                    val full = rows.inDashboardOrder(AccountSortMode.Manual, preferences.accountManualOrder.value, sessionOrder, reversed)
+                    val moved = moveDashboardKey(full, activeProvider, key, delta)
+                    sessionOrder = if (reversed) moved.asReversed() else moved
+                    val local = sessionOrder.filterIsInstance<DashboardKey.Local>().map { it.key }
+                    if (local != preferences.accountManualOrder.value) {
+                        preferences.setAccountManualOrder(local)
                         if (pushSync) cloudSync.startPushLocalChanges()
                     }
                 }
                 AccountCards(
                     accounts = visibleAccounts,
+                    showSourceDetails = syncPeers.isNotEmpty(),
                     isDesktop = isDesktop,
                     layout = dashboardLayout,
                     revealActionsOnHover = revealActionsOnHover,
@@ -1020,7 +1013,7 @@ private fun SortDirectionRow(
 }
 
 @Composable
-private fun ManualReorderBar(onDone: () -> Unit) {
+private fun ManualReorderBar(hasRemote: Boolean, onDone: () -> Unit) {
     val colors = QdTheme.colors
     val typo = QdTheme.typography
     val spacing = QdTheme.spacing
@@ -1030,7 +1023,7 @@ private fun ManualReorderBar(onDone: () -> Unit) {
         horizontalArrangement = Arrangement.spacedBy(spacing.md),
     ) {
         Text(
-            "Drag the handle to reorder.",
+            if (hasRemote) "Drag to reorder. Shared card positions last for this session." else "Drag the handle to reorder.",
             style = typo.bodyMedium,
             color = colors.textSecondary,
             modifier = Modifier.weight(1f),
@@ -1090,7 +1083,7 @@ private fun AccountsEmptyState(isDesktop: Boolean) {
 
 @Composable
 private fun ProviderSwitcher(
-    accounts: List<AccountUiState>,
+    accounts: List<DashboardAccount>,
     providers: List<ProviderId>,
     selected: ProviderId?,
     onSelect: (ProviderId?) -> Unit,
@@ -1098,7 +1091,7 @@ private fun ProviderSwitcher(
     val options: List<Pair<String, ProviderId?>> =
         listOf("All providers (${accounts.size})" to null) +
             providers.map { provider ->
-                val accountCount = accounts.count { it.providerId == provider }
+                val accountCount = accounts.count { it.provider == provider }
                 "${provider.displayName} ($accountCount)" to provider
             }
     Box(
@@ -1142,7 +1135,8 @@ private fun sortChangeLabel(mode: AccountSortMode, reversed: Boolean): String = 
 
 @Composable
 private fun AccountCards(
-    accounts: List<AccountUiState>,
+    accounts: List<DashboardAccount>,
+    showSourceDetails: Boolean,
     isDesktop: Boolean,
     layout: DashboardLayout,
     revealActionsOnHover: Boolean,
@@ -1158,52 +1152,79 @@ private fun AccountCards(
     onSignInAgain: (ProviderId) -> Unit,
     onRefresh: (AccountUiState) -> Unit,
     onRequestDelete: (AccountKey) -> Unit,
-    onMove: (AccountKey, Int, Boolean) -> Unit,
+    onMove: (DashboardKey, Int, Boolean) -> Unit,
     onMoveFinished: () -> Unit,
 ) {
     val colors = QdTheme.colors
     val spacing = QdTheme.spacing
     val dragState = rememberAccountReorderDragState()
-    val visibleKeys = accounts.map { it.accountKey }
+    val visibleKeys = accounts.map { it.key }
     // Accounts the user opened or closed by hand in a layout that folds them.
-    val expandedAccounts = remember { mutableStateMapOf<AccountKey, Boolean>() }
+    val expandedAccounts = remember { mutableStateMapOf<DashboardKey, Boolean>() }
     // One line separates rows with a 1 dp rule instead of a gap.
     val itemSpacing = if (layout == DashboardLayout.OneLine) 1.dp else spacing.md
 
     @Composable
-    fun cardAt(index: Int, providerState: AccountUiState, inline: Boolean, modifier: Modifier) {
-        val accountKey = providerState.accountKey
+    fun cardAt(index: Int, row: DashboardAccount, inline: Boolean, modifier: Modifier) {
+        val rowKey = row.key
         val reorder = if (manualReorder) {
             AccountReorderControls(
                 canMoveUp = index > 0,
                 canMoveDown = index < accounts.lastIndex,
                 handleModifier = Modifier.accountDragHandle(
-                    accountKey = accountKey,
+                    accountKey = rowKey,
                     dragState = dragState,
                     visibleKeys = visibleKeys,
                     itemSpacing = itemSpacing,
                     onMove = { key, delta -> onMove(key, delta, false) },
                     onDragFinished = onMoveFinished,
                 ),
-                onMoveUp = { onMove(accountKey, -1, true) },
-                onMoveDown = { onMove(accountKey, 1, true) },
+                onMoveUp = { onMove(rowKey, -1, true) },
+                onMoveDown = { onMove(rowKey, 1, true) },
             )
         } else {
             null
         }
         val cardModifier = if (manualReorder) {
             modifier
-                .reportAccountReorderHeight(accountKey, dragState)
-                .accountReorderVisual(accountKey, dragState)
+                .reportAccountReorderHeight(rowKey, dragState)
+                .accountReorderVisual(rowKey, dragState)
         } else {
             modifier
         }
+        if (row is DashboardAccount.Remote) {
+            AccountSurface(layout, cardModifier) {
+                RemoteSourceContent(row.source, usageDisplayMode, layout) {
+                    reorder?.let { AccountReorderButtons(it, compact = layout != DashboardLayout.Cards) }
+                }
+            }
+            return
+        }
+        val local = row as DashboardAccount.Local
+        val providerState = local.account
+        val accountKey = providerState.accountKey
+        if (local.copies.isNotEmpty()) {
+            AccountSurface(layout, cardModifier) {
+                MergedAccountContent(local, usageDisplayMode, layout, showProjectedUsage, onRefresh,
+                    trailing = { reorder?.let { AccountReorderButtons(it, compact = layout != DashboardLayout.Cards) } },
+                    localManagement = {
+                        providerState.displayEmail()?.let { AccountEmailTitle(it, emailPrivacyMode) }
+                        AccountSignInDetails(providerState, callbackInput(accountKey), { onCallbackChange(accountKey, it) },
+                            { onCompleteLogin(accountKey) }, { onReopenLogin(accountKey) }, { onSignInAgain(providerState.providerId) })
+                        QdButton("Remove account from this device", { onRequestDelete(accountKey) },
+                            variant = QdButtonVariant.Ghost, size = QdButtonSize.Small)
+                    },
+                )
+            }
+            return
+        }
         AccountCard(
             state = providerState,
+            showSourceDetails = showSourceDetails,
             layout = layout,
             inline = inline,
-            expanded = expandedAccounts[accountKey] == true,
-            onToggleExpanded = { expandedAccounts[accountKey] = expandedAccounts[accountKey] != true },
+            expanded = expandedAccounts[rowKey] == true,
+            onToggleExpanded = { expandedAccounts[rowKey] = expandedAccounts[rowKey] != true },
             revealActionsOnHover = revealActionsOnHover,
             usageDisplayMode = usageDisplayMode,
             showProjectedUsage = showProjectedUsage,
@@ -1233,7 +1254,7 @@ private fun AccountCards(
                     .border(1.dp, colors.border, QdTheme.shapes.md),
             ) {
                 accounts.forEachIndexed { index, providerState ->
-                    key(providerState.accountKey) {
+                    key(providerState.key) {
                         if (index > 0) {
                             Box(
                                 modifier = Modifier
@@ -1254,7 +1275,7 @@ private fun AccountCards(
     if (!isDesktop || manualReorder) {
         Column(verticalArrangement = Arrangement.spacedBy(spacing.md)) {
             accounts.forEachIndexed { index, providerState ->
-                key(providerState.accountKey) {
+                key(providerState.key) {
                     cardAt(index, providerState, false, Modifier.fillMaxWidth())
                 }
             }
@@ -1264,7 +1285,7 @@ private fun AccountCards(
 
     // Spent accounts arrive last, so they start a new row instead of sharing one with a usable account.
     val spentStart = if (sinkExhaustedAccounts) {
-        accounts.indexOfFirst { it.isQuotaExhausted() }
+        accounts.indexOfFirst { it.exhausted }
     } else {
         -1
     }
@@ -1283,7 +1304,7 @@ private fun AccountCards(
                         horizontalArrangement = Arrangement.spacedBy(spacing.md),
                     ) {
                         rowAccounts.forEachIndexed { columnIndex, providerState ->
-                            key(providerState.accountKey) {
+                            key(providerState.key) {
                                 cardAt(
                                     offset + rowIndex * 2 + columnIndex,
                                     providerState,
@@ -1311,7 +1332,7 @@ private fun AccountCards(
                         ) {
                             group.forEachIndexed { index, providerState ->
                                 if (index % 2 == column) {
-                                    key(providerState.accountKey) {
+                                    key(providerState.key) {
                                         cardAt(offset + index, providerState, false, Modifier.fillMaxWidth())
                                     }
                                 }
@@ -1384,6 +1405,7 @@ internal fun Modifier.foldToggle(foldable: Boolean, folded: Boolean, onToggle: (
 @Composable
 private fun AccountCard(
     state: AccountUiState,
+    showSourceDetails: Boolean,
     layout: DashboardLayout,
     inline: Boolean,
     expanded: Boolean,
@@ -1403,7 +1425,6 @@ private fun AccountCard(
     reorder: AccountReorderControls? = null,
     modifier: Modifier = Modifier,
 ) {
-    val colors = QdTheme.colors
     val spacing = QdTheme.spacing
     var menuExpanded by remember { mutableStateOf(false) }
     val hover = remember { MutableInteractionSource() }
@@ -1425,7 +1446,7 @@ private fun AccountCard(
         .focusGroup()
         .foldToggle(foldable, folded, onToggleExpanded)
 
-    val content: @Composable () -> Unit = {
+    AccountSurface(layout, surfaceModifier) {
         Column(verticalArrangement = Arrangement.spacedBy(spacing.sm)) {
             if (layout == DashboardLayout.Cards) {
                 AccountCardHeader(
@@ -1492,25 +1513,33 @@ private fun AccountCard(
                 onReopenLogin = onReopenLogin,
                 onSignInAgain = onSignInAgain,
             )
+            if (showSourceDetails && state.added && !state.accountKey.isPending) {
+                LocalSourceDetails(state)
+            }
         }
     }
+}
 
+@Composable
+private fun AccountSurface(layout: DashboardLayout, modifier: Modifier, content: @Composable () -> Unit) {
+    val colors = QdTheme.colors
+    val spacing = QdTheme.spacing
     when (layout) {
         DashboardLayout.Cards -> QdCard(
-            modifier = surfaceModifier,
+            modifier = modifier,
             padding = PaddingValues(spacing.md),
             background = colors.backgroundElevated,
             content = content,
         )
         DashboardLayout.Compact, DashboardLayout.FoldFull -> QdCard(
-            modifier = surfaceModifier,
+            modifier = modifier,
             padding = PaddingValues(horizontal = spacing.md, vertical = spacing.sm),
             background = colors.backgroundElevated,
             content = content,
         )
         // Rows sit inside one bordered list; the background keeps a dragged row opaque.
         DashboardLayout.OneLine -> Box(
-            modifier = surfaceModifier
+            modifier = modifier
                 .background(colors.backgroundElevated)
                 .padding(horizontal = spacing.md, vertical = spacing.xs),
         ) {
@@ -1560,7 +1589,7 @@ private fun AccountCardHeader(
                     QdPlanLabel(plan)
                 }
             }
-            AccountEmailTitle(state.accountSubtitle(), emailPrivacyMode)
+            AccountEmailTitle(state.accountSubtitle() ?: "Account email pending", emailPrivacyMode)
         }
 
         AccountActionButtons(
@@ -1626,7 +1655,7 @@ internal fun AccountHeaderLine(
             }
             Box(modifier = Modifier.weight(1f)) {
                 AccountEmailTitle(
-                    state.accountSubtitle(),
+                    state.accountSubtitle() ?: "Account email pending",
                     emailPrivacyMode,
                     style = typo.bodyMedium,
                     color = colors.textTertiary,
@@ -2034,7 +2063,7 @@ private fun rememberRefreshRotation(active: Boolean): Float {
 }
 
 @Composable
-private fun UsageWindowRow(window: UsageWindow, displayMode: UsageDisplayMode, showProjectedUsage: Boolean) {
+internal fun UsageWindowRow(window: UsageWindow, displayMode: UsageDisplayMode, showProjectedUsage: Boolean) {
     val colors = QdTheme.colors
     val typo = QdTheme.typography
     val progress = window.displayRatio(displayMode)
@@ -2595,17 +2624,18 @@ private fun AccountUiState.canRefreshUsage(): Boolean {
     return added && (authState == AuthState.LoggedIn || authState == AuthState.TokenExpired)
 }
 
+// Indexed legacy accounts may still use their email as the key. New record IDs aren't user labels.
+private fun AccountUiState.displayEmail() = snapshot?.accountEmail?.takeIf(String::isNotBlank)
+    ?: accountKey.accountId.takeIf { !accountKey.isPending && '@' in it }
+
 internal fun AccountUiState.accountTitle(emailPrivacyMode: EmailPrivacyMode = EmailPrivacyMode.Visible): String {
-    val email = snapshot?.accountEmail?.takeIf { it.isNotBlank() }
+    val email = displayEmail()
     val displayEmail = if (emailPrivacyMode == EmailPrivacyMode.Masked) email?.maskEmailPlain() else email
     return if (displayEmail == null) providerId.displayName else "${providerId.displayName} ($displayEmail)"
 }
 
-private fun AccountUiState.accountSubtitle(): String {
-    return snapshot?.accountEmail?.takeIf { it.isNotBlank() }
-        ?: accountKey.accountId.takeUnless { accountKey.isPending || it == "default" }
-        ?: "Account email pending"
-}
+internal fun AccountUiState.accountSubtitle() = displayEmail()
+    ?: accountKey.takeUnless { it.isPending || it.accountId == "default" }?.localSourceLabel()
 
 private fun providerNamesLabel(): String {
     val names = availableProviders().map { it.displayName }

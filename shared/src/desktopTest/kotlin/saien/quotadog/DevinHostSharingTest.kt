@@ -34,27 +34,28 @@ class DevinHostSharingTest {
                 val key = tokens.save(ProviderId.DEVIN, first)
                 store.detectAll()
                 fun reading() = assertNotNull(store.state.value.accounts[key]?.snapshot)
-                val grant = assertNotNull(reading().devinLoginTag)
-                assertNull(assertNotNull(snapshots.load(key)).devinLoginTag)
+                val grant = assertNotNull(reading().loginTag)
+                assertNull(assertNotNull(snapshots.load(key)).loginTag)
                 store.refresh(key, grant)
                 assertEquals(2, calls.get())
 
-                assertEquals(key, tokens.save(ProviderId.DEVIN, first.copy(accessToken = "second-fixture")))
+                // An existing sync record may legitimately replace the credential at the same row ID.
+                tokens.importTokenForSync(key, first.copy(accessToken = "second-fixture"), 1234)
                 store.refresh(key, grant) // The on-screen snapshot still belongs to the first login.
                 assertEquals(2, calls.get())
                 assertEquals(0.25, reading().windows.single().usedRatio)
                 store.refresh(key) // An explicit local refresh may read the replacement.
-                assertNotEquals(grant, assertNotNull(reading().devinLoginTag))
+                assertNotEquals(grant, assertNotNull(reading().loginTag))
                 assertEquals(0.97, reading().windows.single().usedRatio)
                 store.refresh(key, grant)
                 assertEquals(3, calls.get())
 
                 // Even restoring the exact same token from Dropbox cannot restore a deleted grant.
-                val replacement = assertNotNull(reading().devinLoginTag)
+                val replacement = assertNotNull(reading().loginTag)
                 val backup = assertNotNull(tokens.exportTokensForSync().single().token)
-                assertNull(backup.value.devinLoginGeneration)
+                assertNull(backup.value.loginGeneration)
                 tokens.importTokenForSync(key, backup.value, backup.updatedAtEpochMillis)
-                assertEquals(replacement, store.currentDevinLogin(key))
+                assertEquals(replacement, store.currentLogin(key))
                 store.delete(key)
                 tokens.importTokenForSync(key, backup.value, backup.updatedAtEpochMillis)
                 store.refresh(key, replacement)

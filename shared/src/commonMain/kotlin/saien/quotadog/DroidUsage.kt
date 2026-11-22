@@ -10,17 +10,25 @@ import kotlinx.datetime.Clock
 import kotlinx.datetime.Instant
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
+import saien.quotadog.hostsync.LocalQuota
+import saien.quotadog.hostsync.QuotaDetails
+import saien.quotadog.hostsync.QuotaWindow
+import saien.quotadog.hostsync.QuotaWindowKind
+import saien.quotadog.hostsync.quotaWindow
 
 internal data class DroidUsageSnapshot(
     val email: String?,
     val planLabel: String?,
     val windows: List<UsageWindow>,
     val extraUsageBalanceCents: Long? = null,
+    val localQuota: LocalQuota,
+    val quotaTarget: String?,
 )
 
 /**
@@ -45,17 +53,19 @@ internal object DroidUsageFetcher {
 
     suspend fun fetch(httpClient: HttpClient, accessToken: String): DroidUsageSnapshot {
         val billing = fetchBillingLimits(httpClient, accessToken)
-        val windows = billing?.let { windowsFromBillingLimits(it) }
-            ?: windowsFromSubscriptionUsage(fetchSubscriptionUsage(httpClient, accessToken))
-        if (windows.isEmpty()) {
+        val observed = if (billing != null) billingQuotaWindows(billing) else legacyQuotaWindows(fetchSubscriptionUsage(httpClient, accessToken))
+        val localQuota = droidLocalQuota(observed, billing?.extraUsageBalanceCents)
+        if (!localQuota.hasAccountReading) {
             throw ProviderException(AuthState.Error, "Droid did not report quota data for this account.")
         }
         val identity = runCatching { fetchAuthMe(httpClient, accessToken) }.getOrNull()
         return DroidUsageSnapshot(
             email = identity?.email,
             planLabel = identity?.planLabel,
-            windows = windows,
+            windows = observed.mapNotNull { it.toDisplayWindow() },
             extraUsageBalanceCents = billing?.extraUsageBalanceCents,
+            localQuota = localQuota,
+            quotaTarget = identity?.organizationId?.let { "${if (billing != null) "rolling" else "legacy"}:$it" },
         )
     }
 
@@ -66,7 +76,7 @@ internal object DroidUsageFetcher {
         if (!response.status.isSuccess()) return null
         val text = response.bodyAsText()
         return runCatching { parseBillingLimitsJson(text) }.getOrNull()
-            ?.takeIf { it.usesTokenRateLimitsBilling && (it.standard != null || it.core != null) }
+            ?.takeIf { it.usesTokenRateLimitsBilling && (it.standard != null || it.core != null || it.extraUsageBalanceCents != null) }
     }
 
     private suspend fun fetchSubscriptionUsage(httpClient: HttpClient, accessToken: String): JsonObject {
@@ -80,6 +90,7 @@ internal object DroidUsageFetcher {
         val response = httpClient.get("$API_BASE/api/app/auth/me") {
             applyDroidHeaders(accessToken)
         }
+        if (!response.status.isSuccess()) return DroidIdentity(null, null)
         return parseAuthMeJson(response.bodyAsText())
     }
 
@@ -112,7 +123,7 @@ internal object DroidUsageFetcher {
     }
 
     internal data class DroidBillingWindow(
-        val usedPercent: Double,
+        val usedPercent: Double?,
         val windowEnd: Instant?,
         val secondsRemaining: Double?,
     ) {
@@ -123,7 +134,7 @@ internal object DroidUsageFetcher {
         }
 
         val hasUsageData: Boolean
-            get() = usedPercent > 0.0 || windowEnd != null || (secondsRemaining ?: 0.0) > 0.0
+            get() = (usedPercent ?: 0.0) > 0.0 || windowEnd != null || (secondsRemaining ?: 0.0) > 0.0
     }
 
     internal data class DroidBillingLimits(
@@ -136,6 +147,7 @@ internal object DroidUsageFetcher {
     internal data class DroidIdentity(
         val email: String?,
         val planLabel: String?,
+        val organizationId: String? = null,
     )
 
     internal fun parseBillingLimitsJson(text: String): DroidBillingLimits {
@@ -148,7 +160,7 @@ internal object DroidUsageFetcher {
                 ?.jsonPrimitive?.contentOrNull?.toBooleanStrictOrNull() == true,
             standard = (limits?.get("standard") as? JsonObject)?.let(::parsePool),
             core = (limits?.get("core") as? JsonObject)?.let(::parsePool),
-            extraUsageBalanceCents = root["extraUsageBalanceCents"]?.jsonPrimitive?.longOrNull,
+            extraUsageBalanceCents = (root["extraUsageBalanceCents"] as? JsonPrimitive)?.longOrNull?.takeIf { it >= 0 },
         )
     }
 
@@ -157,7 +169,7 @@ internal object DroidUsageFetcher {
         for (key in listOf("fiveHour", "weekly", "monthly")) {
             val element = pool[key] as? JsonObject ?: continue
             windows[key] = DroidBillingWindow(
-                usedPercent = element["usedPercent"]?.jsonPrimitive?.doubleOrNull ?: 0.0,
+                usedPercent = (element["usedPercent"] as? JsonPrimitive)?.doubleOrNull?.takeIf { it.isFinite() && it >= 0 },
                 windowEnd = element["windowEnd"]?.jsonPrimitive?.contentOrNull
                     ?.let { runCatching { Instant.parse(it) }.getOrNull() },
                 secondsRemaining = element["secondsRemaining"]?.jsonPrimitive?.doubleOrNull,
@@ -166,66 +178,62 @@ internal object DroidUsageFetcher {
         return windows
     }
 
-    internal fun windowsFromBillingLimits(billing: DroidBillingLimits): List<UsageWindow> {
-        val now = Clock.System.now()
-        val windows = mutableListOf<UsageWindow>()
-        billing.standard?.let { pool ->
-            pool["fiveHour"]?.let { windows += it.toUsageWindow("droid-standard-5h", "Standard 5-hour", FIVE_HOUR_SECONDS, now) }
-            pool["weekly"]?.let { windows += it.toUsageWindow("droid-standard-weekly", "Standard weekly", WEEK_SECONDS, now) }
-            pool["monthly"]?.let { windows += it.toUsageWindow("droid-standard-monthly", "Standard monthly", MONTH_SECONDS, now) }
+    internal fun billingQuotaWindows(billing: DroidBillingLimits, now: Instant = Clock.System.now()) = buildList {
+        fun pool(values: Map<String, DroidBillingWindow>?, core: Boolean) {
+            fun window(key: String, kind: QuotaWindowKind, seconds: Long) {
+                val item = values?.get(key) ?: return
+                if (!core || item.hasUsageData) add(quotaWindow(kind, item.usedPercent?.let(::normalizePercent), item.resetsAt(now), seconds))
+            }
+            window("fiveHour", if (core) QuotaWindowKind.DroidCoreFiveHour else QuotaWindowKind.DroidStandardFiveHour, FIVE_HOUR_SECONDS)
+            window("weekly", if (core) QuotaWindowKind.DroidCoreWeekly else QuotaWindowKind.DroidStandardWeekly, WEEK_SECONDS)
+            window("monthly", if (core) QuotaWindowKind.DroidCoreMonthly else QuotaWindowKind.DroidStandardMonthly, MONTH_SECONDS)
         }
-        billing.core?.let { pool ->
-            pool["fiveHour"]?.takeIf { it.hasUsageData }?.let { windows += it.toUsageWindow("droid-core-5h", "Core 5-hour", FIVE_HOUR_SECONDS, now) }
-            pool["weekly"]?.takeIf { it.hasUsageData }?.let { windows += it.toUsageWindow("droid-core-weekly", "Core weekly", WEEK_SECONDS, now) }
-            pool["monthly"]?.takeIf { it.hasUsageData }?.let { windows += it.toUsageWindow("droid-core-monthly", "Core monthly", MONTH_SECONDS, now) }
-        }
-        return windows
+        pool(billing.standard, false)
+        pool(billing.core, true)
     }
 
-    private fun DroidBillingWindow.toUsageWindow(id: String, label: String, durationSeconds: Long, now: Instant): UsageWindow {
-        return UsageWindow(
-            id = id,
-            label = label,
-            usedRatio = normalizePercent(usedPercent),
-            resetsAt = resetsAt(now),
-            durationSeconds = durationSeconds,
-        )
-    }
-
-    internal fun windowsFromSubscriptionUsage(root: JsonObject): List<UsageWindow> {
+    internal fun legacyQuotaWindows(root: JsonObject): List<QuotaWindow> {
         val usage = root["usage"] as? JsonObject
             ?: throw ProviderException(AuthState.Error, "Droid usage response had no usage object.")
         val resetsAt = usage["endDate"]?.jsonPrimitive?.longOrNull?.let(Instant::fromEpochMilliseconds)
         val durationSeconds = usage["startDate"]?.jsonPrimitive?.longOrNull
             ?.let { start -> usage["endDate"]?.jsonPrimitive?.longOrNull?.let { end -> (end - start) / 1000L } }
 
-        val windows = mutableListOf<UsageWindow>()
+        val windows = mutableListOf<QuotaWindow>()
+        fun JsonObject.ratio() = (this["usedRatio"] as? JsonPrimitive)?.doubleOrNull?.takeIf { it.isFinite() && it >= 0 }?.coerceAtMost(1.0)
         (usage["standard"] as? JsonObject)?.let { standard ->
-            standard["usedRatio"]?.jsonPrimitive?.doubleOrNull?.let { ratio ->
-                windows += UsageWindow(
-                    id = "droid-standard",
-                    label = "Standard tokens",
-                    usedRatio = ratio.coerceIn(0.0, 1.0),
-                    resetsAt = resetsAt,
-                    durationSeconds = durationSeconds,
-                )
-            }
+            windows += quotaWindow(QuotaWindowKind.DroidStandardPeriod, standard.ratio(), resetsAt, durationSeconds)
         }
         (usage["premium"] as? JsonObject)?.let { premium ->
             val allowance = premium["totalAllowance"]?.jsonPrimitive?.doubleOrNull ?: 0.0
-            val ratio = premium["usedRatio"]?.jsonPrimitive?.doubleOrNull
-            if (allowance > 0.0 && ratio != null) {
-                windows += UsageWindow(
-                    id = "droid-premium",
-                    label = "Premium tokens",
-                    usedRatio = ratio.coerceIn(0.0, 1.0),
-                    resetsAt = resetsAt,
-                    durationSeconds = durationSeconds,
-                )
-            }
+            if (allowance.isFinite() && allowance > 0) windows += quotaWindow(QuotaWindowKind.DroidPremiumPeriod, premium.ratio(), resetsAt, durationSeconds)
         }
         return windows
     }
+
+    // Neither billing/limits nor the unfiltered legacy organization/subscription/usage response
+    // identifies the seat owning its pools. /auth/me membership and an active org are NOT sufficient.
+    internal fun droidLocalQuota(windows: List<QuotaWindow>, extraCents: Long?) = LocalQuota(
+        ProviderId.DROID, windows, extraCents?.takeIf { it >= 0 }?.let { QuotaDetails.Droid(it) },
+    )
+
+    private fun QuotaWindow.toDisplayWindow(): UsageWindow? {
+        val (id, label) = when (kind) {
+            QuotaWindowKind.DroidStandardFiveHour -> "droid-standard-5h" to kind.label
+            QuotaWindowKind.DroidStandardWeekly -> "droid-standard-weekly" to kind.label
+            QuotaWindowKind.DroidStandardMonthly -> "droid-standard-monthly" to kind.label
+            QuotaWindowKind.DroidCoreFiveHour -> "droid-core-5h" to kind.label
+            QuotaWindowKind.DroidCoreWeekly -> "droid-core-weekly" to kind.label
+            QuotaWindowKind.DroidCoreMonthly -> "droid-core-monthly" to kind.label
+            QuotaWindowKind.DroidStandardPeriod -> "droid-standard" to "Standard tokens"
+            QuotaWindowKind.DroidPremiumPeriod -> "droid-premium" to "Premium tokens"
+            else -> return null
+        }
+        return UsageWindow(id, label, used ?: return null, resetsAt?.let(Instant::fromEpochMilliseconds), durationSeconds = durationSeconds)
+    }
+
+    internal fun windowsFromBillingLimits(billing: DroidBillingLimits) = billingQuotaWindows(billing).mapNotNull { it.toDisplayWindow() }
+    internal fun windowsFromSubscriptionUsage(root: JsonObject) = legacyQuotaWindows(root).mapNotNull { it.toDisplayWindow() }
 
     internal fun parseAuthMeJson(text: String): DroidIdentity {
         val root = runCatching { json.parseToJsonElement(text).jsonObject }
@@ -240,7 +248,8 @@ internal object DroidUsageFetcher {
             ?: subscription?.stringField("factoryTier")
             ?: subscription?.stringField("factoryTiers")
             ?: organization?.stringField("tier")
-        return DroidIdentity(email = email, planLabel = planLabel)
+        return DroidIdentity(email, planLabel, (organization?.get("id") as? JsonPrimitive)?.takeIf { it.isString }?.content
+            ?.takeIf { it.matches(Regex("[a-zA-Z0-9_-]{1,128}")) })
     }
 
     private fun JsonObject.stringField(name: String): String? {

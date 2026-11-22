@@ -99,13 +99,14 @@ internal object DroidOAuth {
         }
     }
 
-    suspend fun refresh(httpClient: HttpClient, refreshToken: String): OAuthTokenBundle {
+    suspend fun refresh(httpClient: HttpClient, refreshToken: String, organizationId: String?): OAuthTokenBundle {
         val response = httpClient.post(AUTHENTICATE_URL) {
             contentType(ContentType.Application.FormUrlEncoded)
             setBody(FormDataContent(Parameters.build {
                 append("grant_type", "refresh_token")
                 append("refresh_token", refreshToken)
                 append("client_id", CLIENT_ID)
+                organizationId?.let { append("organization_id", it) }
             }))
         }
         val statusCode = response.status.value

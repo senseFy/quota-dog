@@ -29,20 +29,19 @@ class CloudSyncLocalRepository(
     suspend fun applyDocument(document: CloudSyncDocumentV1) {
         document.accounts.forEach { record ->
             val accountKey = record.accountKey
-            if (record.token == null && record.snapshot == null && record.deletedAtEpochMillis != null) {
-                tokenStore.deleteForSync(accountKey)
-                usageSnapshotStore.deleteForSync(accountKey)
-                saveTombstone(accountKey, record.deletedAtEpochMillis)
-                return@forEach
+            val deletion = record.deletedAtEpochMillis
+            if (deletion != null) {
+                // The merge can carry BOTH a deletion and a later reimport, even of identical
+                // credentials. Its old local login/grants must not survive that boundary.
+                tokenStore.deleteForSync(accountKey, deletion)
+                usageSnapshotStore.deleteForSync(accountKey, deletion)
+                saveTombstone(accountKey, deletion)
             }
-            record.token?.let {
+            record.token?.takeIf { deletion == null || it.updatedAtEpochMillis > deletion }?.let {
                 tokenStore.importTokenForSync(accountKey, it.value, it.updatedAtEpochMillis)
             }
-            record.snapshot?.let {
+            record.snapshot?.takeIf { deletion == null || it.updatedAtEpochMillis > deletion }?.let {
                 usageSnapshotStore.importSnapshotForSync(accountKey, it.value, it.updatedAtEpochMillis)
-            }
-            record.deletedAtEpochMillis?.let {
-                saveTombstone(accountKey, it)
             }
         }
         preferences.importForSync(document.preferences)

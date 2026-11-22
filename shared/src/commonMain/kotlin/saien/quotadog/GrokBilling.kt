@@ -10,13 +10,28 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.http.isSuccess
 import kotlinx.datetime.Clock
 import kotlinx.datetime.Instant
+import saien.quotadog.hostsync.LocalQuota
+import saien.quotadog.hostsync.QuotaWindowKind
+import saien.quotadog.hostsync.quotaWindow
 
 internal data class GrokBillingSnapshot(
     val usedPercent: Double,
     val resetsAt: Instant?,
     val periodType: String? = null,
     val subscriptionTier: String? = null,
+    val localQuota: LocalQuota,
 )
+
+internal fun grokLocalQuota(percent: Double?, reset: Instant?, type: String? = null, start: Instant? = null): LocalQuota {
+    val kind = when (type) {
+        "USAGE_PERIOD_TYPE_WEEKLY", "WEEKLY" -> QuotaWindowKind.GrokWeeklyCredits
+        "USAGE_PERIOD_TYPE_MONTHLY", "MONTHLY" -> QuotaWindowKind.GrokMonthlyCredits
+        else -> QuotaWindowKind.GrokCredits
+    }
+    val duration = if (start != null && reset != null && reset > start) reset.epochSeconds - start.epochSeconds
+        else if (kind == QuotaWindowKind.GrokWeeklyCredits) 604_800L else null
+    return LocalQuota(ProviderId.GROK, listOf(quotaWindow(kind, percent?.let(::normalizePercent), reset, duration)))
+}
 
 internal object GrokBillingFetcher {
     private const val ENDPOINT = "https://grok.com/grok_api_v2.GrokBuildBilling/GetGrokCreditsConfig"
@@ -83,7 +98,7 @@ internal object GrokBillingFetcher {
 
         val parsedPercent = scan.fixed32Fields
             .filter { field ->
-                field.path.lastOrNull() == 1L &&
+                (field.path == listOf(1L) || field.path == listOf(1L, 1L)) &&
                     field.value.isFinite() &&
                     field.value >= 0f &&
                     field.value <= 100f
@@ -94,16 +109,8 @@ internal object GrokBillingFetcher {
             ?.value
             ?.toDouble()
 
-        val resetFields = scan.varintFields.mapNotNull { field ->
-            val raw = field.value
-            if (raw < 1_700_000_000L || raw > 2_100_000_000L) return@mapNotNull null
-            field.path to Instant.fromEpochSeconds(raw)
-        }
-        val futureResetFields = resetFields.filter { (_, date) -> date > now }
-        val resetAt = futureResetFields
-            .filter { (path, _) -> path == listOf(1L, 5L, 1L) }
-            .minOfOrNull { (_, date) -> date }
-            ?: futureResetFields.minOfOrNull { (_, date) -> date }
+        val resetAt = scan.varintFields.filter { it.path == listOf(1L, 5L, 1L) && it.value in 1..253402300799L }
+            .map { Instant.fromEpochSeconds(it.value) }.filter { it > now }.minOrNull()
 
         val hasUsagePeriod = scan.varintFields.any { field ->
             field.path.take(2) == listOf(1L, 6L) ||
@@ -114,12 +121,13 @@ internal object GrokBillingFetcher {
             resetAt != null &&
             hasUsagePeriod
 
-        val percent = parsedPercent ?: if (noUsageYet) 0.0 else null
-            ?: throw ProviderException(AuthState.Error, "Could not parse Grok billing usage.")
+        val percent = parsedPercent ?: if (noUsageYet) 0.0 else throw ProviderException(AuthState.Error, "Could not parse Grok billing usage.")
 
         return GrokBillingSnapshot(
             usedPercent = percent,
             resetsAt = resetAt,
+            // The local UI historically treats a period-only message as idle. Do not assert 0% on the wire.
+            localQuota = grokLocalQuota(parsedPercent, resetAt),
         )
     }
 

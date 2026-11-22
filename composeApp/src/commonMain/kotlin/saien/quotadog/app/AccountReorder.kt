@@ -25,24 +25,22 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
-import saien.quotadog.AccountKey
 import saien.quotadog.app.components.QdGripVerticalIcon
 import saien.quotadog.app.theme.QdTheme
-import saien.quotadog.moveAccountKey
 
 internal class AccountReorderDragState {
-    var draggingKey: AccountKey? by mutableStateOf(null)
+    var draggingKey: DashboardKey? by mutableStateOf(null)
     var translationY: Float by mutableFloatStateOf(0f)
-    val heights = mutableStateMapOf<AccountKey, Float>()
+    val heights = mutableStateMapOf<DashboardKey, Float>()
 
     /** Visible order, updated as soon as a row swaps so the gesture does not wait for recomposition. */
-    var order: List<AccountKey> = emptyList()
+    var order: List<DashboardKey> = emptyList()
 
     fun dragBy(
         deltaY: Float,
         itemSpacing: Float,
         minimumSwapDistance: Float,
-        onMove: (AccountKey, Int) -> Unit,
+        onMove: (DashboardKey, Int) -> Unit,
     ): Boolean {
         val accountKey = draggingKey ?: return false
         var offset = translationY + deltaY
@@ -57,7 +55,7 @@ internal class AccountReorderDragState {
                 val distance = nextHeight + itemSpacing
                 val threshold = (distance / 2f).coerceAtLeast(minimumSwapDistance)
                 if (offset > threshold) {
-                    order = moveAccountKey(order, accountKey, 1)
+                    order = order.toMutableList().apply { add(index + 1, removeAt(index)) }
                     onMove(accountKey, 1)
                     offset -= distance
                     moved = true
@@ -70,7 +68,7 @@ internal class AccountReorderDragState {
                 val distance = prevHeight + itemSpacing
                 val threshold = (distance / 2f).coerceAtLeast(minimumSwapDistance)
                 if (offset < -threshold) {
-                    order = moveAccountKey(order, accountKey, -1)
+                    order = order.toMutableList().apply { add(index - 1, removeAt(index)) }
                     onMove(accountKey, -1)
                     offset += distance
                     moved = true
@@ -91,7 +89,7 @@ internal fun rememberAccountReorderDragState(): AccountReorderDragState {
 }
 
 internal fun Modifier.reportAccountReorderHeight(
-    accountKey: AccountKey,
+    accountKey: DashboardKey,
     state: AccountReorderDragState,
 ): Modifier = onGloballyPositioned { coordinates ->
     val height = coordinates.size.height.toFloat()
@@ -102,7 +100,7 @@ internal fun Modifier.reportAccountReorderHeight(
 
 @Composable
 internal fun Modifier.accountReorderVisual(
-    accountKey: AccountKey,
+    accountKey: DashboardKey,
     state: AccountReorderDragState,
 ): Modifier {
     val shape = QdTheme.shapes.md
@@ -125,11 +123,11 @@ internal fun Modifier.accountReorderVisual(
  */
 @Composable
 internal fun Modifier.accountDragHandle(
-    accountKey: AccountKey,
+    accountKey: DashboardKey,
     dragState: AccountReorderDragState,
-    visibleKeys: List<AccountKey>,
+    visibleKeys: List<DashboardKey>,
     itemSpacing: Dp,
-    onMove: (AccountKey, Int) -> Unit,
+    onMove: (DashboardKey, Int) -> Unit,
     onDragFinished: () -> Unit,
 ): Modifier {
     val visibleKeysState = rememberUpdatedState(visibleKeys)

@@ -4,6 +4,8 @@ import kotlinx.datetime.Instant
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 
 class GrokBillingTest {
     @Test
@@ -65,6 +67,9 @@ class GrokBillingTest {
         val snapshot = GrokBillingFetcher.parseGrpcWebPayload(payload, now = now)
         assertEquals(0.0, snapshot.usedPercent)
         assertEquals(Instant.fromEpochSeconds(1_800_000_000), snapshot.resetsAt)
+        val shared = assertNotNull(snapshot.localQuota.reading(now.toEpochMilliseconds(), workspace = false)).windows.single()
+        assertNull(shared.used) // The legacy local screen's idle placeholder is not a measured zero.
+        assertEquals(1_800_000_000_000L, shared.resetsAt)
     }
 }
 

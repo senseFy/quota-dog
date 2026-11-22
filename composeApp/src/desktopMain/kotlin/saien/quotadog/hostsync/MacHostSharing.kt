@@ -21,7 +21,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.withContext
 import saien.quotadog.*
-import saien.quotadog.app.accountTitle
+import saien.quotadog.app.DashboardPeer
 import saien.quotadog.app.components.*
 import saien.quotadog.app.theme.QdTheme
 import java.nio.file.Files
@@ -35,13 +35,25 @@ private val macHostTls by lazy {
     System.load(binary.absolutePath)
 }
 
-/** The window can close while the host stays online in the menu bar. Only an opted-in Mac opens the keychain. */
+internal class MacHostSharing(val peers: List<DashboardPeer>, val settings: @Composable () -> Unit)
+
+// Stable when another phone is revoked. Never show an admission verifier in the UI.
+private val PhoneGrant.label get() = "Phone ${id.hashCode().toUInt().toString(16).padStart(8, '0').uppercase()}"
+
+internal fun HostState.dashboardPeers(host: DesktopHost): List<DashboardPeer> = phones.map { phone ->
+    DashboardPeer(id = phone.id, label = phone.label, refreshLabel = "Refresh on phone", online = enabled && online && phone.online,
+        cards = phone.cards, busyRefs = phone.busyRefs, matchFor = { host.matchFor(phone.id, it) },
+        refresh = { ref -> host.refreshPhone(phone.id, ref) }, clockConflict = phone.clockConflict)
+}
+
+/** The process keeps one host even when the main window closes. A Mac which never opted in does not open the keychain. */
 @Composable
-internal fun rememberHostSettings(store: QuotaDogStore, preferences: AppPreferences): @Composable () -> Unit {
+internal fun rememberMacHostSharing(store: QuotaDogStore, preferences: AppPreferences): MacHostSharing {
     val settings = remember { createPreferenceSettings() }
     val optIn = "host_sync_enabled_v1" // Device-local, never included in Dropbox preferences.
     var enabled by remember { mutableStateOf(settings.getBoolean(optIn, false)) }
-    var load by remember { mutableStateOf(enabled) }
+    // A previously paired, paused Mac can show its last received readings without connecting.
+    var load by remember { mutableStateOf(settings.hasKey(optIn)) }
     var issue by remember { mutableStateOf<String?>(null) }
     val host by produceState<DesktopHost?>(null, load, store) {
         value = null
@@ -67,15 +79,10 @@ internal fun rememberHostSettings(store: QuotaDogStore, preferences: AppPreferen
         settings.putBoolean(optIn, false); enabled = false; load = false
     }
     LaunchedEffect(host, enabled) { if (enabled) host?.enable() else host?.pause() }
-    return {
-        // A paused Mac only reads its saved devices when settings are opened, without connecting.
-        LaunchedEffect(Unit) { if (issue == null && settings.hasKey(optIn)) load = true }
-        val state = host?.state?.collectAsState()?.value ?: HostState(enabled = enabled)
-        val local by store.state.collectAsState()
-        val privacy by preferences.emailPrivacyMode.collectAsState()
-        val sources = local.accounts.values.filter { it.added && !it.accountKey.isPending && it.providerId == ProviderId.DEVIN && it.snapshot?.devinLoginTag != null }
-            .associate { it.accountKey to it.accountTitle(privacy) }
-        HostSharingCard(state, sources, host, issue) {
+    val state = host?.state?.collectAsState()?.value ?: HostState(enabled = enabled)
+    val peers = remember(host, state) { host?.let { state.dashboardPeers(it) }.orEmpty() }
+    return MacHostSharing(peers) {
+        HostSharingCard(state, store, preferences, host, issue) {
             if (issue == null) { enabled = !enabled; settings.putBoolean(optIn, enabled) }
             issue = null; load = true
         }
@@ -83,14 +90,17 @@ internal fun rememberHostSettings(store: QuotaDogStore, preferences: AppPreferen
 }
 
 @Composable
-internal fun HostSharingCard(s: HostState, sources: Map<AccountKey, String>, host: DesktopHost?, issue: String?, toggle: () -> Unit) {
+internal fun HostSharingCard(s: HostState, store: QuotaDogStore, preferences: AppPreferences, host: DesktopHost?, issue: String?, toggle: () -> Unit) {
+    val local by store.state.collectAsState()
+    val privacy by preferences.emailPrivacyMode.collectAsState()
+    val sources = remember(local, privacy) { shareableSources(local.accounts.values, privacy) }
     QdCard(Modifier.fillMaxWidth().testTag("host-sharing")) {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("Share from this computer", style = QdTheme.typography.titleLarge, color = QdTheme.colors.textPrimary)
             Hint(issue ?: when {
                 s.saveFailed -> "Sharing is paused. Unlock your Mac keychain and retry to save the change."
                 !s.enabled && s.phones.isNotEmpty() -> "Host paused. You can change access or revoke a phone without reconnecting."
-                !s.enabled -> "Pair your iPhone or Android phone to see your Devin quota. Nothing is shared until you choose an account."
+                !s.enabled -> "Pair your phone to share quota readings in either direction. Nothing is shared until you choose an account."
                 s.online -> "$hostSyncLabel relay connected · Devices verify each other directly."
                 else -> "Connecting to the relay…"
             })
@@ -121,17 +131,25 @@ internal fun HostSharingCard(s: HostState, sources: Map<AccountKey, String>, hos
                     QdButton("Cancel", { host?.cancelInvite() }, variant = QdButtonVariant.Ghost)
                 }
             }
-            s.phones.forEachIndexed { index, phone ->
-                Text("Phone ${index + 1}", style = QdTheme.typography.titleMedium, color = QdTheme.colors.textPrimary)
-                Hint(if (sources.isEmpty()) "Import a Devin account and refresh it on this Mac to share it." else "Choose one Devin account for this phone.")
-                for ((source, label) in sources) {
-                    Text(label, style = QdTheme.typography.labelLarge, color = QdTheme.colors.textPrimary)
-                    val access = if (phone.sourceId == source.accountId) phone.access else Access.Off
-                    QdSegmentedControl(options = listOf("Not shared" to Access.Off, "View only" to Access.View, "Allow refresh" to Access.Refresh), selected = access,
-                        onSelect = { next -> if (next != access) host?.setAccess(phone.id, next, source) })
+            for (phone in s.phones) key(phone.id) {
+                Text(phone.label, style = QdTheme.typography.titleLarge, color = QdTheme.colors.textPrimary)
+                Hint(when {
+                    phone.legacy -> "Older QuotaDog version. Update the phone for multiple sources and sharing in both directions."
+                    phone.online -> "Connected"
+                    else -> "Offline · Changes take effect when the phone reconnects."
+                })
+                Text("This Mac → ${phone.label}", style = QdTheme.typography.titleMedium, color = QdTheme.colors.textPrimary)
+                Hint("Choose which accounts this phone can view or refresh on this Mac.")
+                val candidates = if (phone.legacy) {
+                    val existing = phone.grants.keys.firstOrNull { it.providerId == ProviderId.DEVIN }
+                    GrantSources(sources.accounts.filterKeys { it.providerId == ProviderId.DEVIN && (existing == null || it == existing) }, emptyMap())
+                } else sources
+                SourceGrants(candidates, phone.grants, phone.workspaceGrants) { edit ->
+                    host?.setAccess(phone.id, edit)
                 }
-                if (phone.sourceId != null && sources.keys.none { it.accountId == phone.sourceId })
-                    QdButton("Stop sharing unavailable account", { host?.setAccess(phone.id, Access.Off) }, variant = QdButtonVariant.Secondary)
+                Text("${phone.label} → This Mac", style = QdTheme.typography.titleMedium, color = QdTheme.colors.textPrimary)
+                Hint(if (phone.cards.isEmpty()) "No accounts shared from this phone. Choose Share from this phone on the phone to grant access."
+                    else "${phone.cards.size} shared ${if (phone.cards.size == 1) "source" else "sources"} on your dashboard. Change these permissions on the phone.")
                 QdButton("Revoke phone", { host?.revoke(phone.id) }, variant = QdButtonVariant.Ghost, size = QdButtonSize.Small)
             }
         }

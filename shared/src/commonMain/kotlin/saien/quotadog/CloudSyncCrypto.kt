@@ -104,7 +104,7 @@ private fun pbkdf2HmacSha256(password: ByteArray, salt: ByteArray, iterations: I
     return output.copyOf(outputBytes)
 }
 
-private fun hmacSha256(key: ByteArray, message: ByteArray): ByteArray {
+internal fun hmacSha256(key: ByteArray, message: ByteArray): ByteArray {
     val blockSize = 64
     val normalizedKey = when {
         key.size > blockSize -> sha256(key)

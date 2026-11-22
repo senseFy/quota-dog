@@ -14,7 +14,6 @@ class PreferencesKeyLengthTest {
         node.clear()
         val settings = PreferencesSettings(node)
         try {
-            val accountKey = AccountKey(ProviderId.ANTIGRAVITY, "user@example.com")
             val tokenStore = SettingsTokenStore(settings)
             val snapshotStore = SettingsUsageSnapshotStore(settings)
             val token = OAuthTokenBundle(
@@ -23,7 +22,7 @@ class PreferencesKeyLengthTest {
                 email = "user@example.com",
                 expiresAtEpochMillis = 2_000_000_000_000L,
             )
-            kotlinx.coroutines.runBlocking {
+            val accountKey = kotlinx.coroutines.runBlocking {
                 tokenStore.save(ProviderId.ANTIGRAVITY, token)
             }
             val snapshot = ProviderUsageSnapshot(

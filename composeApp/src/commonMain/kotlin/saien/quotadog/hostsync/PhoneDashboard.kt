@@ -4,103 +4,104 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.material.Text
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import kotlinx.datetime.Instant
 import saien.quotadog.AppPreferences
-import saien.quotadog.ProviderId
 import saien.quotadog.QuotaDogStore
-import saien.quotadog.UsageDisplayMode
 import saien.quotadog.app.App
+import saien.quotadog.app.DashboardPeer
 import saien.quotadog.app.components.*
 import saien.quotadog.app.theme.QdTheme
-import saien.quotadog.exactLocalTimeLabel
-import saien.quotadog.formatDevinDollars
-import kotlin.math.roundToInt
 
 @Composable
 fun PhoneDashboard(phone: PhoneSync?, onScan: () -> Unit, onOpenImage: () -> Unit, version: String, store: QuotaDogStore? = null) {
     val prefs = remember { AppPreferences() }
-    val mode by prefs.usageDisplayMode.collectAsState()
     val s = phone?.state?.collectAsState()?.value
-    val digits = s?.digits
-    var confirmForget by remember(s?.paired) { mutableStateOf(false) }
     val pilot = hostSyncLabel != "QuotaDog"
     var pairing by rememberSaveable { mutableStateOf(false) }
-    LaunchedEffect(s?.paired) { if (s?.paired == true) pairing = false }
-    val showConnection = pilot || pairing || digits != null || s?.paired == true
-    App(store = store, preferences = prefs, versionLabel = if (pilot) "$hostSyncLabel host-sync build" else version,
-        showLocalEmptyState = if (pilot) s?.card == null else !showConnection,
+    var wasPaired by remember { mutableStateOf(false) }
+    LaunchedEffect(s?.paired) {
+        if (s != null) {
+            if (s.paired) pairing = false else if (wasPaired) pairing = true // Show the reason for disconnection.
+            wasPaired = s.paired
+        }
+    }
+    val showConnection = pilot || pairing || s?.digits != null || s?.paired == true
+    val peers = remember(phone, s) {
+        if (phone == null || s?.paired != true) emptyList() else listOf(DashboardPeer(
+            id = "computer", label = "My computer", refreshLabel = "Refresh on computer", online = s.online,
+            cards = s.cards, busyRefs = s.busyRefs, matchFor = phone::matchFor, refresh = phone::refresh, clockConflict = s.clockConflict,
+        ))
+    }
+    App(
+        store = store, preferences = prefs, versionLabel = if (pilot) "$hostSyncLabel host-sync build" else version,
+        showLocalEmptyState = pilot || !showConnection,
+        syncPeers = peers,
         onConnectComputer = if (!pilot && s?.paired != true) ({ pairing = true }) else null,
-        hostSyncContent = panel@{
-        if (!showConnection) return@panel
-        QdCard(Modifier.fillMaxWidth()) {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("My computer", style = QdTheme.typography.titleLarge, color = QdTheme.colors.textPrimary)
-                Text(s?.note ?: "Secure pairing unavailable on this device", style = QdTheme.typography.bodyMedium, color = QdTheme.colors.textSecondary)
-                if (phone != null && s != null) when {
-                    digits != null -> {
-                        Text(digits, style = QdTheme.typography.displayLarge, color = QdTheme.colors.primary)
-                        Hint("If the numbers match, allow this phone on your computer.")
-                    }
-                    !s.paired -> {
-                        Hint("On your Mac, open Settings → Share from this computer → Pair a phone.")
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            QdButton("Scan QR", onScan)
-                            QdButton("Open QR image", onOpenImage, variant = QdButtonVariant.Secondary)
-                        }
-                    }
-                    s.online && s.card == null -> Hint("No accounts shared. Choose a workspace on your computer.")
-                    else -> Unit
-                }
-                if (s?.paired == true) {
-                    if (confirmForget) {
-                        Hint("Remove this pairing and its saved readings from this phone? Your local accounts stay.")
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            QdButton("Remove from phone", { phone.forget() }, variant = QdButtonVariant.Danger)
-                            QdButton("Cancel", { confirmForget = false }, variant = QdButtonVariant.Ghost)
-                        }
-                    } else QdButton("Forget computer…", { confirmForget = true }, variant = QdButtonVariant.Ghost, size = QdButtonSize.Small)
-                }
-                if (!pilot && s?.paired != true) QdButton("Cancel", {
-                    phone?.cancelPairing(); pairing = false
-                }, variant = QdButtonVariant.Ghost, size = QdButtonSize.Small)
+        hostSyncContent = { activeStore ->
+            // Android creates the default store in App; iOS supplies its existing store. Bind to
+            // the actual collector even when the pairing panel isn't visible.
+            LaunchedEffect(phone, activeStore) { phone?.bindStore(activeStore) }
+            if (showConnection) PhoneConnectionCard(s, phone, activeStore, prefs, pilot, onScan, onOpenImage) {
+                phone?.cancelPairing()
+                pairing = false
             }
-        }
-        s?.card?.let { card ->
-            QdCard(Modifier.fillMaxWidth()) {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        QdProviderAvatar(ProviderId.DEVIN)
-                        Column { Text("Devin", style = QdTheme.typography.titleLarge, color = QdTheme.colors.textPrimary); Hint("My computer · Desktop source") }
+        },
+    )
+}
+
+@Composable
+private fun PhoneConnectionCard(
+    state: PhoneState?, phone: PhoneSync?, store: QuotaDogStore, preferences: AppPreferences, pilot: Boolean,
+    onScan: () -> Unit, onOpenImage: () -> Unit, onCancel: () -> Unit,
+) {
+    var confirmForget by remember(state?.paired) { mutableStateOf(false) }
+    var showGrants by remember(state?.paired) { mutableStateOf(false) }
+    val spacing = QdTheme.spacing
+    QdCard(Modifier.fillMaxWidth()) {
+        Column(verticalArrangement = Arrangement.spacedBy(spacing.sm)) {
+            Text("My computer", style = QdTheme.typography.titleLarge, color = QdTheme.colors.textPrimary)
+            Text(state?.note ?: "Secure pairing unavailable on this device", style = QdTheme.typography.bodyMedium, color = QdTheme.colors.textSecondary)
+            if (phone == null || state?.paired != true) {
+                state?.digits?.let { digits ->
+                    Text(digits, style = QdTheme.typography.displayLarge, color = QdTheme.colors.primary)
+                    Hint("If the numbers match, allow this phone on your computer.")
+                } ?: if (phone != null) {
+                    Hint("On your Mac, open Settings → Share from this computer → Pair a phone.")
+                    Row(horizontalArrangement = Arrangement.spacedBy(spacing.sm)) {
+                        QdButton("Scan QR", onScan)
+                        QdButton("Open QR image", onOpenImage, variant = QdButtonVariant.Secondary)
                     }
-                    val value = card.reading
-                    if (value == null) Hint("Waiting for first reading") else {
-                        for ((label, period) in listOf("Daily quota" to value.daily, "Weekly quota" to value.weekly)) {
-                            period ?: continue
-                            val used = mode == UsageDisplayMode.Used
-                            val ratio = if (used) period.used else 1.0 - period.used
-                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                Text(label, style = QdTheme.typography.labelLarge, color = QdTheme.colors.textPrimary)
-                                Text("${(ratio * 100).roundToInt()}% ${if (used) "used" else "left"}", style = QdTheme.typography.numeric, color = QdTheme.colors.textPrimary)
-                            }
-                            QdProgressBar(ratio.toFloat())
-                            period.resetsAt?.let { Hint("Resets ${Instant.fromEpochMilliseconds(it).exactLocalTimeLabel().substringBefore('\n')}") }
-                        }
-                        value.extraUsd?.let { Hint("Extra balance · ${formatDevinDollars(it, "USD ")}") }
-                        val timestamp = Instant.fromEpochMilliseconds(value.collectedAt).exactLocalTimeLabel().substringBefore('\n')
-                        Hint("Collected · $timestamp")
+                } else Unit
+                if (!pilot) QdButton("Cancel", onCancel, variant = QdButtonVariant.Ghost, size = QdButtonSize.Small)
+                return@Column
+            }
+            if (state.online && state.cards.isEmpty()) Hint(if (pilot) "No accounts shared. Choose a workspace on your computer."
+                else "No accounts shared. Choose accounts for this phone in your computer’s sharing settings.")
+            if (state.legacy) Hint("Update QuotaDog on your computer to share multiple accounts in both directions.")
+            if (!state.legacy || state.grants.isNotEmpty() || state.workspaceGrants.isNotEmpty()) {
+                QdButton(if (showGrants) "Hide phone sharing" else "Share from this phone", { showGrants = !showGrants },
+                    variant = QdButtonVariant.Secondary, size = QdButtonSize.Small)
+                if (showGrants) {
+                    val local by store.state.collectAsState()
+                    val privacy by preferences.emailPrivacyMode.collectAsState()
+                    val sources = remember(local, privacy, state.legacy) {
+                        if (state.legacy) GrantSources(emptyMap(), emptyMap()) else shareableSources(local.accounts.values, privacy)
                     }
-                    when {
-                        !s.online -> Hint("Not connected · Last reading kept on this phone")
-                        card.access == Access.View -> QdPlanLabel("View only")
-                        else -> QdButton(if (s.busy) "Refreshing…" else "Refresh on computer", phone::refresh, enabled = !s.busy)
-                    }
+                    Text("This phone → My computer", style = QdTheme.typography.titleMedium, color = QdTheme.colors.textPrimary)
+                    Hint("Choose what your computer can view or refresh on this phone. This does not change access to accounts on your computer.")
+                    SourceGrants(sources, state.grants, state.workspaceGrants) { phone.setAccess(state.pairId, it) }
                 }
             }
+            if (confirmForget) {
+                Hint("Remove this pairing and its saved readings from this phone? Your local accounts stay.")
+                Row(horizontalArrangement = Arrangement.spacedBy(spacing.sm)) {
+                    QdButton("Remove from phone", phone::forget, variant = QdButtonVariant.Danger)
+                    QdButton("Cancel", { confirmForget = false }, variant = QdButtonVariant.Ghost)
+                }
+            } else QdButton("Forget computer…", { confirmForget = true }, variant = QdButtonVariant.Ghost, size = QdButtonSize.Small)
         }
-    })
+    }
 }
 
 @Composable internal fun Hint(text: String) {

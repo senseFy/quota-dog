@@ -37,6 +37,30 @@ final class HostSyncPlatform: NSObject, IosPhonePlatform {
         HostSyncKeychain.queue.sync { HostSyncKeychain.writePairing(value) }
     }
 
+    // Only opaque refs and access levels. A locked Keychain must not prevent recording a withdrawal.
+    private func grantLimitsURL() throws -> URL {
+        let files = FileManager.default
+        let support = try files.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+        var folder = support.appendingPathComponent("HostSync", isDirectory: true)
+        try files.createDirectory(at: folder, withIntermediateDirectories: true)
+        var properties = URLResourceValues()
+        properties.isExcludedFromBackup = true
+        try folder.setResourceValues(properties)
+        return folder.appendingPathComponent("grant-limits.json")
+    }
+
+    func readGrantLimits() throws -> String {
+        do { return try String(contentsOf: grantLimitsURL(), encoding: .utf8) }
+        catch CocoaError.fileReadNoSuchFile { return "" }
+    }
+
+    func writeGrantLimits(value: String) -> Bool {
+        do {
+            try Data(value.utf8).write(to: grantLimitsURL(), options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+            return true
+        } catch { return false }
+    }
+
     func selectQr(image: Bool, completion: @escaping (String?) -> Void) {
         DispatchQueue.main.async { [self] in
             guard self.selection == nil, let presenter = self.presenter else { completion(nil); return }

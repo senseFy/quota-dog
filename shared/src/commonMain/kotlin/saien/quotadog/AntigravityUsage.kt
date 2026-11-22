@@ -12,6 +12,7 @@ import io.ktor.http.ContentType
 import io.ktor.http.Parameters
 import io.ktor.http.contentType
 import io.ktor.http.isSuccess
+import kotlinx.coroutines.CancellationException
 import kotlinx.datetime.Clock
 import kotlinx.datetime.Instant
 import kotlinx.serialization.json.Json
@@ -21,15 +22,36 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.doubleOrNull
-import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import saien.quotadog.hostsync.LocalQuota
+import saien.quotadog.hostsync.QuotaWindow
+import saien.quotadog.hostsync.QuotaWindowKind
+import saien.quotadog.hostsync.quotaWindow
 
 internal data class AntigravityUsageSnapshot(
     val windows: List<UsageWindow>,
     val planLabel: String?,
     val projectId: String?,
+    val localQuota: LocalQuota,
+    val email: String?,
 )
+
+internal class AntigravityQuery(
+    val windows: List<UsageWindow>,
+    val quotaWindows: List<QuotaWindow>,
+    private val knownPools: List<String>?,
+) {
+    // Only the project in the request which actually returned this quota is a target. A
+    // project discovered by loadCodeAssist must not be attributed to a subsequent {} retry.
+    fun localQuota(googleUserId: String?, project: String?, backend: String): LocalQuota {
+        val user = googleUserId?.takeIf { it.matches(Regex("[A-Za-z0-9_-]{1,128}")) }
+        val scope = if (user != null && !project.isNullOrBlank() && !knownPools.isNullOrEmpty()) {
+            listOf(user, project, backend) + knownPools.sorted()
+        } else null
+        return LocalQuota(ProviderId.ANTIGRAVITY, quotaWindows, matchParts = scope)
+    }
+}
 
 /**
  * Fetches Antigravity quota via Google Cloud Code internal APIs used by the CLI/IDE.
@@ -82,22 +104,28 @@ internal object AntigravityUsageFetcher {
             ?: codeAssist?.stringField("cloudaiCompanionProject")
             ?: codeAssist?.stringField("project")
         val planLabel = extractPlanLabel(codeAssist)
-        val summaryWindows = fetchQuotaSummaryWindows(httpClient, accessToken, projectId)
-        val windows = if (!summaryWindows.isNullOrEmpty()) {
-            summaryWindows
-        } else {
-            fetchAvailableModelWindows(httpClient, accessToken, projectId)
-        }
-        if (windows.isEmpty()) {
+        val result = fetchQuotaSummaryWindows(httpClient, accessToken, projectId)
+            ?: fetchAvailableModelWindows(httpClient, accessToken, projectId)
+        if (result == null) {
             throw ProviderException(
                 AuthState.Error,
                 "Antigravity returned no quota windows for this account.",
             )
         }
+        val userInfo = try {
+            fetchUserInfo(httpClient, accessToken)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            null // A separate identity lookup is optional; never lose a successful quota reading.
+        }
+        val id = userInfo?.stringField("id")?.takeIf { userInfo["sub"] == null || userInfo.stringField("sub") == it }
         return AntigravityUsageSnapshot(
-            windows = windows,
+            windows = result.query.windows,
             planLabel = planLabel,
-            projectId = projectId,
+            projectId = result.project,
+            localQuota = result.query.localQuota(id, result.project, result.backend),
+            email = userInfo?.stringField("email"),
         )
     }
 
@@ -110,7 +138,9 @@ internal object AntigravityUsageFetcher {
             ?: currentTier?.stringField("id")
     }
 
-    suspend fun fetchUserEmail(httpClient: HttpClient, accessToken: String): String? {
+    suspend fun fetchUserEmail(httpClient: HttpClient, accessToken: String) = fetchUserInfo(httpClient, accessToken)?.stringField("email")
+
+    private suspend fun fetchUserInfo(httpClient: HttpClient, accessToken: String): JsonObject? {
         val response = httpClient.get(USERINFO_URL) {
             header("Authorization", "Bearer $accessToken")
             header("Accept", "application/json")
@@ -118,10 +148,9 @@ internal object AntigravityUsageFetcher {
         }
         if (response.status.value == 401 || response.status.value == 403) return null
         if (!response.status.isSuccess()) return null
-        val root = runCatching {
+        return runCatching {
             json.parseToJsonElement(response.bodyAsText()).jsonObject
-        }.getOrNull() ?: return null
-        return root["email"]?.jsonPrimitive?.contentOrNull?.trim()?.takeIf { it.isNotEmpty() }
+        }.getOrNull()
     }
 
     suspend fun exchangeAuthorizationCode(
@@ -229,26 +258,26 @@ internal object AntigravityUsageFetcher {
         )
     }
 
+    private class Result(val query: AntigravityQuery, val project: String?, val backend: String)
+
+    private fun projectPayload(project: String?) = if (project != null) """{"project":${JsonPrimitive(project)}}""" else "{}"
+
     private suspend fun fetchQuotaSummaryWindows(
         httpClient: HttpClient,
         accessToken: String,
         projectId: String?,
-    ): List<UsageWindow>? {
-        val payloads = buildList {
-            if (!projectId.isNullOrBlank()) add("""{"project":${jsonPrimitive(projectId)}}""")
-            add("{}")
-        }
+    ): Result? {
         for (baseUrl in CLOUD_CODE_BASE_URLS) {
-            for (payload in payloads) {
+            for (target in listOf(projectId, null).distinct()) {
                 val root = postCloudCode(
                     httpClient = httpClient,
                     url = "$baseUrl$QUOTA_SUMMARY_PATH",
                     accessToken = accessToken,
-                    payload = payload,
+                    payload = projectPayload(target),
                     allowFailure = true,
                 ) ?: continue
-                val windows = parseQuotaSummary(root)
-                if (windows.isNotEmpty()) return windows
+                val query = quotaSummary(root)
+                if (query.quotaWindows.isNotEmpty()) return Result(query, confirmedTarget(target, root), baseUrl)
             }
         }
         return null
@@ -258,25 +287,29 @@ internal object AntigravityUsageFetcher {
         httpClient: HttpClient,
         accessToken: String,
         projectId: String?,
-    ): List<UsageWindow> {
-        val payload = if (!projectId.isNullOrBlank()) {
-            """{"project":${jsonPrimitive(projectId)}}"""
-        } else {
-            "{}"
-        }
+    ): Result? {
         CLOUD_CODE_BASE_URLS.forEachIndexed { index, baseUrl ->
             val isLast = index == CLOUD_CODE_BASE_URLS.lastIndex
             val root = postCloudCode(
                 httpClient = httpClient,
                 url = "$baseUrl$AVAILABLE_MODELS_PATH",
                 accessToken = accessToken,
-                payload = payload,
+                payload = projectPayload(projectId),
                 allowFailure = !isLast,
             ) ?: return@forEachIndexed
-            val windows = parseAvailableModels(root)
-            if (windows.isNotEmpty() || isLast) return windows
+            val query = availableModels(root)
+            if (query.quotaWindows.isNotEmpty()) return Result(query, confirmedTarget(projectId, root), baseUrl)
         }
-        return emptyList()
+        return null
+    }
+
+    private fun confirmedTarget(requestedProject: String?, root: JsonObject): String? {
+        val target = requestedProject?.takeIf { it.length in 1..128 } ?: return null
+        // Both flat and wrapped quota summaries are supported. A contradictory project echo in
+        // either layer invalidates identity, not the returned usage.
+        val echoes = listOfNotNull(root, root["response"] as? JsonObject, root["summary"] as? JsonObject)
+            .mapNotNull { it["project"] }
+        return target.takeIf { echoes.all { it is JsonPrimitive && it.isString && it.content == target } }
     }
 
     private suspend fun postCloudCode(
@@ -326,25 +359,33 @@ internal object AntigravityUsageFetcher {
         }
     }
 
-    internal fun parseQuotaSummary(root: JsonObject): List<UsageWindow> {
-        val groups = quotaSummaryGroups(root) ?: return emptyList()
+    internal fun parseQuotaSummary(root: JsonObject) = quotaSummary(root).windows
+
+    internal fun quotaSummary(root: JsonObject): AntigravityQuery {
+        val groups = quotaSummaryGroups(root).orEmpty()
         val windows = mutableListOf<UsageWindow>()
+        val shared = mutableListOf<QuotaWindow>()
+        val poolIds = mutableSetOf<String>()
+        var allKnown = true
+        var unknownSlot = 0
         for (groupElement in groups) {
-            val group = groupElement as? JsonObject ?: continue
+            val group = groupElement as? JsonObject ?: run { allKnown = false; continue }
             val groupName = group.stringField("displayName")
                 ?: group.stringField("name")
-                ?: continue
-            val groupId = quotaSummaryGroupId(groupName) ?: continue
-            val buckets = group["buckets"] as? JsonArray ?: continue
+                ?: run { allKnown = false; continue }
+            val groupId = quotaSummaryGroupId(groupName) ?: "other"
+            var slot: Int? = null
+            val buckets = group["buckets"] as? JsonArray ?: run { allKnown = false; continue }
             for (bucketElement in buckets) {
-                val bucket = bucketElement as? JsonObject ?: continue
-                if (bucket["disabled"]?.jsonPrimitive?.booleanOrNull == true) continue
+                val bucket = bucketElement as? JsonObject ?: run { allKnown = false; continue }
+                if ((bucket["disabled"] as? JsonPrimitive)?.booleanOrNull == true) continue
                 val bucketId = bucket.stringField("bucketId") ?: bucket.stringField("id") ?: ""
                 val bucketName = bucket.stringField("displayName")
                     ?: bucket.stringField("name")
                     ?: bucketId
                 val bucketWindow = bucket.stringField("window") ?: ""
-                val period = quotaSummaryPeriod("$bucketId $bucketName $bucketWindow") ?: continue
+                val period = quotaSummaryPeriod("$bucketId $bucketName $bucketWindow")
+                if (period == null) { allKnown = false; continue }
                 val resetAt = parseInstant(
                     bucket.stringField("resetTime")
                         ?: bucket.stringField("reset_time")
@@ -352,9 +393,16 @@ internal object AntigravityUsageFetcher {
                         ?: bucket.stringField("reset_at"),
                 )
                 // Proto3 JSON omits remainingFraction when its value is 0.0 (exhausted).
-                val remainingFraction = quotaSummaryRemainingFraction(bucket)
-                    ?: if (resetAt != null) 0.0 else continue
-                val usedRatio = (1.0 - remainingFraction.coerceIn(0.0, 1.0)).coerceIn(0.0, 1.0)
+                val usedRatio = remainingUsedRatio(bucket, resetAt)
+                val known = summaryBucketKinds[bucketId]?.takeIf { (_, id) -> id == "$groupId-${period.id}" }?.first
+                if (known == null || !poolIds.add(bucketId)) allKnown = false
+                val kind = known ?: if (period.id == "weekly") QuotaWindowKind.OtherGroupWeekly else QuotaWindowKind.OtherGroupFiveHour
+                if (known == null && slot == null) slot = ++unknownSlot
+                val number = if (known == null) slot else null
+                if (shared.size < 16 && shared.none { it.kind == kind && it.slot == number }) {
+                    shared += quotaWindow(kind, usedRatio, resetAt, period.durationSeconds, slot = number)
+                }
+                if (usedRatio == null) continue
                 val id = "antigravity-$groupId-${period.id}"
                 windows += UsageWindow(
                     id = id,
@@ -374,31 +422,40 @@ internal object AntigravityUsageFetcher {
             "antigravity-gemini-argon-weekly",
         )
         val seen = linkedSetOf<String>()
-        return windows
+        val ordered = windows
             .filter { seen.add(it.id) }
             .sortedWith(
                 compareBy<UsageWindow> { order.indexOf(it.id).let { index -> if (index < 0) order.size else index } }
                     .thenBy { it.resetsAt?.toEpochMilliseconds() ?: Long.MAX_VALUE },
             )
+        return AntigravityQuery(ordered, shared.sortedBy { it.kind.ordinal }, poolIds.toList().takeIf { allKnown })
     }
 
-    internal fun parseAvailableModels(root: JsonObject): List<UsageWindow> {
-        val models = root["models"]?.jsonObject ?: return emptyList()
+    internal fun parseAvailableModels(root: JsonObject) = availableModels(root).windows
+
+    internal fun availableModels(root: JsonObject): AntigravityQuery {
+        val models = root["models"] as? JsonObject
         val windows = mutableListOf<UsageWindow>()
-        for ((name, infoElement) in models) {
-            val lower = name.lowercase()
-            if (!lower.contains("gemini") && !lower.contains("claude") && !lower.contains("gpt")) {
-                continue
-            }
+        val shared = mutableListOf<QuotaWindow>()
+        var unknownSlot = 0
+        // Number unfamiliar models locally in stable machine-key order. Never send their raw keys or display names.
+        for ((name, infoElement) in models.orEmpty().entries.sortedBy { it.key }) {
             val info = infoElement as? JsonObject ?: continue
-            val quotaInfo = info["quotaInfo"]?.jsonObject ?: continue
+            val quotaInfo = info["quotaInfo"] as? JsonObject ?: continue
             val resetAt = parseInstant(
                 quotaInfo.stringField("resetTime") ?: quotaInfo.stringField("reset_time"),
             )
-            val remaining = quotaInfo["remainingFraction"]?.jsonPrimitive?.doubleOrNull
-                ?: quotaInfo["remaining_fraction"]?.jsonPrimitive?.doubleOrNull
-                ?: if (resetAt != null) 0.0 else continue
-            val usedRatio = (1.0 - remaining.coerceIn(0.0, 1.0)).coerceIn(0.0, 1.0)
+            val usedRatio = remainingUsedRatio(quotaInfo, resetAt)
+            val kind = when (name) {
+                "gemini-2.5-pro" -> QuotaWindowKind.Gemini25Pro
+                "gemini-3-flash" -> QuotaWindowKind.Gemini3Flash
+                "claude-sonnet-4" -> QuotaWindowKind.ClaudeSonnet4
+                "claude-sonnet-4-5" -> QuotaWindowKind.ClaudeSonnet45
+                else -> QuotaWindowKind.OtherModel
+            }
+            if (shared.size < 12) shared += quotaWindow(kind, usedRatio, resetAt, null,
+                slot = if (kind == QuotaWindowKind.OtherModel) ++unknownSlot else null)
+            if (usedRatio == null || listOf("gemini", "claude", "gpt").none { name.contains(it, ignoreCase = true) }) continue
             val display = info.stringField("displayName") ?: name
             windows += UsageWindow(
                 id = "model-$name",
@@ -408,17 +465,24 @@ internal object AntigravityUsageFetcher {
                 durationSeconds = FIVE_HOUR_SECONDS,
             )
         }
-        return windows
-            .sortedBy { it.resetsAt?.toEpochMilliseconds() ?: Long.MAX_VALUE }
-            .take(12)
+        // Model identifiers do not establish which underlying quota pool is being charged.
+        return AntigravityQuery(windows.sortedBy { it.resetsAt?.toEpochMilliseconds() ?: Long.MAX_VALUE }.take(12), shared, null)
     }
 
     private fun quotaSummaryGroups(root: JsonObject): JsonArray? {
-        root["groups"]?.jsonArray?.let { return it }
-        root["response"]?.jsonObject?.get("groups")?.jsonArray?.let { return it }
-        root["summary"]?.jsonObject?.get("groups")?.jsonArray?.let { return it }
-        return null
+        return root["groups"] as? JsonArray ?: (root["response"] as? JsonObject)?.get("groups") as? JsonArray
+            ?: (root["summary"] as? JsonObject)?.get("groups") as? JsonArray
     }
+
+    // Machine bucket IDs observed in retrieveUserQuotaSummary, not heuristic matches on human-readable labels.
+    private val summaryBucketKinds = mapOf(
+        "gemini-5h" to (QuotaWindowKind.GeminiFiveHour to "gemini-session"),
+        "gemini-weekly" to (QuotaWindowKind.GeminiWeekly to "gemini-weekly"),
+        "3p-5h" to (QuotaWindowKind.ClaudeGptFiveHour to "claude-gpt-session"),
+        "3p-weekly" to (QuotaWindowKind.ClaudeGptWeekly to "claude-gpt-weekly"),
+        "gemini-argon-wtu-5h" to (QuotaWindowKind.ArgonFiveHour to "gemini-argon-session"),
+        "gemini-argon-wtu-weekly" to (QuotaWindowKind.ArgonWeekly to "gemini-argon-weekly"),
+    )
 
     private fun quotaSummaryGroupId(name: String): String? {
         val lower = name.lowercase()
@@ -455,14 +519,20 @@ internal object AntigravityUsageFetcher {
         }
     }
 
+    private fun remainingUsedRatio(bucket: JsonObject, resetAt: Instant?): Double? {
+        val remaining = quotaSummaryRemainingFraction(bucket)
+            ?: if (resetAt != null && listOf("remainingFraction", "remaining_fraction", "remaining").none { it in bucket }) 0.0 else return null
+        return if (remaining in 0.0..1.0) 1.0 - remaining else null
+    }
+
     private fun quotaSummaryRemainingFraction(bucket: JsonObject): Double? {
-        bucket["remainingFraction"]?.jsonPrimitive?.doubleOrNull?.let { return it }
-        bucket["remaining_fraction"]?.jsonPrimitive?.doubleOrNull?.let { return it }
+        (bucket["remainingFraction"] as? JsonPrimitive)?.doubleOrNull?.let { return it }
+        (bucket["remaining_fraction"] as? JsonPrimitive)?.doubleOrNull?.let { return it }
         val remaining = bucket["remaining"] as? JsonObject ?: return null
-        remaining["remainingFraction"]?.jsonPrimitive?.doubleOrNull?.let { return it }
-        remaining["remaining_fraction"]?.jsonPrimitive?.doubleOrNull?.let { return it }
+        (remaining["remainingFraction"] as? JsonPrimitive)?.doubleOrNull?.let { return it }
+        (remaining["remaining_fraction"] as? JsonPrimitive)?.doubleOrNull?.let { return it }
         if (remaining.stringField("case") == "remainingFraction") {
-            return remaining["value"]?.jsonPrimitive?.doubleOrNull
+            return (remaining["value"] as? JsonPrimitive)?.doubleOrNull
         }
         return null
     }
@@ -476,11 +546,7 @@ internal object AntigravityUsageFetcher {
     }
 
     private fun JsonObject.stringField(name: String): String? {
-        return this[name]?.jsonPrimitive?.contentOrNull?.trim()?.takeIf { it.isNotEmpty() }
-    }
-
-    private fun jsonPrimitive(value: String): String {
-        return JsonPrimitive(value).toString()
+        return (this[name] as? JsonPrimitive)?.takeIf { it.isString }?.content?.trim()?.takeIf { it.isNotEmpty() }
     }
 
     private const val FIVE_HOUR_SECONDS = 5L * 60L * 60L

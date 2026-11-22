@@ -1,5 +1,6 @@
 package saien.quotadog
 
+import com.russhwolf.settings.MapSettings
 import io.ktor.http.Url
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
@@ -13,7 +14,7 @@ class AntigravityOAuthTest {
     @Test
     fun beginLoginBuildsGooglePkceAuthorizationUrl() {
         val client = QuotaDogClient(
-            tokenStore = FakeTokenStore(),
+            tokenStore = SettingsTokenStore(MapSettings()),
             browserLauncher = NoopBrowserLauncher(),
             callbackServer = NoopCallbackServer(),
         )
@@ -42,7 +43,7 @@ class AntigravityOAuthTest {
     @Test
     fun completeLoginHandlesDeniedGoogleConsentWithoutCode() = runBlocking {
         val client = QuotaDogClient(
-            tokenStore = FakeTokenStore(),
+            tokenStore = SettingsTokenStore(MapSettings()),
             browserLauncher = NoopBrowserLauncher(),
             callbackServer = NoopCallbackServer(),
         )
@@ -60,7 +61,7 @@ class AntigravityOAuthTest {
     @Test
     fun completeLoginRejectsMismatchedStateAndMissingCode() = runBlocking {
         val client = QuotaDogClient(
-            tokenStore = FakeTokenStore(),
+            tokenStore = SettingsTokenStore(MapSettings()),
             browserLauncher = NoopBrowserLauncher(),
             callbackServer = NoopCallbackServer(),
         )
@@ -171,34 +172,6 @@ class AntigravityOAuthTest {
         }
         assertEquals(AuthState.Error, missingAccess.state)
         assertTrue(missingAccess.message.orEmpty().contains("access_token"))
-    }
-
-    private class FakeTokenStore : TokenStore {
-        private val tokens = linkedMapOf<AccountKey, OAuthTokenBundle>()
-        override suspend fun list(): List<StoredToken> = tokens.entries.map { StoredToken(it.key, it.value) }
-        override suspend fun load(accountKey: AccountKey): OAuthTokenBundle? = tokens[accountKey]
-        override suspend fun save(providerId: ProviderId, token: OAuthTokenBundle): AccountKey {
-            val key = accountKeyForToken(providerId, token)
-            tokens[key] = token
-            return key
-        }
-        override suspend fun save(accountKey: AccountKey, token: OAuthTokenBundle) {
-            tokens[accountKey] = token
-        }
-        override suspend fun delete(accountKey: AccountKey) {
-            tokens.remove(accountKey)
-        }
-        override suspend fun exportTokensForSync(): List<CloudSyncAccountRecord> = emptyList()
-        override suspend fun importTokenForSync(
-            accountKey: AccountKey,
-            token: OAuthTokenBundle,
-            updatedAtEpochMillis: Long,
-        ) {
-            tokens[accountKey] = token
-        }
-        override suspend fun deleteForSync(accountKey: AccountKey) {
-            tokens.remove(accountKey)
-        }
     }
 
     private class NoopBrowserLauncher : BrowserLauncher {

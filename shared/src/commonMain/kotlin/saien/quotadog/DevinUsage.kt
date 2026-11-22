@@ -20,12 +20,17 @@ import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
+import saien.quotadog.hostsync.LocalQuota
+import saien.quotadog.hostsync.QuotaDetails
+import saien.quotadog.hostsync.QuotaWindowKind
+import saien.quotadog.hostsync.quotaWindow
 
 internal data class DevinUsageSnapshot(
     val planName: String?,
     val email: String?,
     val windows: List<UsageWindow>,
     val overageBalanceDollars: Double? = null,
+    val localQuota: LocalQuota,
 )
 
 /**
@@ -103,7 +108,7 @@ internal object DevinUsageFetcher {
         val dailyReset = planStatus["dailyQuotaResetAtUnix"]?.jsonPrimitive?.toInstant()
         val weeklyReset = planStatus["weeklyQuotaResetAtUnix"]?.jsonPrimitive?.toInstant()
         val overageBalanceDollars = planStatus["overageBalanceMicros"]?.jsonPrimitive?.numberOrNull()
-            ?.let { micros -> micros.coerceAtLeast(0.0) / 1_000_000.0 }
+            ?.let { micros -> micros / 1_000_000.0 }
 
         val windows = mutableListOf<UsageWindow>()
         // Devin reports quota as percent *remaining*; UsageWindow wants the *used* ratio.
@@ -126,8 +131,17 @@ internal object DevinUsageFetcher {
             )
         }
 
+        val sharedWindows = buildList {
+            if (!hideDailyQuota && (dailyRemaining != null || dailyReset != null)) {
+                add(quotaWindow(QuotaWindowKind.DevinDaily, dailyRemaining?.let { 1 - normalizePercent(it) }, dailyReset, DAY_SECONDS))
+            }
+            if (weeklyRemaining != null || weeklyReset != null) {
+                add(quotaWindow(QuotaWindowKind.DevinWeekly, weeklyRemaining?.let { 1 - normalizePercent(it) }, weeklyReset, WEEK_SECONDS))
+            }
+        }
+        val localQuota = LocalQuota(ProviderId.DEVIN, sharedWindows, overageBalanceDollars?.let { QuotaDetails.Devin(it) })
         // Import can identify the login even when Devin exposes no quota window. Refresh requires a reading.
-        if (windows.isEmpty() && email == null) {
+        if (!localQuota.hasAccountReading && email == null) {
             throw ProviderException(AuthState.Error, "Devin did not report quota data for this account.")
         }
 
@@ -136,16 +150,17 @@ internal object DevinUsageFetcher {
             email = email,
             windows = windows,
             overageBalanceDollars = overageBalanceDollars,
+            localQuota = localQuota,
         )
     }
 
     /** Proto3 JSON emits int64 fields as strings; accept both numbers and strings. */
     private fun JsonPrimitive.numberOrNull(): Double? {
-        return doubleOrNull ?: contentOrNull?.toDoubleOrNull()
+        return doubleOrNull?.takeIf { it.isFinite() && it >= 0 }
     }
 
     private fun JsonPrimitive.toInstant(): Instant? {
-        val seconds = numberOrNull()?.toLong() ?: return null
+        val seconds = contentOrNull?.toLongOrNull()?.takeIf { it in 1..253402300799L } ?: return null
         return runCatching { Instant.fromEpochSeconds(seconds) }.getOrNull()
     }
 }

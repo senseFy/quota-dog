@@ -10,6 +10,8 @@ import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.serialization.kotlinx.json.json
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
@@ -30,17 +32,17 @@ actual class PlatformTokenStore actual constructor() : TokenStore {
     private val legacyJson = Json { ignoreUnknownKeys = true }
     private val legacyDir = File(System.getProperty("user.home"), ".quotadog")
 
-    override suspend fun list(): List<StoredToken> {
-        val stored = delegate.list().toMutableList()
+    private suspend fun migrateLegacyFiles() = migrationMutex.withLock {
         ProviderId.entries.forEach { providerId ->
             val legacy = loadLegacy(providerId) ?: return@forEach
-            val accountKey = delegate.save(providerId, legacy)
+            delegate.importLegacyFile(providerId, legacy)
             legacyTokenFile(providerId).delete()
-            if (stored.none { it.accountKey == accountKey }) {
-                stored += StoredToken(accountKey, legacy)
-            }
         }
-        return stored
+    }
+
+    override suspend fun list(): List<StoredToken> {
+        migrateLegacyFiles()
+        return delegate.list()
     }
 
     override suspend fun load(accountKey: AccountKey): OAuthTokenBundle? = delegate.load(accountKey)
@@ -53,12 +55,16 @@ actual class PlatformTokenStore actual constructor() : TokenStore {
         delegate.save(accountKey, token)
     }
 
-    override suspend fun delete(accountKey: AccountKey) {
-        delegate.delete(accountKey)
-        legacyTokenFile(accountKey.providerId).delete()
-    }
+    override suspend fun commitIfCurrent(
+        accountKey: AccountKey, expected: OAuthTokenBundle, replacement: OAuthTokenBundle, commit: () -> Unit,
+    ) = delegate.commitIfCurrent(accountKey, expected, replacement, commit)
 
-    override suspend fun exportTokensForSync(): List<CloudSyncAccountRecord> = delegate.exportTokensForSync()
+    override suspend fun delete(accountKey: AccountKey) = deleteForSync(accountKey)
+
+    override suspend fun exportTokensForSync(): List<CloudSyncAccountRecord> {
+        migrateLegacyFiles()
+        return delegate.exportTokensForSync()
+    }
 
     override suspend fun importTokenForSync(
         accountKey: AccountKey,
@@ -68,9 +74,9 @@ actual class PlatformTokenStore actual constructor() : TokenStore {
         delegate.importTokenForSync(accountKey, token, updatedAtEpochMillis)
     }
 
-    override suspend fun deleteForSync(accountKey: AccountKey) {
-        delegate.deleteForSync(accountKey)
-        legacyTokenFile(accountKey.providerId).delete()
+    override suspend fun deleteForSync(accountKey: AccountKey, throughEpochMillis: Long?) {
+        migrateLegacyFiles()
+        delegate.deleteForSync(accountKey, throughEpochMillis)
     }
 
     private fun loadLegacy(providerId: ProviderId): OAuthTokenBundle? {
@@ -84,6 +90,8 @@ actual class PlatformTokenStore actual constructor() : TokenStore {
     private fun legacyTokenFile(providerId: ProviderId): File {
         return File(legacyDir, "${providerId.name.lowercase()}-token.json")
     }
+
+    private companion object { val migrationMutex = Mutex() }
 }
 
 actual class PlatformBrowserLauncher actual constructor() : BrowserLauncher {

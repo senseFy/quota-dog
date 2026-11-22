@@ -1,7 +1,10 @@
 package saien.quotadog
 
 import kotlinx.datetime.Clock
+import kotlinx.serialization.KSerializer
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.encoding.Decoder
+import kotlinx.serialization.encoding.Encoder
 
 enum class CloudSyncStatus {
     Disconnected,
@@ -42,9 +45,18 @@ data class CloudSyncAccountRecord(
 
 @Serializable
 data class CloudSyncTokenValue(
-    val value: OAuthTokenBundle,
+    @Serializable(with = SyncedCredentialSerializer::class) val value: OAuthTokenBundle,
     val updatedAtEpochMillis: Long
 )
+
+internal fun OAuthTokenBundle.withoutLocalBinding() = copy(loginGeneration = null, quotaIdentityHash = null, principalId = null)
+
+// Apply the same boundary to merged/re-uploaded remote records as to locally exported ones.
+private object SyncedCredentialSerializer : KSerializer<OAuthTokenBundle> by OAuthTokenBundle.serializer() {
+    override fun serialize(encoder: Encoder, value: OAuthTokenBundle) =
+        OAuthTokenBundle.serializer().serialize(encoder, value.withoutLocalBinding())
+    override fun deserialize(decoder: Decoder) = OAuthTokenBundle.serializer().deserialize(decoder).withoutLocalBinding()
+}
 
 @Serializable
 data class CloudSyncSnapshotValue(

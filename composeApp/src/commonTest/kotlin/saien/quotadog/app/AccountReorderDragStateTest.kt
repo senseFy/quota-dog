@@ -8,9 +8,9 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class AccountReorderDragStateTest {
-    private val first = AccountKey(ProviderId.CODEX, "a")
-    private val second = AccountKey(ProviderId.GROK, "b")
-    private val third = AccountKey(ProviderId.DROID, "c")
+    private val first = DashboardKey.Local(AccountKey(ProviderId.CODEX, "a"))
+    private val second = DashboardKey.Remote("phone", "b")
+    private val third = DashboardKey.Local(AccountKey(ProviderId.DROID, "c"))
 
     @Test
     fun draggingAcrossDifferentHeightCardsKeepsTheCardUnderThePointer() {
@@ -36,7 +36,7 @@ class AccountReorderDragStateTest {
     fun swapThresholdIncludesSpacingAndDoesNotImmediatelySwapBack() {
         val state = dragState(first)
         val moves = mutableListOf<Int>()
-        val onMove: (AccountKey, Int) -> Unit = { _, direction -> moves += direction }
+        val onMove: (DashboardKey, Int) -> Unit = { _, direction -> moves += direction }
 
         assertFalse(state.dragBy(84f, 10f, 24f, onMove))
         assertEquals(listOf(first, second, third), state.order)
@@ -63,7 +63,7 @@ class AccountReorderDragStateTest {
         assertEquals(initialTop - 280f, displayedTop(state, third, itemSpacing = 20f))
     }
 
-    private fun dragState(key: AccountKey): AccountReorderDragState {
+    private fun dragState(key: DashboardKey): AccountReorderDragState {
         return AccountReorderDragState().apply {
             draggingKey = key
             order = listOf(first, second, third)
@@ -71,7 +71,7 @@ class AccountReorderDragStateTest {
         }
     }
 
-    private fun displayedTop(state: AccountReorderDragState, key: AccountKey, itemSpacing: Float): Float {
+    private fun displayedTop(state: AccountReorderDragState, key: DashboardKey, itemSpacing: Float): Float {
         val preceding = state.order.takeWhile { it != key }
         return preceding.sumOf { state.heights.getValue(it).toDouble() }.toFloat() +
             preceding.size * itemSpacing + state.translationY

@@ -86,7 +86,7 @@ internal fun localFailure(stage: String, e: Exception) {
     println("QuotaDog sync: $stage / ${e::class.simpleName} / $status")
 }
 
-enum class Access { Off, View, Refresh }
+@Serializable enum class Access { Off, View, Refresh }
 @Serializable data class QuotaPeriod(val used: Double, val resetsAt: Long?)
 @Serializable data class DevinReading(
     val collectedAt: Long, val daily: QuotaPeriod?, val weekly: QuotaPeriod?, val extraUsd: Double?,
@@ -116,8 +116,15 @@ internal fun ProviderUsageSnapshot.reading(): DevinReading? {
     @Serializable @SerialName("refresh") class Refresh(val ref: String, val id: String, val revision: Long) : Msg
     @Serializable @SerialName("result") class Result(val id: String, val status: RefreshStatus) : Msg
     @Serializable @SerialName("revoked") data object Revoked : Msg
+    @Serializable @SerialName("ready-v2") data object Ready : Msg
+    @Serializable @SerialName("sources-v2") class Sources(val revision: Long, val entries: List<SharedSource>, val now: Long) : Msg
+    @Serializable @SerialName("reading-v2") class Observation(val revision: Long, val ref: String, val value: QuotaReading, val now: Long) : Msg
 }
 @Serializable internal enum class RefreshStatus { Updated, Denied, Failed, Busy }
+
+// 1.0.17 only understands the v1 envelope. This ref cannot be minted (refs are hex), and
+// revision -1 can never authorize a query. A v1 Mac replies Denied without contacting a provider.
+internal const val CAPABILITIES = "quotadog:sources-v2"
 
 internal expect class PlatformTls(server: Boolean, identity: DeviceIdentity, pin: ByteArray?) : AutoCloseable {
     fun receive(bytes: ByteArray)

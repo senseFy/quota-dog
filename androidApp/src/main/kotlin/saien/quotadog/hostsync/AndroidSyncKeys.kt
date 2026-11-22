@@ -35,6 +35,7 @@ internal class AndroidSyncKeys(context: Context) : SyncVault {
             generateKey()
         }
     override fun read(key: String): String? {
+        if (key == PHONE_GRANT_LIMITS) return prefs.getString(key, null)
         val sealed = prefs.getString(key, null)?.let { Base64.decode(it, Base64.NO_WRAP) } ?: return null
         return Cipher.getInstance("AES/GCM/NoPadding").run {
             init(Cipher.DECRYPT_MODE, this@AndroidSyncKeys.key, GCMParameterSpec(128, sealed, 0, 12))
@@ -43,7 +44,7 @@ internal class AndroidSyncKeys(context: Context) : SyncVault {
     }
     override fun write(key: String, value: String?) {
         val edit = prefs.edit()
-        if (value == null) edit.remove(key) else {
+        if (value == null) edit.remove(key) else if (key == PHONE_GRANT_LIMITS) edit.putString(key, value) else {
             val sealed = Cipher.getInstance("AES/GCM/NoPadding").run {
                 init(Cipher.ENCRYPT_MODE, this@AndroidSyncKeys.key); check(iv.size == 12)
                 updateAAD(key.encodeToByteArray()); iv + doFinal(value.encodeToByteArray())

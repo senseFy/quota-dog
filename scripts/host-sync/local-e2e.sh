@@ -25,7 +25,7 @@ printf '%s\n' 'windsurf_api_key = "fixture-current-cli"' 'api_server_url = "http
 stack=; emulator=; reversed=; created_sim=
 cleanup() {
   if [[ -n $created_sim ]]; then xcrun simctl shutdown "$created_sim" >/dev/null 2>&1 || :; xcrun simctl delete "$created_sim"; fi
-  [[ -z $reversed ]] || "$adb" -s "$QD_TEST_SERIAL" reverse --remove tcp:18787 >/dev/null 2>&1 || :
+  if [[ -n $reversed ]]; then for port in 18787 18788; do "$adb" -s "$QD_TEST_SERIAL" reverse --remove tcp:$port >/dev/null 2>&1 || :; done; fi
   if [[ -n $emulator ]]; then "$adb" -s "$QD_TEST_SERIAL" emu kill >/dev/null 2>&1 || :; wait "$emulator" || :; fi
   if [[ -n $stack ]]; then kill "$stack" 2>/dev/null || :; wait "$stack" || :; fi
   rm -rf "$work"
@@ -40,6 +40,8 @@ if [[ ${1:-android} == iphone ]]; then
   fi
   xcrun simctl list devices -j | jq -e --arg id "$QD_IOS_SIM" 'any(.devices[][]; .udid == $id and (.name | startswith("QuotaDog")))' >/dev/null
   xcrun simctl bootstatus "$QD_IOS_SIM" -b
+  # A fresh Photos library can take longer than the lifetime of a pairing invitation to initialize.
+  xcrun simctl addmedia "$QD_IOS_SIM" "$root/iosApp/iosApp/Assets.xcassets/AppIcon.appiconset/AppIcon.png"
   export QD_PHONE_DRIVER="$root/scripts/host-sync/iphone-ui.py"
   export QD_FIND_PICKER_QR="$work/locate-qr"
   xcrun swiftc scripts/host-sync/locate-qr.swift -o "$QD_FIND_PICKER_QR"
@@ -47,6 +49,10 @@ if [[ ${1:-android} == iphone ]]; then
   xcodebuild -quiet -project iosApp/iosApp.xcodeproj -scheme iosApp \
     -configuration Debug -destination "id=$QD_IOS_SIM" -derivedDataPath "$root/build/iphone-sync-local" \
     PRODUCT_BUNDLE_IDENTIFIER=saien.quotadog.hostsync.local build
+  # Forgetting the pairing does not remove the independent phone login from an earlier run.
+  if xcrun simctl get_app_container "$QD_IOS_SIM" saien.quotadog.hostsync.local data >/dev/null 2>&1; then
+    xcrun simctl uninstall "$QD_IOS_SIM" saien.quotadog.hostsync.local
+  fi
   xcrun simctl install "$QD_IOS_SIM" "$root/build/iphone-sync-local/Build/Products/Debug-iphonesimulator/QuotaDog.app"
 elif [[ ${1:-android} != android ]]; then
   echo 'Usage: local-e2e.sh [android|iphone]' >&2; exit 2
@@ -66,6 +72,7 @@ if [[ ${1:-android} == android ]]; then
   ./gradlew -Pquotadog.hostSyncLocal=true :androidApp:assembleHostSyncLocal
   "$adb" -s "$QD_TEST_SERIAL" install -r androidApp/build/outputs/apk/hostSyncLocal/androidApp-hostSyncLocal.apk
   "$adb" -s "$QD_TEST_SERIAL" reverse tcp:18787 tcp:18787; reversed=1
+  "$adb" -s "$QD_TEST_SERIAL" reverse tcp:18788 tcp:18788
   "$adb" -s "$QD_TEST_SERIAL" shell wm dismiss-keyguard
   # Keep the system bar height consistent with the test AVD's emulated camera cutout.
   "$adb" -s "$QD_TEST_SERIAL" shell cmd overlay enable-exclusive --category com.android.internal.display.cutout.emulation.hole
