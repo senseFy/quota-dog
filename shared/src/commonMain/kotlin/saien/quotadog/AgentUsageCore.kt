@@ -158,7 +158,7 @@ data class ProviderUsageSnapshot(
     val resetCreditsApplicable: Int? = null,
     val resetCredits: List<CodexResetCredit> = emptyList(),
     val devinExtraBalanceUsd: Double? = null,
-    // A cached or synced reading is never evidence of the login or quota target that produced it.
+    // A cached reading is never evidence of the login or quota target that produced it.
     @Transient val loginTag: String? = null,
     @Transient val localQuota: LocalQuota? = null,
     @Transient val ampWorkspaceName: String? = null, // Local grant picker only, never a wire label or match key.
@@ -198,7 +198,8 @@ data class AccountUiState(
     val deviceLogin: DeviceCodeLoginStart? = null,
     val snapshot: ProviderUsageSnapshot? = null,
     val busy: Boolean = false,
-    val message: String? = null
+    val message: String? = null,
+    val loginEmail: String? = null, // Device-local display only; not a reading or proof of identity.
 )
 
 data class DashboardState(
@@ -502,9 +503,9 @@ class QuotaDogClient(
     internal suspend fun currentLogin(key: AccountKey): String? =
         if (key.isPending) null else tokenStore.load(key)?.loginGeneration
 
-    internal suspend fun ifCurrentLogin(key: AccountKey, login: String, commit: () -> Unit): Boolean {
+    internal suspend fun ifCurrentLogin(key: AccountKey, login: String, commit: (email: String?) -> Unit): Boolean {
         val stored = tokenStore.load(key)?.takeIf { it.loginGeneration == login } ?: return false
-        return tokenStore.commitIfCurrent(key, stored, commit = commit)
+        return tokenStore.commitIfCurrent(key, stored) { commit(stored.email) }
     }
 
     internal suspend fun collectUsage(
@@ -932,8 +933,6 @@ class QuotaDogClient(
 class QuotaDogStore(
     private val client: QuotaDogClient = QuotaDogClient(),
     private val usageSnapshotStore: SettingsUsageSnapshotStore = SettingsUsageSnapshotStore(),
-    private val onLocalDataChanged: (() -> Unit)? = null,
-    private val onLocalAccountDeleted: ((AccountKey) -> Unit)? = null
 ) {
     private val storeScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val refreshMutex = Mutex()
@@ -949,10 +948,6 @@ class QuotaDogStore(
         if (detectStarted) return
         detectStarted = true
         launchSafely("detectAll") { detectAll() }
-    }
-
-    fun startReloadAccounts() {
-        launchSafely("reloadAccounts") { detectAll() }
     }
 
     fun startLogin(providerId: ProviderId) {
@@ -1107,10 +1102,10 @@ class QuotaDogStore(
             val found = client.detectAccounts()
             val known = found.map { it.accountKey }.toSet()
             _state.update { current -> current.copy(accounts = current.accounts.filterKeys { it.isPending || it in known }) }
-            for (account in found) client.ifCurrentLogin(account.accountKey, account.login) {
+            for (account in found) client.ifCurrentLogin(account.accountKey, account.login) { email ->
                 val cached = usageSnapshotStore.load(account.accountKey)?.asCachedSnapshot(account.authState)
                 update(account.accountKey) {
-                    it.copy(added = true, authState = account.authState, message = null,
+                    it.copy(added = true, authState = account.authState, loginEmail = email, message = null,
                         snapshot = it.snapshot?.takeIf { s -> s.loginTag == account.login } ?: cached)
                 }
             }
@@ -1213,7 +1208,6 @@ class QuotaDogStore(
                 accountKey = accountKey,
                 message = "Sign-in successful, refreshing usage..."
             )
-            onLocalDataChanged?.invoke()
             refresh(accountKey)
         } catch (error: ProviderException) {
             platformDebugLog("store beginLoginAndWait provider error provider=${providerId.name} state=${error.state} status=${error.statusCode}")
@@ -1290,7 +1284,6 @@ class QuotaDogStore(
                 accountKey = accountKey,
                 message = "Sign-in successful, refreshing usage...",
             )
-            onLocalDataChanged?.invoke()
             refresh(accountKey)
         } catch (error: CancellationException) {
             throw error
@@ -1365,7 +1358,6 @@ class QuotaDogStore(
                 accountKey = accountKey,
                 message = "Sign-in successful, refreshing usage...",
             )
-            onLocalDataChanged?.invoke()
             refresh(accountKey)
         } catch (error: CancellationException) {
             throw error
@@ -1440,7 +1432,6 @@ class QuotaDogStore(
                 accountKey = accountKey,
                 message = "Sign-in successful, refreshing usage...",
             )
-            onLocalDataChanged?.invoke()
             refresh(accountKey)
         } catch (error: CancellationException) {
             throw error
@@ -1486,7 +1477,6 @@ class QuotaDogStore(
                 accountKey = accountKey,
                 message = "Imported Grok credentials, refreshing usage...",
             )
-            onLocalDataChanged?.invoke()
             refresh(accountKey)
         } catch (error: ProviderException) {
             platformDebugLog("store importGrok provider error state=${error.state} status=${error.statusCode}")
@@ -1528,7 +1518,6 @@ class QuotaDogStore(
                 accountKey = accountKey,
                 message = "Imported Cursor credentials, refreshing usage...",
             )
-            onLocalDataChanged?.invoke()
             refresh(accountKey)
         } catch (error: ProviderException) {
             platformDebugLog("store importCursor provider error state=${error.state} status=${error.statusCode}")
@@ -1570,7 +1559,6 @@ class QuotaDogStore(
                 accountKey = accountKey,
                 message = "Imported Antigravity credentials, refreshing usage...",
             )
-            onLocalDataChanged?.invoke()
             refresh(accountKey)
         } catch (error: ProviderException) {
             platformDebugLog("store importAntigravity provider error state=${error.state} status=${error.statusCode}")
@@ -1612,7 +1600,6 @@ class QuotaDogStore(
                 accountKey = accountKey,
                 message = "Imported Devin credentials, refreshing usage...",
             )
-            onLocalDataChanged?.invoke()
             refresh(accountKey)
         } catch (error: ProviderException) {
             platformDebugLog("store importDevin provider error state=${error.state} status=${error.statusCode}")
@@ -1654,7 +1641,6 @@ class QuotaDogStore(
                 accountKey = accountKey,
                 message = "Imported droid credentials, refreshing usage...",
             )
-            onLocalDataChanged?.invoke()
             refresh(accountKey)
         } catch (error: ProviderException) {
             platformDebugLog("store importDroid provider error state=${error.state} status=${error.statusCode}")
@@ -1696,7 +1682,6 @@ class QuotaDogStore(
                 accountKey = accountKey,
                 message = "Imported Amp credentials, refreshing usage...",
             )
-            onLocalDataChanged?.invoke()
             refresh(accountKey)
         } catch (error: CancellationException) {
             throw error
@@ -1732,7 +1717,6 @@ class QuotaDogStore(
             accountKey = savedKey,
             message = "Sign-in successful, refreshing usage..."
         )
-        onLocalDataChanged?.invoke()
         refresh(savedKey)
     }
 
@@ -1744,8 +1728,8 @@ class QuotaDogStore(
             val login = currentLogin(key) ?: return false
             if (sharedLogin != null && sharedLogin != login) return false
             activeRefreshes[key]?.takeIf { it.first == login }?.let { return@withLock it.second }
-            if (!client.ifCurrentLogin(key, login) {
-                update(key) { it.copy(added = true, busy = true, message = null,
+            if (!client.ifCurrentLogin(key, login) { email ->
+                update(key) { it.copy(added = true, busy = true, loginEmail = email, message = null,
                     snapshot = it.snapshot?.takeIf { s -> s.loginTag == null || s.loginTag == login }) }
             }) return false
             storeScope.async { refreshOnce(key, login) }.also { activeRefreshes[key] = login to it }
@@ -1755,19 +1739,17 @@ class QuotaDogStore(
 
     private suspend fun refreshOnce(key: AccountKey, login: String): Boolean {
         try {
-            // State and cache commit under the same token-store guard as renewal, sync and logout.
-            val result = client.collectUsage(key, login) { snapshot ->
+            // State and cache commit under the same token-store guard as renewal and logout.
+            return client.collectUsage(key, login) { snapshot ->
                 usageSnapshotStore.save(key, snapshot)
                 update(key) { it.copy(added = true, authState = snapshot.authState, snapshot = snapshot, busy = false, message = snapshot.message) }
-            }
-            if (result != null) onLocalDataChanged?.invoke()
-            return result != null
+            } != null
         } catch (e: CancellationException) { throw e }
         catch (error: Exception) {
             val auth = (error as? ProviderException)?.state ?: AuthState.Error
             platformDebugLog("store refresh failed provider=${key.providerId.name} state=$auth")
-            client.ifCurrentLogin(key, login) {
-                update(key) { it.copy(authState = auth, busy = false, message = safeUserMessage(error, "Refresh failed. Please try again.")) }
+            client.ifCurrentLogin(key, login) { email ->
+                update(key) { it.copy(authState = auth, loginEmail = email, busy = false, message = safeUserMessage(error, "Refresh failed. Please try again.")) }
             }
             return false
         } finally {
@@ -1778,8 +1760,8 @@ class QuotaDogStore(
                         if (state.value.accounts[key]?.busy == true) {
                             val current = currentLogin(key)
                             if (current == null) _state.update { it.copy(accounts = it.accounts - key) }
-                            else client.ifCurrentLogin(key, current) {
-                                update(key) { if (current == login) it.copy(busy = false) else AccountUiState(key, added = true) }
+                            else client.ifCurrentLogin(key, current) { email ->
+                                update(key) { if (current == login) it.copy(busy = false) else AccountUiState(key, added = true, loginEmail = email) }
                             }
                         }
                     }
@@ -1806,7 +1788,6 @@ class QuotaDogStore(
             client.logout(accountKey)
             activeRefreshes.remove(accountKey)
             usageSnapshotStore.delete(accountKey)
-            onLocalAccountDeleted?.invoke(accountKey) ?: onLocalDataChanged?.invoke()
             _state.update { current -> current.copy(accounts = current.accounts - accountKey) }
         }
     }
@@ -1823,9 +1804,9 @@ class QuotaDogStore(
 
     private suspend fun replacePendingWithAccount(pendingKey: AccountKey, accountKey: AccountKey, message: String) {
         val login = currentLogin(accountKey) ?: return
-        client.ifCurrentLogin(accountKey, login) {
+        client.ifCurrentLogin(accountKey, login) { email ->
             _state.update { current ->
-                val merged = AccountUiState(accountKey, added = true, authState = AuthState.LoggedIn, busy = true,
+                val merged = AccountUiState(accountKey, added = true, authState = AuthState.LoggedIn, loginEmail = email, busy = true,
                     snapshot = current.accounts[accountKey]?.snapshot?.takeIf { it.loginTag == login }, message = message)
                 current.copy(accounts = (current.accounts - pendingKey) + (accountKey to merged))
             }

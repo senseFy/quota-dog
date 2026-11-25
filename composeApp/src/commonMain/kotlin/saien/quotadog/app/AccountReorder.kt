@@ -128,11 +128,9 @@ internal fun Modifier.accountDragHandle(
     visibleKeys: List<DashboardKey>,
     itemSpacing: Dp,
     onMove: (DashboardKey, Int) -> Unit,
-    onDragFinished: () -> Unit,
 ): Modifier {
     val visibleKeysState = rememberUpdatedState(visibleKeys)
     val onMoveState = rememberUpdatedState(onMove)
-    val onDragFinishedState = rememberUpdatedState(onDragFinished)
     val spacingPx = with(LocalDensity.current) { itemSpacing.toPx() }
     val minimumSwapDistance = with(LocalDensity.current) { 24.dp.toPx() }
     return pointerInput(accountKey, spacingPx, minimumSwapDistance) {
@@ -142,7 +140,6 @@ internal fun Modifier.accountDragHandle(
             dragState.draggingKey = accountKey
             dragState.translationY = 0f
             dragState.order = visibleKeysState.value
-            var moved = false
             try {
                 while (true) {
                     val event = awaitPointerEvent(PointerEventPass.Initial)
@@ -150,15 +147,12 @@ internal fun Modifier.accountDragHandle(
                     val deltaY = change.positionChangeIgnoreConsumed().y
                     change.consume()
                     if (!change.pressed) break
-                    if (dragState.dragBy(deltaY, spacingPx, minimumSwapDistance, onMoveState.value)) {
-                        moved = true
-                    }
+                    dragState.dragBy(deltaY, spacingPx, minimumSwapDistance, onMoveState.value)
                 }
             } finally {
                 dragState.draggingKey = null
                 dragState.translationY = 0f
                 dragState.order = emptyList()
-                if (moved) onDragFinishedState.value()
             }
         }
     }

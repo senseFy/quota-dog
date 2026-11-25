@@ -3,7 +3,6 @@ package saien.quotadog
 import com.russhwolf.settings.Settings
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import kotlinx.datetime.Clock
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
@@ -38,11 +37,11 @@ class SettingsTokenStore(
         val token = runCatching { json.decodeFromJsonElement(OAuthTokenBundle.serializer(), data) }.getOrNull() ?: return null
         if (token.loginGeneration != null && "lastRefreshEpochMillis" in data) return token
         // Only an existing local row can inherit the pre-generation Devin tag used by 1.0.17.
-        // A newly imported/synced row always gets a random generation, even for identical bytes.
+        // A newly imported row always gets a random generation, even for identical bytes.
         val generation = token.loginGeneration ?: if (accountKey.providerId == ProviderId.DEVIN) {
             base64UrlNoPadding(sha256("${token.apiServerUrl.orEmpty()}\u0000${token.expiresAtEpochMillis}\u0000${token.accessToken}".encodeToByteArray()))
         } else newId()
-        // A formerly omitted, default-valued timestamp mustn't make this row newer than a deletion.
+        // Don't date an old credential as freshly renewed just because its timestamp was omitted.
         val refreshedAt = if ("lastRefreshEpochMillis" in data) token.lastRefreshEpochMillis else tokenTimestamp(accountKey) ?: 0L
         return token.copy(loginGeneration = generation, lastRefreshEpochMillis = refreshedAt).also { writeValue(accountKey, it) }
     }
@@ -60,20 +59,19 @@ class SettingsTokenStore(
                 it.token.accountId == token.accountId && it.token.apiServerUrl == token.apiServerUrl }
         } else null
         val key = (exact ?: subscriber)?.accountKey ?: AccountKey(providerId, newId())
-        saveLogin(key, token, Clock.System.now().toEpochMilliseconds())
+        saveLogin(key, token)
         key
     }
 
     override suspend fun save(accountKey: AccountKey, token: OAuthTokenBundle) = mutex.withLock {
-        saveLogin(accountKey, token, Clock.System.now().toEpochMilliseconds())
+        saveLogin(accountKey, token)
     }
 
-    private fun saveLogin(accountKey: AccountKey, token: OAuthTokenBundle, updatedAtEpochMillis: Long) {
+    private fun saveLogin(accountKey: AccountKey, token: OAuthTokenBundle) {
         val sameLogin = read(accountKey)?.takeIf { it.sameLoginAs(token) }
-        // Never trust local-only fields on externally supplied credentials (including Dropbox).
+        // Only the existing local row can vouch for the generation and previously observed quota target.
         val local = token.copy(loginGeneration = sameLogin?.loginGeneration ?: newId(), quotaIdentityHash = sameLogin?.quotaIdentityHash)
         writeValue(accountKey, local)
-        settings.putLong(updatedAtKey(accountKey), updatedAtEpochMillis)
         upsertIndex(accountKey)
     }
 
@@ -82,12 +80,7 @@ class SettingsTokenStore(
     ): Boolean = mutex.withLock {
         require(expected.loginGeneration != null && replacement.loginGeneration != null)
         if (read(accountKey) != expected) return@withLock false
-        if (replacement != expected) {
-            writeValue(accountKey, replacement)
-            if (replacement.withoutLocalBinding() != expected.withoutLocalBinding()) {
-                settings.putLong(updatedAtKey(accountKey), Clock.System.now().toEpochMilliseconds())
-            }
-        }
+        if (replacement != expected) writeValue(accountKey, replacement)
         commit()
         true
     }
@@ -96,46 +89,13 @@ class SettingsTokenStore(
         settings.putString(key(accountKey), json.encodeToString(OAuthTokenBundle.serializer(), token))
     }
 
-    override suspend fun delete(accountKey: AccountKey) = deleteForSync(accountKey)
-
-    override suspend fun deleteForSync(accountKey: AccountKey, throughEpochMillis: Long?) = mutex.withLock {
+    override suspend fun delete(accountKey: AccountKey) = mutex.withLock {
         migrateLegacyProviderKeys()
-        if (throughEpochMillis != null) {
-            val lastEdit = tokenTimestamp(accountKey) ?: read(accountKey)?.lastRefreshEpochMillis
-            if (lastEdit != null && lastEdit > throughEpochMillis) return@withLock
-        }
         settings.remove(key(accountKey))
         settings.remove(updatedAtKey(accountKey))
         // Legacy suffix used before key-length tightening.
         settings.remove("${key(accountKey)}_updated_at")
         saveIndex(loadIndex().filterNot { it.providerId == accountKey.providerId && it.accountId == accountKey.accountId })
-    }
-
-    override suspend fun exportTokensForSync(): List<CloudSyncAccountRecord> = mutex.withLock {
-        migrateLegacyProviderKeys()
-        listIndexed().map { stored ->
-            CloudSyncAccountRecord(
-                providerId = stored.accountKey.providerId,
-                accountId = stored.accountKey.accountId,
-                token = CloudSyncTokenValue(
-                    value = stored.token.withoutLocalBinding(),
-                    updatedAtEpochMillis = tokenTimestamp(stored.accountKey) ?: stored.token.lastRefreshEpochMillis
-                )
-            )
-        }
-    }
-
-    override suspend fun importTokenForSync(
-        accountKey: AccountKey,
-        token: OAuthTokenBundle,
-        updatedAtEpochMillis: Long
-    ) = mutex.withLock {
-        // Claude usage doesn't repeat its subscriber UUID. Only a local OAuth response is
-        // evidence for that identity. An unchanged sync echo can keep this device's own evidence.
-        val current = read(accountKey)
-        val candidate = token.copy(principalId = current?.principalId)
-        val local = if (current != null && current.sameLoginAs(candidate)) candidate else token.copy(principalId = null)
-        saveLogin(accountKey, local, updatedAtEpochMillis)
     }
 
     internal suspend fun importLegacyFile(providerId: ProviderId, token: OAuthTokenBundle) = mutex.withLock {
@@ -148,7 +108,7 @@ class SettingsTokenStore(
         // Preserve both credentials if the file could carry a different (e.g. newer) refresh grant.
         val portable = token.withoutLocalBinding()
         if (listIndexed().none { it.accountKey.providerId == providerId && it.token.withoutLocalBinding().sameLoginAs(portable) }) {
-            saveLogin(AccountKey(providerId, newId()), portable, portable.lastRefreshEpochMillis)
+            saveLogin(AccountKey(providerId, newId()), portable)
         }
     }
 
@@ -216,6 +176,8 @@ class SettingsTokenStore(
         fun newId() = base64UrlNoPadding(secureRandomBytes(16))
     }
 }
+
+private fun OAuthTokenBundle.withoutLocalBinding() = copy(loginGeneration = null, quotaIdentityHash = null, principalId = null)
 
 private fun OAuthTokenBundle.sameCredentialAndTarget(other: OAuthTokenBundle) = accessToken.isNotBlank() &&
     accessToken == other.accessToken && accountId == other.accountId && principalId == other.principalId && apiServerUrl == other.apiServerUrl

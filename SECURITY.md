@@ -1,9 +1,8 @@
 # Security Policy
 
-QuotaDog is a local-first client that handles OAuth tokens for third-party
-provider accounts (Codex, Claude Code). Optional Dropbox sync encrypts QuotaDog
-sync data client-side before uploading it to the user's Dropbox app folder. We
-take security reports seriously and appreciate responsible disclosure.
+QuotaDog stores provider logins on the device that queries usage. Optional
+host sync shares authorized quota readings between paired devices through an
+end-to-end encrypted connection. It does not send provider credentials.
 
 ## Supported versions
 
@@ -27,8 +26,8 @@ When reporting, please include:
 - Affected platform(s) (Android / desktop / iOS) and commit hash.
 - Any proof-of-concept code or logs.
 
-**Important:** redact tokens, refresh tokens, Dropbox app keys, encrypted sync
-payloads, OAuth callback URLs, account identifiers, email addresses, and any
+**Important:** redact tokens, refresh tokens, pairing invitations and codes,
+sync payloads, OAuth callback URLs, account identifiers, email addresses, and any
 other personal data before sending reproduction details. If a redacted
 reproduction is not possible, say so in the report and we will coordinate a
 secure way to share the data.
@@ -45,8 +44,6 @@ secure way to share the data.
 
 - Issues caused by changes to provider-side behavior (Codex / Anthropic
   endpoints, rate limits, ToS) rather than QuotaDog itself.
-- Loss of access caused by a forgotten Dropbox sync passphrase. QuotaDog does
-  not store or recover the passphrase.
 - Theoretical issues without a practical attack path against a QuotaDog
   user.
 - Vulnerabilities in dependencies that do not affect QuotaDog as shipped.

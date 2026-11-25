@@ -25,12 +25,14 @@ import java.util.Base64
 import java.util.concurrent.Executors
 import java.util.prefs.Preferences
 
-actual class PlatformTokenStore actual constructor() : TokenStore {
-    private val delegate = SettingsTokenStore(
-        PreferencesSettings(Preferences.userRoot().node("saien/quotadog"))
+actual class PlatformTokenStore internal constructor(settings: Settings, private val legacyDir: File) : TokenStore {
+    actual constructor() : this(
+        PreferencesSettings(Preferences.userRoot().node("saien/quotadog")),
+        File(System.getProperty("user.home"), ".quotadog"),
     )
+
+    private val delegate = SettingsTokenStore(settings)
     private val legacyJson = Json { ignoreUnknownKeys = true }
-    private val legacyDir = File(System.getProperty("user.home"), ".quotadog")
 
     private suspend fun migrateLegacyFiles() = migrationMutex.withLock {
         ProviderId.entries.forEach { providerId ->
@@ -59,24 +61,9 @@ actual class PlatformTokenStore actual constructor() : TokenStore {
         accountKey: AccountKey, expected: OAuthTokenBundle, replacement: OAuthTokenBundle, commit: () -> Unit,
     ) = delegate.commitIfCurrent(accountKey, expected, replacement, commit)
 
-    override suspend fun delete(accountKey: AccountKey) = deleteForSync(accountKey)
-
-    override suspend fun exportTokensForSync(): List<CloudSyncAccountRecord> {
+    override suspend fun delete(accountKey: AccountKey) {
         migrateLegacyFiles()
-        return delegate.exportTokensForSync()
-    }
-
-    override suspend fun importTokenForSync(
-        accountKey: AccountKey,
-        token: OAuthTokenBundle,
-        updatedAtEpochMillis: Long
-    ) {
-        delegate.importTokenForSync(accountKey, token, updatedAtEpochMillis)
-    }
-
-    override suspend fun deleteForSync(accountKey: AccountKey, throughEpochMillis: Long?) {
-        migrateLegacyFiles()
-        delegate.deleteForSync(accountKey, throughEpochMillis)
+        delegate.delete(accountKey)
     }
 
     private fun loadLegacy(providerId: ProviderId): OAuthTokenBundle? {
@@ -119,11 +106,6 @@ actual class PlatformOAuthCallbackServer actual constructor() : OAuthCallbackSer
             ProviderId.DROID -> throw IllegalArgumentException("Droid does not use browser OAuth callbacks.")
             ProviderId.AMP -> throw IllegalArgumentException("Amp does not use browser OAuth callbacks.")
         }
-        return waitForCallback(config.port, config.path, timeoutMillis)
-    }
-
-    override suspend fun waitForCallback(port: Int, path: String, timeoutMillis: Long): String? {
-        val config = CallbackConfig(port = port, path = path)
         return withContext(Dispatchers.IO) {
             val result = CompletableDeferred<String?>()
             val server = HttpServer.create(InetSocketAddress("127.0.0.1", config.port), 0)

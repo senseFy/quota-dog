@@ -51,6 +51,7 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -73,26 +74,24 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.datetime.Clock
 import kotlinx.datetime.Instant
+import org.jetbrains.compose.resources.getString
+import org.jetbrains.compose.resources.stringResource
+import quotadog.composeapp.generated.resources.*
 import saien.quotadog.AccountKey
 import saien.quotadog.AccountSortMode
 import saien.quotadog.AccountUiState
 import saien.quotadog.AppPreferences
 import saien.quotadog.AuthState
-import saien.quotadog.CloudSyncCoordinator
-import saien.quotadog.CloudSyncLocalRepository
 import saien.quotadog.CodexResetSummary
 import saien.quotadog.DashboardLayout
-import saien.quotadog.DashboardState
 import saien.quotadog.EmailPrivacyMode
-import saien.quotadog.PlatformTokenStore
 import saien.quotadog.ProviderId
-import saien.quotadog.QuotaDogClient
 import saien.quotadog.QuotaDogStore
 import saien.quotadog.SettingsUsageSnapshotStore
 import saien.quotadog.ThemeMode
-import saien.quotadog.TokenStore
 import saien.quotadog.UsageDisplayMode
 import saien.quotadog.UsageWindow
 import saien.quotadog.app.components.QdAlertIcon
@@ -153,21 +152,9 @@ import kotlin.time.Duration.Companion.minutes
 
 @Composable
 fun App(
-    tokenStore: TokenStore = remember { PlatformTokenStore() },
-    usageSnapshotStore: SettingsUsageSnapshotStore = remember { SettingsUsageSnapshotStore() },
     preferences: AppPreferences = remember { AppPreferences() },
-    cloudSync: CloudSyncCoordinator = remember {
-        CloudSyncCoordinator(
-            CloudSyncLocalRepository(
-                tokenStore = tokenStore,
-                usageSnapshotStore = usageSnapshotStore,
-                preferences = preferences,
-            )
-        )
-    },
     store: QuotaDogStore? = null,
-    // Desktop tray keeps the process alive after the main window is hidden; host those
-    // effects outside App so refresh/detect/sync session survive window teardown.
+    // The desktop tray owns detection and refresh while the main window is hidden.
     manageBackgroundEffects: Boolean = true,
     versionLabel: String = "v1.0.0",
     platformSettings: (@Composable () -> Unit)? = null,
@@ -175,19 +162,12 @@ fun App(
     // denser layouts. Touch platforms keep them visible.
     revealActionsOnHover: Boolean = false,
     hostSyncContent: (@Composable (QuotaDogStore) -> Unit)? = null,
-    showLocalEmptyState: Boolean = true,
-    onConnectComputer: (() -> Unit)? = null,
+    onOpenComputer: (() -> Unit)? = null,
     syncPeers: List<DashboardPeer> = emptyList(),
     phoneDashboard: Boolean = false,
+    usageSnapshotStore: SettingsUsageSnapshotStore = remember { SettingsUsageSnapshotStore() },
 ) {
-    val activeStore = store ?: remember {
-        QuotaDogStore(
-            client = QuotaDogClient(tokenStore = tokenStore),
-            usageSnapshotStore = usageSnapshotStore,
-            onLocalDataChanged = { cloudSync.startPushLocalChanges() },
-            onLocalAccountDeleted = { cloudSync.recordAccountDeleted(it) },
-        )
-    }
+    val activeStore = store ?: remember { QuotaDogStore(usageSnapshotStore = usageSnapshotStore) }
     val themeMode by preferences.themeMode.collectAsState()
     val systemDark = rememberSystemDarkTheme()
     val effectiveDark = when (themeMode) {
@@ -198,14 +178,13 @@ fun App(
     QuotaDogTheme(darkTheme = effectiveDark) {
         ApplyPlatformSystemBars(darkAppearance = effectiveDark)
         if (manageBackgroundEffects) {
-            QuotaDogBackgroundEffects(store = activeStore, preferences = preferences, cloudSync = cloudSync)
+            QuotaDogBackgroundEffects(store = activeStore, preferences = preferences)
         }
         QuotaDogScreen(
-            activeStore, preferences, cloudSync, versionLabel, platformSettings,
+            activeStore, preferences, versionLabel, platformSettings,
             revealActionsOnHover = revealActionsOnHover,
             hostSyncContent = hostSyncContent,
-            showLocalEmptyState = showLocalEmptyState,
-            onConnectComputer = onConnectComputer,
+            onOpenComputer = onOpenComputer,
             syncPeers = syncPeers,
             phoneDashboard = phoneDashboard,
         )
@@ -216,7 +195,6 @@ fun App(
 fun QuotaDogBackgroundEffects(
     store: QuotaDogStore,
     preferences: AppPreferences,
-    cloudSync: CloudSyncCoordinator,
 ) {
     val autoRefreshMinutes by preferences.autoRefreshMinutes.collectAsState()
     val state by store.state.collectAsState()
@@ -226,7 +204,6 @@ fun QuotaDogBackgroundEffects(
         .minOrNull()
 
     LaunchedEffect(Unit) {
-        cloudSync.startRestoreSession()
         store.startDetectAll()
     }
 
@@ -265,13 +242,11 @@ private val SPENT_RESET_REFRESH_GRACE = 1.minutes
 private fun QuotaDogScreen(
     store: QuotaDogStore,
     preferences: AppPreferences,
-    cloudSync: CloudSyncCoordinator,
     versionLabel: String,
     platformSettings: (@Composable () -> Unit)?,
     revealActionsOnHover: Boolean,
     hostSyncContent: (@Composable (QuotaDogStore) -> Unit)?,
-    showLocalEmptyState: Boolean,
-    onConnectComputer: (() -> Unit)?,
+    onOpenComputer: (() -> Unit)?,
     syncPeers: List<DashboardPeer>,
     phoneDashboard: Boolean,
 ) {
@@ -286,7 +261,6 @@ private fun QuotaDogScreen(
     val accountSortMode by preferences.accountSortMode.collectAsState()
     val accountSortReversed by preferences.accountSortReversed.collectAsState()
     val accountManualOrder by preferences.accountManualOrder.collectAsState()
-    val cloudSyncState by cloudSync.state.collectAsState()
     val callbackInputs = remember { mutableStateMapOf<AccountKey, String>() }
     var showProviderPicker by remember { mutableStateOf(false) }
     var showGrokMethodPicker by remember { mutableStateOf(false) }
@@ -297,9 +271,8 @@ private fun QuotaDogScreen(
     var manualReorderEditing by remember { mutableStateOf(false) }
     var selectedProvider by remember { mutableStateOf<ProviderId?>(null) }
     var pendingDelete by remember { mutableStateOf<AccountKey?>(null) }
-    var showResetCloudSyncConfirm by remember { mutableStateOf(false) }
-    var syncPassphrase by remember { mutableStateOf("") }
     val snackbar = rememberQdSnackbarController()
+    val scope = rememberCoroutineScope()
 
     val colors = QdTheme.colors
     val spacing = QdTheme.spacing
@@ -309,8 +282,11 @@ private fun QuotaDogScreen(
     val rows = remember(localAccounts, syncPeers, history) { dashboardAccounts(localAccounts, syncPeers, history = history) }
     var sessionOrder by remember { mutableStateOf(emptyList<DashboardKey>()) }
     val phoneNames = if (phoneDashboard) remember(preferences) { PhoneAccountNames(preferences) } else null
+    val phoneTitles = phoneNames?.titles(rows, emailPrivacyMode)
+    fun accountLabel(key: AccountKey) = phoneTitles?.get(DashboardKey.Local(key))?.let { "${key.providerId.displayName} · ${it.label}" }
+        ?: state.accounts[key]?.accountTitle(emailPrivacyMode) ?: key.providerId.displayName
     val sortName: (DashboardAccount) -> String = {
-        if (phoneNames == null) it.sortName else "${it.provider.displayName} · ${phoneNames.name(it)}".lowercase()
+        if (phoneTitles == null) it.sortName else "${it.provider.displayName} · ${phoneTitles.getValue(it.key).label}".lowercase()
     }
     val accounts = rows.inDashboardOrder(accountSortMode, accountManualOrder, sessionOrder, accountSortReversed, sortName)
     val availableProviders = accounts.map { it.provider }.distinct().sortedBy { it.ordinal }
@@ -345,7 +321,6 @@ private fun QuotaDogScreen(
         }
         if (mode != accountSortMode) {
             preferences.setAccountSortMode(mode)
-            cloudSync.startPushLocalChanges()
             snackbar.show(
                 text = sortChangeLabel(mode, accountSortReversed),
                 tone = QdSnackbarTone.Success,
@@ -356,7 +331,6 @@ private fun QuotaDogScreen(
     val selectSortReversed = { reversed: Boolean ->
         if (reversed != accountSortReversed) {
             preferences.setAccountSortReversed(reversed)
-            cloudSync.startPushLocalChanges()
             snackbar.show(
                 text = sortChangeLabel(accountSortMode, reversed),
                 tone = QdSnackbarTone.Success,
@@ -402,7 +376,7 @@ private fun QuotaDogScreen(
 
             hostSyncContent?.invoke(store)
             if (accounts.isEmpty()) {
-                if (showLocalEmptyState) AccountsEmptyState(isDesktop = isDesktop)
+                AccountsEmptyState(isDesktop, pairedPhone = phoneDashboard && syncPeers.isNotEmpty())
             } else {
                 ProviderSwitcher(
                     accounts = accounts,
@@ -413,10 +387,7 @@ private fun QuotaDogScreen(
                 if (manualReorderEditing) {
                     ManualReorderBar(
                         hasRemote = accounts.any { it is DashboardAccount.Remote },
-                        onDone = {
-                            manualReorderEditing = false
-                            cloudSync.startPushLocalChanges()
-                        },
+                        onDone = { manualReorderEditing = false },
                     )
                 }
                 val filteredAccounts = activeProvider?.let { selected ->
@@ -428,23 +399,20 @@ private fun QuotaDogScreen(
                 } else {
                     filteredAccounts.sortedBy { it.exhausted }
                 }
-                val moveVisibleAccount = { key: DashboardKey, delta: Int, pushSync: Boolean ->
+                val moveVisibleAccount = { key: DashboardKey, delta: Int ->
                     val reversed = preferences.accountSortReversed.value
                     val full = rows.inDashboardOrder(AccountSortMode.Manual, preferences.accountManualOrder.value, sessionOrder, reversed, sortName)
                     val moved = moveDashboardKey(full, activeProvider, key, delta)
                     sessionOrder = if (reversed) moved.asReversed() else moved
-                    val local = sessionOrder.filterIsInstance<DashboardKey.Local>().map { it.key }
-                    if (local != preferences.accountManualOrder.value) {
-                        preferences.setAccountManualOrder(local)
-                        if (pushSync) cloudSync.startPushLocalChanges()
-                    }
+                    preferences.setAccountManualOrder(sessionOrder.filterIsInstance<DashboardKey.Local>().map { it.key })
                 }
                 AccountCards(
                     accounts = visibleAccounts,
                     showSourceDetails = syncPeers.isNotEmpty(),
                     isDesktop = isDesktop,
                     layout = if (phoneDashboard) DashboardLayout.OneLine else dashboardLayout,
-                    phoneNames = phoneNames,
+                    phoneTitles = phoneTitles,
+                    onRename = { key, alias -> phoneNames?.rename(key, alias) },
                     revealActionsOnHover = revealActionsOnHover,
                     manualReorder = manualReorderEditing,
                     usageDisplayMode = usageDisplayMode,
@@ -460,12 +428,12 @@ private fun QuotaDogScreen(
                     onReopenLogin = { accountKey -> store.startReopenLogin(accountKey) },
                     onSignInAgain = { providerId -> store.startLogin(providerId) },
                     onRefresh = { providerState ->
+                        val label = accountLabel(providerState.accountKey)
                         store.startRefresh(providerState.accountKey)
-                        snackbar.show("Refreshing ${providerState.accountTitle(emailPrivacyMode)}...")
+                        scope.launch { snackbar.show(getString(Res.string.refreshing_account, label)) }
                     },
                     onRequestDelete = { accountKey -> pendingDelete = accountKey },
-                    onMove = { key, delta, pushSync -> moveVisibleAccount(key, delta, pushSync) },
-                    onMoveFinished = { cloudSync.startPushLocalChanges() },
+                    onMove = moveVisibleAccount,
                 )
             }
         }
@@ -493,7 +461,7 @@ private fun QuotaDogScreen(
             onDismiss = { showProviderPicker = false },
         ) {
             ProviderPickerContent(
-                onConnectComputer = onConnectComputer?.let { connect -> { showProviderPicker = false; connect() } },
+                onConnectComputer = onOpenComputer?.takeIf { syncPeers.isEmpty() }?.let { open -> { showProviderPicker = false; open() } },
                 onSelect = { provider ->
                     if (provider == ProviderId.GROK && grokCliImportAvailable()) {
                         showProviderPicker = false
@@ -652,13 +620,11 @@ private fun QuotaDogScreen(
             themeMode = themeMode,
             onThemeChange = {
                 preferences.setThemeMode(it)
-                cloudSync.startPushLocalChanges()
                 snackbar.show("Theme set to ${it.name.lowercase()}")
             },
             dashboardLayout = dashboardLayout.takeUnless { phoneDashboard },
             onDashboardLayoutChange = {
                 preferences.setDashboardLayout(it)
-                cloudSync.startPushLocalChanges()
                 snackbar.show(
                     text = "Layout set to ${it.label.lowercase()}",
                     tone = QdSnackbarTone.Success,
@@ -667,7 +633,6 @@ private fun QuotaDogScreen(
             usageDisplayMode = usageDisplayMode,
             onUsageDisplayModeChange = {
                 preferences.setUsageDisplayMode(it)
-                cloudSync.startPushLocalChanges()
                 snackbar.show(
                     text = "Quota display set to ${it.name.lowercase()}",
                     tone = QdSnackbarTone.Success,
@@ -676,7 +641,6 @@ private fun QuotaDogScreen(
             showProjectedUsage = showProjectedUsage,
             onShowProjectedUsageChange = {
                 preferences.setShowProjectedUsage(it)
-                cloudSync.startPushLocalChanges()
                 snackbar.show(
                     text = if (it) "Usage estimate enabled" else "Usage estimate disabled",
                     tone = QdSnackbarTone.Success,
@@ -685,7 +649,6 @@ private fun QuotaDogScreen(
             sinkExhaustedAccounts = sinkExhaustedAccounts,
             onSinkExhaustedAccountsChange = {
                 preferences.setSinkExhaustedAccounts(it)
-                cloudSync.startPushLocalChanges()
                 snackbar.show(
                     text = if (it) "Spent accounts enabled" else "Spent accounts disabled",
                     tone = QdSnackbarTone.Success,
@@ -694,7 +657,6 @@ private fun QuotaDogScreen(
             emailPrivacyMode = emailPrivacyMode,
             onEmailPrivacyModeChange = {
                 preferences.setEmailPrivacyMode(it)
-                cloudSync.startPushLocalChanges()
                 snackbar.show(
                     text = if (it == EmailPrivacyMode.Masked) "Email privacy enabled" else "Email privacy disabled",
                     tone = QdSnackbarTone.Success,
@@ -703,7 +665,6 @@ private fun QuotaDogScreen(
             autoRefreshMinutes = autoRefreshMinutes,
             onAutoRefreshChange = {
                 preferences.setAutoRefreshMinutes(it)
-                cloudSync.startPushLocalChanges()
                 snackbar.show(
                     text = if (it == 0) "Auto refresh disabled" else "Auto refresh every $it min",
                     tone = QdSnackbarTone.Success,
@@ -712,74 +673,30 @@ private fun QuotaDogScreen(
             refreshAllBusy = refreshAllBusy,
             refreshAllEnabled = refreshAllEnabled,
             onRefreshAll = refreshAllAction,
-            cloudSyncState = cloudSyncState,
-            syncPassphrase = syncPassphrase,
-            onSyncPassphraseChange = { syncPassphrase = it },
-            onConnectDropbox = {
-                cloudSync.startConnectDropbox(syncPassphrase) {
-                    store.startReloadAccounts()
-                }
-                snackbar.show("Opening Dropbox authorization...", tone = QdSnackbarTone.Info)
-            },
-            onUnlockCloudSync = {
-                cloudSync.startUnlock(syncPassphrase) {
-                    store.startReloadAccounts()
-                }
-                snackbar.show("Syncing with Dropbox...", tone = QdSnackbarTone.Info)
-            },
-            onSyncNow = {
-                cloudSync.startSyncNow {
-                    store.startReloadAccounts()
-                }
-                snackbar.show("Syncing with Dropbox...", tone = QdSnackbarTone.Info)
-            },
-            onCancelCloudSync = {
-                cloudSync.cancelCurrentOperation()
-                snackbar.show("Dropbox sync cancelled", tone = QdSnackbarTone.Info)
-            },
-            onResetCloudSync = {
-                showResetCloudSyncConfirm = true
-            },
-            onDisconnectCloudSync = {
-                cloudSync.disconnect()
-                snackbar.show("Dropbox sync disconnected", tone = QdSnackbarTone.Success)
-            },
             onDismiss = { showSettings = false },
             versionLabel = versionLabel,
             platformSettings = platformSettings,
+            onOpenComputer = onOpenComputer?.let { open -> { showSettings = false; open() } },
         )
 
+        val deleteLabel = pendingDelete?.let(::accountLabel).orEmpty()
+        val removedMessage = stringResource(Res.string.account_removed, deleteLabel)
         QdConfirmDialog(
             visible = pendingDelete != null,
-            title = "Remove account?",
-            message = "The locally stored token for ${pendingDelete?.deleteLabel(state, emailPrivacyMode).orEmpty()} will be deleted. If Dropbox sync is enabled, this removal will sync to your other devices.",
-            confirmLabel = "Remove",
+            title = stringResource(Res.string.remove_login_title),
+            message = stringResource(Res.string.remove_login_message, deleteLabel),
+            confirmLabel = stringResource(Res.string.remove),
+            cancelLabel = stringResource(Res.string.cancel),
             destructive = true,
             onConfirm = {
                 pendingDelete?.let {
                     phoneNames?.rename(DashboardKey.Local(it), "")
                     store.startDelete(it)
-                    snackbar.show("${it.deleteLabel(state, emailPrivacyMode)} removed", tone = QdSnackbarTone.Success)
+                    snackbar.show(removedMessage, tone = QdSnackbarTone.Success)
                 }
                 pendingDelete = null
             },
             onDismiss = { pendingDelete = null },
-        )
-
-        QdConfirmDialog(
-            visible = showResetCloudSyncConfirm,
-            title = "Reset Dropbox sync file?",
-            message = "This overwrites the encrypted Dropbox sync file with data currently on this device and the passphrase in the field above. Data that exists only in Dropbox, or only on another device that has not synced here, may be lost. Devices using the old passphrase will need the new passphrase.",
-            confirmLabel = "Reset sync file",
-            destructive = true,
-            onConfirm = {
-                cloudSync.startResetCloudSync(syncPassphrase) {
-                    store.startReloadAccounts()
-                }
-                snackbar.show("Resetting Dropbox sync file...", tone = QdSnackbarTone.Info)
-                showResetCloudSyncConfirm = false
-            },
-            onDismiss = { showResetCloudSyncConfirm = false },
         )
     }
 }
@@ -870,8 +787,10 @@ private fun DashboardHeader(
                 )
             }
         }
+        val openSettingsLabel = stringResource(Res.string.open_settings)
         QdGlassIconButton(
             onClick = onOpenSettings,
+            modifier = Modifier.semantics { contentDescription = openSettingsLabel },
             diameter = 32.dp,
             shape = QdTheme.shapes.pill,
         ) {
@@ -1073,21 +992,23 @@ private fun SortMenuRow(
 }
 
 @Composable
-private fun AccountsEmptyState(isDesktop: Boolean) {
-    val providerNames = providerNamesLabel()
+private fun AccountsEmptyState(isDesktop: Boolean, pairedPhone: Boolean) {
+    val title = stringResource(Res.string.no_accounts)
+    val description = if (pairedPhone) stringResource(Res.string.no_accounts_paired)
+        else stringResource(Res.string.no_accounts_add, providerNamesLabel())
     if (isDesktop) {
         Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
             QdEmptyState(
-                title = "No accounts yet",
-                description = "Add a $providerNames account to start tracking quota windows in one place.",
+                title = title,
+                description = description,
                 modifier = Modifier.widthIn(max = 640.dp),
             )
         }
         return
     }
     QdEmptyState(
-        title = "No accounts yet",
-        description = "Add a $providerNames account to start tracking quota windows in one place.",
+        title = title,
+        description = description,
     )
 }
 
@@ -1149,7 +1070,8 @@ private fun AccountCards(
     showSourceDetails: Boolean,
     isDesktop: Boolean,
     layout: DashboardLayout,
-    phoneNames: PhoneAccountNames?,
+    phoneTitles: Map<DashboardKey, PhoneAccountTitle>?,
+    onRename: (DashboardKey, String) -> Unit,
     revealActionsOnHover: Boolean,
     manualReorder: Boolean,
     usageDisplayMode: UsageDisplayMode,
@@ -1163,8 +1085,7 @@ private fun AccountCards(
     onSignInAgain: (ProviderId) -> Unit,
     onRefresh: (AccountUiState) -> Unit,
     onRequestDelete: (AccountKey) -> Unit,
-    onMove: (DashboardKey, Int, Boolean) -> Unit,
-    onMoveFinished: () -> Unit,
+    onMove: (DashboardKey, Int) -> Unit,
 ) {
     val colors = QdTheme.colors
     val spacing = QdTheme.spacing
@@ -1174,7 +1095,7 @@ private fun AccountCards(
     val expandedAccounts = remember { mutableStateMapOf<DashboardKey, Boolean>() }
     // One line separates rows with a 1 dp rule instead of a gap.
     val itemSpacing = if (layout == DashboardLayout.OneLine) 1.dp else spacing.md
-    val phoneClock = if (phoneNames == null) null else produceState(Clock.System.now()) {
+    val phoneClock = if (phoneTitles == null) null else produceState(Clock.System.now()) {
         while (true) { delay(60_000); value = Clock.System.now() }
     }
 
@@ -1190,11 +1111,10 @@ private fun AccountCards(
                     dragState = dragState,
                     visibleKeys = visibleKeys,
                     itemSpacing = itemSpacing,
-                    onMove = { key, delta -> onMove(key, delta, false) },
-                    onDragFinished = onMoveFinished,
+                    onMove = onMove,
                 ),
-                onMoveUp = { onMove(rowKey, -1, true) },
-                onMoveDown = { onMove(rowKey, 1, true) },
+                onMoveUp = { onMove(rowKey, -1) },
+                onMoveDown = { onMove(rowKey, 1) },
             )
         } else {
             null
@@ -1206,8 +1126,8 @@ private fun AccountCards(
         } else {
             modifier
         }
-        if (phoneNames != null && phoneClock != null) {
-            PhoneAccountRow(row, phoneNames, usageDisplayMode, showProjectedUsage, emailPrivacyMode, onRefresh,
+        if (phoneTitles != null && phoneClock != null) {
+            PhoneAccountRow(row, phoneTitles.getValue(rowKey), usageDisplayMode, showProjectedUsage, { onRename(rowKey, it) }, onRefresh,
                 modifier = cardModifier.alpha(if (sinkExhaustedAccounts && row.exhausted) EXHAUSTED_ACCOUNT_ALPHA else 1f),
                 now = phoneClock.value,
                 reorder = { reorder?.let { AccountReorderButtons(it, compact = true) } },
@@ -2444,7 +2364,7 @@ private fun ProviderPickerContent(onConnectComputer: (() -> Unit)?, onSelect: (P
                 color = colors.textSecondary,
             )
         }
-        onConnectComputer?.let { QdButton("Connect my computer", it, variant = QdButtonVariant.Secondary) }
+        onConnectComputer?.let { QdButton(stringResource(Res.string.connect_my_computer), it, variant = QdButtonVariant.Secondary) }
         Column(verticalArrangement = Arrangement.spacedBy(spacing.xs)) {
             SignInSupportHeaderRow()
             providers.forEach { provider ->
@@ -2665,18 +2585,17 @@ internal fun AccountUiState.accountTitle(emailPrivacyMode: EmailPrivacyMode = Em
 internal fun AccountUiState.accountSubtitle() = displayEmail()
     ?: accountKey.takeUnless { it.isPending || it.accountId == "default" }?.localSourceLabel()
 
+@Composable
 private fun providerNamesLabel(): String {
     val names = availableProviders().map { it.displayName }
-    return when {
-        names.isEmpty() -> "provider"
-        names.size == 1 -> names.first()
-        names.size == 2 -> "${names[0]} or ${names[1]}"
-        else -> names.dropLast(1).joinToString(", ") + ", or " + names.last()
+    return when (names.size) {
+        1 -> names.first()
+        2 -> stringResource(Res.string.provider_pair, names[0], names[1])
+        else -> {
+            val leading = names.dropLast(1).reduce { list, name -> stringResource(Res.string.provider_series, list, name) }
+            stringResource(Res.string.provider_list, leading, names.last())
+        }
     }
-}
-
-private fun AccountKey.deleteLabel(state: DashboardState, emailPrivacyMode: EmailPrivacyMode): String {
-    return state.accounts[this]?.accountTitle(emailPrivacyMode) ?: providerId.displayName
 }
 
 private fun String.canMaskEmail(): Boolean = contains("@") && length > 4

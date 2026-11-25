@@ -100,35 +100,16 @@ fun main() = application {
     DisposableEffect(updater) { onDispose { updater?.close() } }
     val quit: () -> Unit = { updater?.quit(::exitApplication) ?: exitApplication() }
     DesktopQuitHandler(quit)
-    val tokenStore = remember { PlatformTokenStore() }
-    val usageSnapshotStore = remember { SettingsUsageSnapshotStore() }
     val preferences = remember { AppPreferences() }
-    val cloudSync = remember {
-        CloudSyncCoordinator(
-            CloudSyncLocalRepository(
-                tokenStore = tokenStore,
-                usageSnapshotStore = usageSnapshotStore,
-                preferences = preferences,
-            )
-        )
-    }
-    val store = remember {
-        QuotaDogStore(
-            client = QuotaDogClient(tokenStore = tokenStore),
-            usageSnapshotStore = usageSnapshotStore,
-            onLocalDataChanged = { cloudSync.startPushLocalChanges() },
-            onLocalAccountDeleted = { cloudSync.recordAccountDeleted(it) },
-        )
-    }
+    val store = remember { QuotaDogStore() }
     val hostSharing = if (isMacOs()) rememberMacHostSharing(store, preferences) else null
     val windowState = rememberWindowState(width = 1100.dp, height = 760.dp)
     var windowVisible by remember { mutableStateOf(true) }
     var mainWindowFocusToken by remember { mutableIntStateOf(0) }
     var statusBarAvailable by remember { mutableStateOf(false) }
 
-    // Keep detect / auto-refresh / sync session alive while the tray process is running,
-    // even if the main Compose window is hidden.
-    QuotaDogBackgroundEffects(store = store, preferences = preferences, cloudSync = cloudSync)
+    // Keep detecting and refreshing accounts even while the main window is hidden.
+    QuotaDogBackgroundEffects(store = store, preferences = preferences)
 
     QuotaDogTray(
         store = store,
@@ -174,10 +155,7 @@ fun main() = application {
             )
             RefreshSystemThemeOnWindowResume(window)
             App(
-                tokenStore = tokenStore,
-                usageSnapshotStore = usageSnapshotStore,
                 preferences = preferences,
-                cloudSync = cloudSync,
                 store = store,
                 manageBackgroundEffects = false,
                 versionLabel = "v${desktopMetadata.version} (${desktopMetadata.sequence})",

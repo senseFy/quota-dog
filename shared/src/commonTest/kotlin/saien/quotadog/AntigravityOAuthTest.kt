@@ -180,6 +180,5 @@ class AntigravityOAuthTest {
 
     private class NoopCallbackServer : OAuthCallbackServer {
         override suspend fun waitForCallback(providerId: ProviderId, timeoutMillis: Long): String? = null
-        override suspend fun waitForCallback(port: Int, path: String, timeoutMillis: Long): String? = null
     }
 }

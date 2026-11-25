@@ -27,6 +27,7 @@ class DashboardPeer(
     val matchFor: (ProviderUsageSnapshot) -> String?,
     val refresh: (String) -> Unit,
     val clockConflict: Boolean = false,
+    val unconfirmedRefs: Set<String> = emptySet(),
 )
 
 internal sealed interface DashboardKey {
@@ -100,7 +101,7 @@ internal class DashboardReadingHistory {
     }
 }
 
-/** No remote ref is an AccountKey. Only a Local row can enter login, delete, backup or grant UI. */
+/** No remote ref is an AccountKey. Only a Local row can enter login, delete or grant UI. */
 internal sealed interface DashboardAccount {
     val key: DashboardKey
     val provider: ProviderId
@@ -216,8 +217,7 @@ internal fun List<DashboardAccount>.inDashboardOrder(
         AccountSortMode.Manual -> {
             val named = sortedWith(byName)
             val rows = associateBy { it.key }
-            // Persist only the local order in the normal preferences. Remote positions are for
-            // this dashboard session and never become local accounts or Dropbox preferences.
+            // Only local positions are saved; remote positions last for this dashboard session.
             val locals = (localOrder.map(DashboardKey::Local) + named.mapNotNull { it.key as? DashboardKey.Local })
                 .distinct().filter { it in rows }
             val slots = (sessionOrder + locals + named.map { it.key }).distinct().filter { it in rows }

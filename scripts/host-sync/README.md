@@ -19,6 +19,6 @@ Screenshots without pairing material and a short observation log go under `build
 
 **Multi-provider checks:** the Mac uses the regular grant picker; the phone must show the expected amount and account count for each provider. A synthetic login on the phone must fetch its own matching Codex quota before the two sources can share a card. Sharing it back requires an explicit grant in the phone UI. Protocol tests also pair two independent phone clients, grant Amp workspace credits separately, and count upstream calls during concurrent refresh and reconnect.
 
-**Limits:** this is not a live OAuth or billing-service test, an old Dropbox migration, or a release upload. Never publish the local configuration or forward its cleartext listener. Xcode selects loopback only for the `saien.quotadog.hostsync.local` Debug simulator build; Release uses the production origin.
+**Limits:** this is not a live OAuth or billing-service test, a local account migration, or a release upload. Never publish the local configuration or forward its cleartext listener. Xcode selects loopback only for the `saien.quotadog.hostsync.local` Debug simulator build; Release uses the production origin.
 
 For a physical Android phone on cellular, use the separate [Cloudflare staging build and acceptance procedure](staging.md). It fixes the public TLS origin at build time, pre-provisions one test host and has no cleartext Android exception. The emulator regression also exercises default-network loss/restoration, but its forwarded socket is **not** a carrier path.

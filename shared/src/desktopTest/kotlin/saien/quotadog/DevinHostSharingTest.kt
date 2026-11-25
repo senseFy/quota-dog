@@ -7,6 +7,7 @@ import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -39,8 +40,8 @@ class DevinHostSharingTest {
                 store.refresh(key, grant)
                 assertEquals(2, calls.get())
 
-                // An existing sync record may legitimately replace the credential at the same row ID.
-                tokens.importTokenForSync(key, first.copy(accessToken = "second-fixture"), 1234)
+                val second = first.copy(accessToken = "second-fixture")
+                tokens.save(key, second)
                 store.refresh(key, grant) // The on-screen snapshot still belongs to the first login.
                 assertEquals(2, calls.get())
                 assertEquals(0.25, reading().windows.single().usedRatio)
@@ -50,15 +51,14 @@ class DevinHostSharingTest {
                 store.refresh(key, grant)
                 assertEquals(3, calls.get())
 
-                // Even restoring the exact same token from Dropbox cannot restore a deleted grant.
+                // Re-saving the same login is harmless; recreating a deleted row is a new grant boundary.
                 val replacement = assertNotNull(reading().loginTag)
-                val backup = assertNotNull(tokens.exportTokensForSync().single().token)
-                assertNull(backup.value.loginGeneration)
-                tokens.importTokenForSync(key, backup.value, backup.updatedAtEpochMillis)
+                tokens.save(key, second)
                 assertEquals(replacement, store.currentLogin(key))
                 store.delete(key)
-                tokens.importTokenForSync(key, backup.value, backup.updatedAtEpochMillis)
-                store.refresh(key, replacement)
+                tokens.save(key, second)
+                assertNotEquals(replacement, assertNotNull(store.currentLogin(key)))
+                assertFalse(store.refresh(key, replacement))
                 assertNull(store.state.value.accounts[key]); assertEquals(3, calls.get())
             }
         } finally { api.stop(0) }

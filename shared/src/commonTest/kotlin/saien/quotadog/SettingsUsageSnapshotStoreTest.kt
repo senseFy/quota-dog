@@ -34,7 +34,7 @@ class SettingsUsageSnapshotStoreTest {
     }
 
     @Test
-    fun importsAndExportsSnapshotsForSync() {
+    fun cachedSnapshotNeverRestoresLocalIdentityProof() {
         val store = SettingsUsageSnapshotStore(MapSettings())
         val accountKey = AccountKey(ProviderId.CODEX, "user@example.com")
         val snapshot = ProviderUsageSnapshot(
@@ -45,12 +45,25 @@ class SettingsUsageSnapshotStoreTest {
             accountEmail = "user@example.com"
         )
 
-        store.importSnapshotForSync(accountKey, snapshot, 456)
+        store.save(accountKey, snapshot.copy(loginTag = "verified-login", quotaIdentity = "identity", quotaTarget = "project"))
+        assertEquals(snapshot, store.load(accountKey))
+    }
 
-        val exported = store.exportSnapshotsForSync().single()
-        assertEquals(accountKey, exported.accountKey)
-        assertEquals(snapshot, exported.snapshot?.value)
-        assertEquals(456, exported.snapshot?.updatedAtEpochMillis)
+    @Test
+    fun deletingALegacySnapshotForgetsOnlyThatAccountsReadingAndIndexEntry() {
+        val settings = MapSettings()
+        val store = SettingsUsageSnapshotStore(settings)
+        val first = AccountKey(ProviderId.CODEX, "deleted")
+        val second = AccountKey(ProviderId.CODEX, "kept")
+        val reading = ProviderUsageSnapshot(ProviderId.CODEX, AuthState.LoggedIn, emptyList(), Instant.fromEpochSeconds(1))
+        store.save(first, reading)
+        store.save(second, reading)
+        settings.putString("usage_snapshot_accounts_v1", """{"accounts":[{"providerId":"CODEX","accountId":"deleted"},{"providerId":"CODEX","accountId":"kept"}]}""")
+
+        store.delete(first)
+        assertNull(store.load(first))
+        assertEquals(reading, store.load(second))
+        assertEquals("""{"accounts":[{"providerId":"CODEX","accountId":"kept"}]}""", settings.getStringOrNull("usage_snapshot_accounts_v1"))
     }
 
     @Test

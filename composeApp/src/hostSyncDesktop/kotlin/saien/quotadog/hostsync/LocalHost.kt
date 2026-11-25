@@ -29,7 +29,6 @@ internal class LocalHost(val directory: File) : AutoCloseable {
     val tokens = SettingsTokenStore(MapSettings())
     val snapshots = SettingsUsageSnapshotStore(MapSettings())
     val preferences = AppPreferences(MapSettings())
-    val dropbox = CloudSyncCoordinator(CloudSyncLocalRepository(tokens, snapshots, preferences, MapSettings()), DropboxSyncBackend(MapSettings()))
     private val upstream = localProviderHttp()
     val store = QuotaDogStore(QuotaDogClient(tokenStore = tokens, httpClient = upstream), snapshots)
     val source = AccountKey(ProviderId.DEVIN, vault.read("source") ?: UUID.randomUUID().toString().also { vault.write("source", it) })
@@ -65,7 +64,7 @@ fun main() = application {
 
 @Composable internal fun LocalHostDashboard(f: LocalHost) {
     val s by f.host.state.collectAsState()
-    App(f.tokens, f.snapshots, f.preferences, f.dropbox, f.store, syncPeers = s.dashboardPeers(f.host), versionLabel = "$hostSyncLabel host-sync build", hostSyncContent = {
+    App(preferences = f.preferences, store = f.store, syncPeers = s.dashboardPeers(f.host), versionLabel = "$hostSyncLabel host-sync build", hostSyncContent = {
         HostSharingCard(s, f.store, f.preferences, f.host, null) {
             if (s.enabled) f.host.pause() else f.host.enable()
         }

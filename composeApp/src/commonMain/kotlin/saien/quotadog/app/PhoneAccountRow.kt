@@ -3,14 +3,11 @@ package saien.quotadog.app
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.OutlinedTextField
 import androidx.compose.material.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -19,30 +16,62 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import kotlinx.datetime.Clock
 import kotlinx.datetime.Instant
+import org.jetbrains.compose.resources.stringResource
+import quotadog.composeapp.generated.resources.*
 import saien.quotadog.*
 import saien.quotadog.app.components.*
 import saien.quotadog.app.theme.QdTheme
 import saien.quotadog.hostsync.*
 import kotlin.math.roundToInt
 
-/** The title and the Name sort observe the same device-local nickname, including after an edit. */
+internal data class PhoneAccountTitle(val name: String, val email: String?, val alias: String?, val suffix: String? = null) {
+    val label: String get() = if (suffix == null) name else "$name · $suffix"
+}
+
+/** Resolve names across the whole dashboard, before filtering, sorting or choosing an action. */
 internal class PhoneAccountNames(private val prefs: AppPreferences) {
     private val aliases = mutableMapOf<DashboardKey, MutableState<String?>>()
     private fun entry(key: DashboardKey) = aliases.getOrPut(key) { mutableStateOf(prefs.phoneAlias(key.aliasScope())) }
-    fun alias(key: DashboardKey): String? = entry(key).value
-    fun name(row: DashboardAccount): String = alias(row.key) ?: when (row) {
-        is DashboardAccount.Local -> if (row.account.accountKey.isPending) "Sign-in" else {
-            // Only a workspace-only local balance can take the workspace's name. A mixed
-            // Amp account is not that workspace, and incoming grants never carry the name.
-            row.localObservation?.takeIf { it.providerId == ProviderId.AMP }?.phoneQuotaDisplay()
-                ?.workspaceOnlyName?.takeIf { it.isNotBlank() && '@' !in it } ?: row.account.accountKey.localSourceLabel()
+
+    @Composable
+    fun titles(rows: List<DashboardAccount>, privacy: EmailPrivacyMode): Map<DashboardKey, PhoneAccountTitle> {
+        fun String.privateLabel() = if (privacy == EmailPrivacyMode.Masked) maskEmailPlain() else this
+        val titles = rows.associate { row ->
+            val alias = entry(row.key).value
+            val account = (row as? DashboardAccount.Local)?.account
+            val email = account?.phoneEmail()?.privateLabel()
+            val name = alias?.privateLabel() ?: email ?: when (row) {
+                is DashboardAccount.Remote -> stringResource(
+                    if (row.source.card.workspace) Res.string.phone_workspace else Res.string.phone_account,
+                    row.source.card.ref.take(8).uppercase(),
+                )
+                is DashboardAccount.Local -> when {
+                    row.account.accountKey.isPending -> stringResource(Res.string.phone_sign_in)
+                    else -> row.localObservation?.takeIf { it.providerId == ProviderId.AMP }?.phoneQuotaDisplay()
+                        ?.workspaceOnlyName?.takeIf { it.isNotBlank() && '@' !in it }
+                        ?: stringResource(Res.string.phone_account, row.key.shortCode().take(8))
+                }
+            }
+            row.key to PhoneAccountTitle(name, email, alias)
         }
-        is DashboardAccount.Remote -> row.source.label
+        val distinct = titles.toMutableMap()
+        for (group in rows.groupBy { it.provider to titles.getValue(it.key).name.lowercase() }.values) {
+            if (group.size == 1) continue
+            val codes = group.associate { it.key to it.key.shortCode() }
+            val length = (4..64).first { n -> codes.values.distinctBy { it.take(n) }.size == group.size }
+            for ((key, code) in codes) distinct[key] = titles.getValue(key).copy(suffix = "#${code.take(length)}")
+        }
+        return distinct
     }
+
+    // A current reading can refine the stored email. A disk cache cannot override a newer login.
+    private fun AccountUiState.phoneEmail() = snapshot?.takeUnless { it.stale }?.accountEmail?.takeIf(String::isNotBlank)
+        ?: loginEmail?.takeIf(String::isNotBlank) ?: displayEmail()
+
+    private fun DashboardKey.shortCode() = sha256(aliasScope().encodeToByteArray()).toHexString().uppercase()
+
     fun rename(key: DashboardKey, input: String) {
         prefs.setPhoneAlias(key.aliasScope(), input)
         entry(key).value = prefs.phoneAlias(key.aliasScope())
@@ -52,19 +81,23 @@ internal class PhoneAccountNames(private val prefs: AppPreferences) {
 /** Both phone apps use this row, including before pairing. A refresh never opens the sheet. */
 @Composable
 internal fun PhoneAccountRow(
-    row: DashboardAccount, names: PhoneAccountNames, mode: UsageDisplayMode, projected: Boolean,
-    privacy: EmailPrivacyMode, onRefresh: (AccountUiState) -> Unit, modifier: Modifier = Modifier,
+    row: DashboardAccount, title: PhoneAccountTitle, mode: UsageDisplayMode, projected: Boolean,
+    onRename: (String) -> Unit, onRefresh: (AccountUiState) -> Unit, modifier: Modifier = Modifier,
     now: Instant = Clock.System.now(), reorder: @Composable () -> Unit = {}, onRemove: (AccountKey) -> Unit,
     signIn: @Composable (AccountUiState) -> Unit,
 ) {
     val local = row as? DashboardAccount.Local
     val peer = row.readingSource
     var open by remember(row.key) { mutableStateOf(false) }
-    val name = names.name(row)
     val target = row.refreshTarget(retryStandalone = true)
     val reading = remember(row) { row.phoneReading() }
     val refresh = { if (!row.busy) target?.run(onRefresh); Unit }
     val pendingLogin = local?.account?.accountKey?.isPending == true
+    val sources = when (row) {
+        is DashboardAccount.Local -> row.copies
+        is DashboardAccount.Remote -> listOf(row.source)
+    }
+    val timeout = stringResource(Res.string.phone_refresh_unconfirmed)
     val meta = buildList {
         if (row.busy && !pendingLogin) add("Refreshing…")
         when (local?.account?.authState) {
@@ -97,16 +130,20 @@ internal fun PhoneAccountRow(
     Box(modifier.background(QdTheme.colors.backgroundElevated)) {
         // Sibling hit targets keep all text accessible and row taps separate from the refresh
         // and reorder buttons. No nested clickable row that can also send a refresh.
-        Box(Modifier.matchParentSize().semantics { contentDescription = "Open ${row.provider.displayName} details · $name" }
+        val openLabel = stringResource(Res.string.phone_open_details, row.provider.displayName, title.label)
+        Box(Modifier.matchParentSize().semantics { contentDescription = openLabel }
             .clickable(role = Role.Button) { open = true })
         Column(Modifier.fillMaxWidth().padding(horizontal = 14.dp).padding(top = 3.dp, bottom = 13.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
-                PhoneTitle(row.provider, name, Modifier.weight(1f), chevron = true)
+                PhoneTitle(row.provider, title, Modifier.weight(1f), chevron = true)
                 reorder()
-                if (target != null) QdIconButton(refresh, diameter = 48.dp, enabled = !row.busy,
-                    modifier = Modifier.semantics { contentDescription = "${target.label} · ${row.provider.displayName} · $name" }) {
-                    QdRefreshIcon(size = 17.dp, tint = QdTheme.colors.primary)
+                if (target != null) {
+                    val action = stringResource(Res.string.phone_refresh_action, target.phoneLabel(), row.provider.displayName, title.label)
+                    QdIconButton(refresh, diameter = 48.dp, enabled = !row.busy,
+                        modifier = Modifier.semantics { contentDescription = action }) {
+                        QdRefreshIcon(size = 17.dp, tint = QdTheme.colors.primary)
+                    }
                 }
             }
             val amountFirst = reading != null && reading.amounts.isNotEmpty() && reading.windows.none { it.used != null || it.unlimited }
@@ -116,15 +153,15 @@ internal fun PhoneAccountRow(
             else reading.summary.forEach { PhoneMeasure(it, mode, now) }
             if (reading != null && reading.moreCritical > 0) PhoneNote("${reading.moreCritical} more ${if (reading.moreCritical == 1) "window" else "windows"} near limit")
             if (meta.isNotEmpty()) PhoneNote(meta)
+            if (sources.any { it.card.ref in it.peer.unconfirmedRefs }) PhoneNote(timeout)
             clockNote?.let { PhoneNote(it) }
         }
     }
 
-    if (open) PhoneDetailSheet(onClose = { open = false }, header = {
-        PhoneTitle(row.provider, name, Modifier.weight(1f))
+    if (open) QdPhoneSheet(stringResource(Res.string.close_details), onClose = { open = false }, header = {
+        PhoneTitle(row.provider, title, Modifier.weight(1f))
     }) {
-        val email = local?.account?.displayEmail()?.let { if (privacy == EmailPrivacyMode.Masked) it.maskEmailPlain() else it }
-        val identity = listOfNotNull(email, reading?.plan).joinToString(" · ")
+        val identity = listOfNotNull(title.email?.takeUnless { it.equals(title.name, ignoreCase = true) }, reading?.plan).joinToString(" · ")
         if (identity.isNotEmpty()) PhoneNote(identity)
         PhoneSection("All quota")
         if (reading == null) PhoneNote("Waiting for first reading") else {
@@ -150,25 +187,26 @@ internal fun PhoneAccountRow(
             local.account.authState in setOf(AuthState.Unauthorized, AuthState.RequiresRelogin, AuthState.TokenExpired, AuthState.NotConfigured) -> "Sign-in needed"
             else -> "Unavailable"
         })
-        val sources = when (row) {
-            is DashboardAccount.Local -> row.copies
-            is DashboardAccount.Remote -> listOf(row.source)
-        }
         for (source in sources) {
             PhoneFact(source.peer.label, listOfNotNull("Offline".takeUnless { source.peer.online },
                 if (source.card.access == Access.View) "View only" else if (source.peer.online) "Can refresh" else null).joinToString(" · "))
             source.problem()?.let { PhoneNote(it) }
+            if (source.card.ref in source.peer.unconfirmedRefs) PhoneNote(timeout)
         }
-        if (target != null) QdButton(if (row.busy) "Refreshing…" else target.label, refresh,
+        if (target != null) QdButton(if (row.busy) "Refreshing…" else target.phoneLabel(), refresh,
             Modifier.fillMaxWidth().heightIn(min = 48.dp), enabled = !row.busy)
         else if (local?.account?.authState == AuthState.RateLimited) PhoneNote("No request sent to another source.")
         if (local != null) signIn(local.account)
-        if (local?.account?.accountKey?.isPending != true) AliasEditor(names.alias(row.key)) {
-            names.rename(row.key, it)
-        }
-        if (local != null) QdButton("Remove account from this device", { open = false; onRemove(local.account.accountKey) },
+        if (local?.account?.accountKey?.isPending != true) AliasEditor(title.alias, onRename)
+        if (local != null) QdButton(stringResource(Res.string.remove_local_account), { open = false; onRemove(local.account.accountKey) },
             variant = QdButtonVariant.Ghost, size = QdButtonSize.Small)
     }
+}
+
+@Composable
+private fun DashboardRefresh.phoneLabel() = when (this) {
+    is DashboardRefresh.Here -> stringResource(Res.string.phone_refresh_here)
+    is DashboardRefresh.There -> source.peer.refreshLabel
 }
 
 private fun RemoteSource.problem() = when (card.status) {
@@ -185,11 +223,12 @@ private fun Instant.shortTime(now: Instant): String {
 }
 
 @Composable
-private fun PhoneTitle(provider: ProviderId, name: String, modifier: Modifier, chevron: Boolean = false) {
+private fun PhoneTitle(provider: ProviderId, title: PhoneAccountTitle, modifier: Modifier, chevron: Boolean = false) {
     Row(modifier, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         QdProviderAvatar(provider, size = 24.dp)
-        Text("${provider.displayName} · $name", Modifier.weight(1f, fill = false), color = QdTheme.colors.textPrimary,
+        Text("${provider.displayName} · ${title.name}", Modifier.weight(1f, fill = false), color = QdTheme.colors.textPrimary,
             style = QdTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        title.suffix?.let { Text(it, style = QdTheme.typography.caption, color = QdTheme.colors.textSecondary) }
         if (chevron) QdChevronRightIcon(size = 12.dp, tint = QdTheme.colors.textSecondary)
     }
 }
@@ -265,43 +304,17 @@ private fun PhoneSection(label: String) {
 }
 
 @Composable
-private fun PhoneDetailSheet(onClose: () -> Unit, header: @Composable RowScope.() -> Unit, content: @Composable () -> Unit) {
-    // A real modal owns focus and Back. The sheet is independent of the dashboard's scroll
-    // viewport; a permission change or withdrawal recomposes/removes its owning keyed row.
-    Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        BoxWithConstraints(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing).imePadding()) {
-            val sheetHeight = maxHeight * .90f
-            Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally) {
-                Spacer(Modifier.fillMaxWidth().weight(1f).clickable(interactionSource = null, indication = null, onClick = onClose))
-                Column(Modifier.widthIn(max = 600.dp).fillMaxWidth().heightIn(max = sheetHeight)
-                    .clip(QdTheme.shapes.sheet).background(QdTheme.colors.backgroundElevated)
-                    .padding(start = 18.dp, end = 18.dp, top = 8.dp, bottom = 12.dp)) {
-                    Spacer(Modifier.align(Alignment.CenterHorizontally).size(32.dp, 3.dp).clip(QdTheme.shapes.pill).background(QdTheme.colors.borderStrong))
-                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        header()
-                        QdIconButton(onClose, Modifier.semantics { contentDescription = "Close details" }, diameter = 48.dp) {
-                            QdCloseIcon(size = 18.dp, tint = QdTheme.colors.textSecondary)
-                        }
-                    }
-                    Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) { content() }
-                }
-            }
-        }
-    }
-}
-
-@Composable
 private fun AliasEditor(alias: String?, save: (String) -> Unit) {
     var editing by remember { mutableStateOf(false) }
     var draft by remember(alias) { mutableStateOf(alias.orEmpty()) }
-    if (!editing) QdButton(if (alias == null) "Add phone nickname" else "Edit phone nickname", { draft = alias.orEmpty(); editing = true },
+    if (!editing) QdButton(stringResource(if (alias == null) Res.string.nickname_add else Res.string.nickname_edit), { draft = alias.orEmpty(); editing = true },
         variant = QdButtonVariant.Ghost, size = QdButtonSize.Small)
     else {
-        OutlinedTextField(draft, { draft = it.take(48) }, Modifier.fillMaxWidth(), singleLine = true, label = { Text("Nickname on this phone") },
+        OutlinedTextField(draft, { draft = it.take(48) }, Modifier.fillMaxWidth(), singleLine = true, label = { Text(stringResource(Res.string.nickname_label)) },
             textStyle = QdTheme.typography.bodyLarge.copy(color = QdTheme.colors.textPrimary))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            QdButton("Save nickname", { save(draft); editing = false }, size = QdButtonSize.Small)
-            QdButton("Cancel", { editing = false }, variant = QdButtonVariant.Ghost, size = QdButtonSize.Small)
+            QdButton(stringResource(Res.string.nickname_save), { save(draft); editing = false }, size = QdButtonSize.Small)
+            QdButton(stringResource(Res.string.cancel), { editing = false }, variant = QdButtonVariant.Ghost, size = QdButtonSize.Small)
         }
     }
 }

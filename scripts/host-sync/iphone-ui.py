@@ -64,14 +64,15 @@ def tap(node):
 
 
 def reveal(text, prefix=False):
-    down, previous = not text.startswith(('All providers (', 'Computer ', 'Share from', 'Hide phone', 'Forget computer')), None
+    down, previous = not text.startswith(('All providers (', 'Open settings')), None
     end = time.monotonic() + 50
     while time.monotonic() < end:
         ns = elements()
         screen = next(n['frame'] for n in ns if n.get('type') == 'Application')
         h = screen['height']; x = str(int(screen['width'] / 3))
         # The Add button occludes the dashboard, not the modal presented above it.
-        bottom = .968 if any(n.get('AXLabel') == 'Close details' for n in ns) else .875
+        close = next((n['frame'] for n in ns if n.get('AXLabel') in ('Close details', 'Close computer settings')), None)
+        bottom = .968 if close else .875
         seen = []
         for n in ns:
             name = n.get('AXLabel') or ''
@@ -79,6 +80,10 @@ def reveal(text, prefix=False):
             if name and .085*h < y < bottom*h and 0 < f['x'] + f['width'] / 2 < screen['width']:
                 seen.append((name, int(y)))
                 if (name.startswith(text) if prefix else name == text): return n
+        # A short sheet already fits; wait for state changes rather than swiping its dismiss scrim.
+        if close and close['y'] + close['height'] > .40*h:
+            time.sleep(.2)
+            continue
         if seen == previous: down = not down
         previous = seen
         a, b = (.75, .40) if down else (.40, .75)
@@ -92,9 +97,11 @@ def main(action, *args):
         # Reusing a disposable simulator after an interrupted test can leave a sheet open.
         subprocess.run(['xcrun', 'simctl', 'terminate', sim, pkg], capture_output=True)
         simctl('launch', pkg)
+        main('computer')
         state = find(lambda n: n.get('AXLabel') in ('Forget computer…', 'Open QR image'), 'saved pairing state')
         if state['AXLabel'] == 'Forget computer…':
-            tap(label('Forget computer…')); tap(label('Remove from phone'))
+            tap(label('Forget computer…')); tap(label('Remove from phone')); label('Open QR image')
+        tap(label('Close computer settings'))
     elif action == 'foreground':
         simctl('launch', pkg)
     elif action == 'background':
@@ -142,8 +149,11 @@ def main(action, *args):
         tap(reveal(f'Refresh on computer · {args[0]} · ', prefix=True))
     elif action == 'close':
         tap(label('Close details'))
+    elif action == 'computer':
+        main('tap', 'Open settings'); main('tap', 'My computer')
     elif action == 'tap':
-        tap(reveal(args[0]))
+        text = args[0]
+        tap(label(text) if text in ('Add account', 'Close computer settings') else reveal(text, prefix=text == 'My computer'))
     elif action == 'collected':
         node = reveal('Collected · ', prefix=True)
         print(node['AXLabel'].removeprefix('Collected · '))

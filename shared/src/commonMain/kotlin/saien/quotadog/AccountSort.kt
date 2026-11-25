@@ -140,7 +140,7 @@ internal fun encodeAccountOrder(keys: List<AccountKey>): String {
     )
 }
 
-/** Empty input is an empty order. Malformed JSON returns null so a bad sync payload is ignored. */
+/** Empty input is an empty order. Malformed stored JSON returns null. */
 internal fun decodeAccountOrder(raw: String?): List<AccountKey>? {
     if (raw.isNullOrBlank()) return emptyList()
     val file = runCatching {

@@ -13,18 +13,20 @@ The app currently focuses on a small workflow:
 - Sign in to Codex, Claude Code, or Antigravity through browser-based OAuth (or import Antigravity CLI credentials from the macOS Keychain), sign in to Grok with xAI device-code OAuth (or import Grok CLI credentials on desktop), sign in to Droid with Factory device-code OAuth (or import droid CLI credentials on desktop), sign in to Amp with device-code OAuth (or import Amp CLI credentials on desktop), import Cursor credentials from the local Cursor app on desktop, or import Devin credentials from the Devin CLI credentials file.
 - View usage windows, quota progress, and reset timing.
 - Refresh accounts, remove local account data, and optionally mask account emails in the UI.
-- Optionally sync encrypted account tokens, cached usage, and preferences through a user-provided Dropbox app folder.
+- Share selected quota readings with a paired device without sharing the provider login.
 
 ### Share quota accounts between your Mac and phone
 
 1. Sign in or import an account in QuotaDog on the Mac and refresh it once. In **Settings → Share from this computer**, choose **Enable host → Pair a phone**.
 2. In QuotaDog on your phone, choose **Add account → Connect my computer** and scan the QR. Compare the six digits on both screens and approve the phone on the Mac. Pairing alone shares no accounts.
 3. On the Mac, choose **View only** or **Allow refresh** for each account you want that phone to see. All eight providers can share readings, including Cursor and Devin without a CLI on the phone. Amp workspace credits have their own permission. Change any grant back to **Not shared** to withdraw just that source.
-4. To see a phone account on your Mac, open **Share from this phone** and grant access separately. The Mac does not pass that account to other phones. For a new reading the collector must be available (Mac awake or phone app in the foreground). On reconnect the dashboard exchanges the last authorized readings without repeating a provider query.
+4. On the phone, open **Settings → My computer** to check the connection, forget the Mac, or choose **Share from this phone** to grant access in the other direction. The Mac does not pass that account to other phones. For a new reading the collector must be available (Mac awake or phone app in the foreground). On reconnect the dashboard exchanges the last authorized readings without repeating a provider query.
 
-No Tailscale, QuotaDog account, Dropbox login or router setup is needed. The production relay is `sync.quotadog.saien.pro`; the Mac makes an outbound connection and does not expose its ports. This feature shares structured quota readings, not provider credentials. You can pause the host and revoke a phone while offline. A disconnected device can still see readings it already received.
+No Tailscale, QuotaDog account or router setup is needed. The production relay is `sync.quotadog.saien.pro`; the Mac makes an outbound connection and does not expose its ports. This feature shares structured quota readings, not provider credentials. You can pause the host and revoke a phone while offline. A disconnected device can still see readings it already received.
 
 Update both peers for multiple accounts and two-way sharing. A 1.0.17 peer only supports one Mac-owned Devin source. Independent logins stay separate unless QuotaDog can verify the same provider identity **and** quota scope; matching an email or workspace name is not enough. Switching a CLI login does not transfer its grants.
+
+**Upgrading from Dropbox sync:** Version 1.0.18 still offers Dropbox. Builds with Dropbox removed keep the accounts, readings, preferences and pairings already on your device. They do not import, update or delete your old Dropbox file. Before upgrading, check that any login you need is available locally. To stop older clients accessing Dropbox, revoke QuotaDog in your Dropbox connected apps; deleting the backup is a separate choice.
 
 ## Privacy, Security, And Limits
 
@@ -33,12 +35,8 @@ QuotaDog reads provider data locally and has no analytics, telemetry, or crash r
 - OAuth and usage requests go directly to the selected provider.
 - During host sync the two devices encrypt traffic end to end. The relay stores admission verifiers, never quota snapshots (even encrypted ones). Cloudflare can see connection metadata such as IP addresses, timing and traffic volume.
 - Tokens, account identifiers, cached usage snapshots, and preferences are stored locally using multiplatform settings (`SharedPreferences`, `NSUserDefaults`, `java.util.prefs`), not hardened credential storage.
-- Dropbox cloud sync is opt-in. When enabled, QuotaDog encrypts its sync document with your sync passphrase before uploading it to your Dropbox app folder.
-- The Dropbox integration uses QuotaDog's Dropbox app with App Folder access and the minimum file scopes needed to read and write the QuotaDog sync file.
-- The Dropbox refresh token used to access that app folder is stored locally with the same platform settings backend as other app data.
 - Debug logging and Android backup are disabled by default.
-- Removing an account deletes its local token and cached usage snapshot, but platform backups or system snapshots may keep older copies.
-- Removing an account while Dropbox sync is unlocked writes a tombstone so other synced devices remove the same account instead of restoring stale data.
+- Removing a login deletes its local token and cached reading and stops sharing that source. Independent logins on other devices are unchanged. Platform backups and offline peers may still hold older data.
 - Provider behavior can change without notice, and QuotaDog only displays usage available to the signed-in account.
 
 QuotaDog reads usage by calling the same auth flows and HTTP endpoints that the official Codex, Claude Code, and Grok CLIs use to display quota information, by reading Cursor's local auth database plus Cursor's usage-summary API, by reading the Devin CLI credentials file plus the same account-status endpoint the CLI uses, and by calling the same WorkOS device-code and refresh flows plus the Factory billing endpoints that the droid CLI and Factory web app use. These endpoints are not part of any documented public API. Provider terms of service, endpoint shape, authentication, and rate limits may change at any time, which can break QuotaDog without notice. Use of this app is at your own risk and you are responsible for complying with each provider's terms of service.
@@ -202,18 +200,6 @@ Run `make test-mobile-release` for the public CI checks, including the version
 source in `release.toml` and the arguments passed to `releasekit`. With the
 private CLI installed, run `scripts/tests/bump-version-test.sh --with-releasekit`
 to verify both commit modes in a temporary repository without a remote.
-
-### Dropbox Sync Setup
-
-Dropbox sync is separate from host sync. To use it, connect Dropbox from Settings with a sync passphrase:
-
-1. Open QuotaDog Settings → Cloud sync.
-2. Enter a sync passphrase with at least 8 characters.
-3. Click Connect Dropbox and approve the Dropbox authorization in your browser.
-
-Use the same Dropbox account and sync passphrase on each device you want to sync. Developers building their own fork should create a scoped Dropbox app with App Folder access, enable `files.metadata.read`, `files.content.read`, and `files.content.write`, add `http://localhost:17553/dropbox/callback` as an OAuth redirect URI, and replace the Dropbox app key constant in code.
-
-If you forget the sync passphrase, QuotaDog cannot decrypt the existing Dropbox sync file. You can reset the sync file with a new passphrase from a device that still has the local data you want to keep, but that overwrites the Dropbox copy and may lose data that only exists in Dropbox or on another unsynced device.
 
 ### macOS DMG release (signed + notarized)
 

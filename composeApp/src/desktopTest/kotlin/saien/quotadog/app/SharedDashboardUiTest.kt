@@ -2,33 +2,113 @@ package saien.quotadog.app
 
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.width
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.hasContentDescription
+import androidx.compose.ui.test.hasSetTextAction
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.unit.dp
+import com.russhwolf.settings.PropertiesSettings
 import kotlinx.datetime.Instant
 import org.junit.Rule
 import org.junit.Test
 import saien.quotadog.AccountKey
 import saien.quotadog.AccountUiState
+import saien.quotadog.AppPreferences
 import saien.quotadog.AuthState
 import saien.quotadog.DashboardLayout
+import saien.quotadog.EmailPrivacyMode
 import saien.quotadog.ProviderId
 import saien.quotadog.ProviderUsageSnapshot
 import saien.quotadog.UsageDisplayMode
 import saien.quotadog.UsageWindow
 import saien.quotadog.app.theme.QuotaDogTheme
 import saien.quotadog.hostsync.*
+import java.util.Properties
 import kotlin.test.assertEquals
+import kotlin.test.assertNotEquals
 
 class SharedDashboardUiTest {
     @get:Rule val compose = createComposeRule()
+
+    @Test fun phoneShowsLocalEmailWithPrivacyAndNicknameOverrides() {
+        val email = "riley@example.test"
+        val id = ProviderId.CODEX
+        val snapshot = ProviderUsageSnapshot(id, AuthState.LoggedIn, emptyList(), Instant.fromEpochMilliseconds(100), accountEmail = email)
+        val account = AccountUiState(AccountKey(id, "opaque-record"), added = true, authState = AuthState.LoggedIn, snapshot = snapshot)
+        val row = dashboardAccounts(listOf(account), emptyList()).single()
+        val privacy = mutableStateOf(EmailPrivacyMode.Visible)
+        val names = PhoneAccountNames(AppPreferences(PropertiesSettings(Properties())))
+        compose.setContent {
+            QuotaDogTheme(darkTheme = false) {
+                val title = names.titles(listOf(row), privacy.value).getValue(row.key)
+                PhoneAccountRow(row, title, UsageDisplayMode.Used, false, { names.rename(row.key, it) }, {}, onRemove = {}, signIn = {})
+            }
+        }
+        compose.onNodeWithText("Codex · $email").assertIsDisplayed()
+        compose.runOnIdle { privacy.value = EmailPrivacyMode.Masked }
+        compose.onNodeWithText("Codex · ri...st").assertIsDisplayed()
+        compose.onAllNodes(hasText(email, substring = true) or hasContentDescription(email, substring = true),
+            useUnmergedTree = true).assertCountEquals(0)
+        compose.onNodeWithContentDescription("Open Codex details · ri...st").performClick()
+        compose.onNodeWithText("Add phone nickname").performScrollTo().performClick()
+        compose.onNode(hasSetTextAction()).performTextInput("Studio")
+        compose.onNodeWithText("Save nickname").performScrollTo().performClick()
+        compose.onNodeWithText("ri...st").assertExists()
+        compose.onNodeWithContentDescription("Close details").performClick()
+        compose.onNodeWithText("Codex · Studio").assertIsDisplayed()
+    }
+
+    @Test fun matchingPhoneTitlesStayDistinctAfterMaskingAndReordering() {
+        val provider = ProviderId.CODEX
+        val first = AccountUiState(AccountKey(provider, "Aa"), added = true, authState = AuthState.Error, loginEmail = "alex@one.com")
+        val second = first.copy(accountKey = AccountKey(provider, "BB"), loginEmail = "alice@two.com")
+        val accounts = mutableStateOf(listOf(first, second))
+        val privacy = mutableStateOf(EmailPrivacyMode.Visible)
+        val names = PhoneAccountNames(AppPreferences(PropertiesSettings(Properties())))
+        val refreshed = mutableListOf<AccountKey>()
+        compose.setContent {
+            val rows = dashboardAccounts(accounts.value, emptyList())
+            val titles = names.titles(rows, privacy.value)
+            QuotaDogTheme(darkTheme = false) {
+                Column(Modifier.width(300.dp)) {
+                    rows.forEach { row -> key(row.key) {
+                        PhoneAccountRow(row, titles.getValue(row.key), UsageDisplayMode.Used, false, { names.rename(row.key, it) },
+                            { refreshed += it.accountKey }, onRemove = {}, signIn = {})
+                    } }
+                }
+            }
+        }
+        compose.onNodeWithContentDescription("Open Codex details · alex@one.com").assertExists()
+        compose.runOnIdle { accounts.value = listOf(first, second.copy(loginEmail = first.loginEmail)) }
+        fun actions(email: String) = compose.onAllNodes(hasContentDescription("Refresh on this device · Codex · $email · #", substring = true))
+            .fetchSemanticsNodes().map { it.config[SemanticsProperties.ContentDescription].single() }
+        val same = actions("alex@one.com")
+        assertEquals(2, same.size)
+        assertNotEquals(same[0], same[1])
+        compose.onNodeWithContentDescription(same.first()).performClick()
+        compose.runOnIdle { accounts.value = listOf(second, first); privacy.value = EmailPrivacyMode.Masked }
+        val masked = actions("al...om")
+        assertEquals(same.reversed().map { it.substringAfterLast('#') }, masked.map { it.substringAfterLast('#') })
+        compose.onNodeWithContentDescription(masked.first()).performClick()
+        compose.runOnIdle { assertEquals(listOf(first.accountKey, second.accountKey), refreshed) }
+        for (email in listOf(first.loginEmail!!, second.loginEmail!!)) {
+            compose.onAllNodes(hasText(email, substring = true) or hasContentDescription(email, substring = true),
+                useUnmergedTree = true).assertCountEquals(0)
+        }
+    }
 
     @Test fun receivedCardShowsItsOwnActionAmountsTimestampsAndStates() {
         val ref = "abcd0123".repeat(4)

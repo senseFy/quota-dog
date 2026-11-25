@@ -34,6 +34,14 @@ internal fun matchForPair(pair: String, snapshot: ProviderUsageSnapshot): String
 }
 private val mergeable = setOf(ProviderId.CODEX, ProviderId.CLAUDE_CODE, ProviderId.ANTIGRAVITY)
 
+private fun hmacSha256(key: ByteArray, message: ByteArray): ByteArray {
+    val blockSize = 64
+    val paddedKey = (if (key.size > blockSize) sha256(key) else key).copyOf(blockSize)
+    val inner = ByteArray(blockSize) { (paddedKey[it].toInt() xor 0x36).toByte() }
+    val outer = ByteArray(blockSize) { (paddedKey[it].toInt() xor 0x5c).toByte() }
+    return sha256(outer + sha256(inner + message))
+}
+
 // A workspace without independent identity evidence may still have a query target (e.g. the
 // effective Cloud Code project). Bind that target locally even though it cannot be used to merge.
 private fun ProviderUsageSnapshot.scopeFor(workspace: Boolean): String? {
@@ -78,7 +86,7 @@ class GrantEdit(val key: AccountKey, val workspace: Boolean, val previous: Grant
         val keep = entries.mapNotNull { grant ->
             if (store.currentLogin(grant.key) != grant.login) return@mapNotNull null
             // Only a local collector with the same verified login and target may advance the
-            // durable outgoing copy. A cold store or restored Dropbox reading has no provenance.
+            // durable outgoing copy. A cached reading has no provenance.
             val last = store.state.value.accounts[grant.key]?.snapshot?.takeIf { it.loginTag != null } ?: return@mapNotNull grant
             if (last.loginTag != grant.login || last.scopeFor(grant.workspace) != grant.scope) return@mapNotNull null
             val value = last.toQuotaReading(grant.workspace) ?: return@mapNotNull grant

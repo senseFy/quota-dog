@@ -3,7 +3,6 @@ package saien.quotadog
 import com.russhwolf.settings.Settings
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.datetime.Clock
 
 enum class ThemeMode { System, Light, Dark }
 
@@ -24,6 +23,14 @@ enum class DashboardLayout { Cards, Compact, FoldFull, OneLine }
 class AppPreferences(
     private val settings: Settings = createPreferenceSettings(),
 ) {
+    init {
+        // Retire only the former Dropbox connection's local keys. In particular, do not
+        // interpret the tombstones as requests to delete accounts or cached readings.
+        for (key in retiredDropboxKeys) {
+            if (settings.hasKey(key)) settings.remove(key)
+        }
+    }
+
     private val _themeMode = MutableStateFlow(loadThemeMode())
     val themeMode: StateFlow<ThemeMode> = _themeMode
 
@@ -58,39 +65,33 @@ class AppPreferences(
 
     fun setThemeMode(mode: ThemeMode) {
         settings.putString(KEY_THEME, mode.name)
-        settings.putLong(updatedAtKey(KEY_THEME), nowMillis())
         _themeMode.value = mode
     }
 
     fun setAutoRefreshMinutes(minutes: Int) {
         val sanitized = if (minutes < 0) 0 else minutes
         settings.putInt(KEY_AUTO_REFRESH, sanitized)
-        settings.putLong(updatedAtKey(KEY_AUTO_REFRESH), nowMillis())
         _autoRefreshMinutes.value = sanitized
     }
 
     fun setUsageDisplayMode(mode: UsageDisplayMode) {
         settings.putString(KEY_USAGE_DISPLAY_MODE, mode.name)
-        settings.putLong(updatedAtKey(KEY_USAGE_DISPLAY_MODE), nowMillis())
         _usageDisplayMode.value = mode
     }
 
     fun setShowProjectedUsage(show: Boolean) {
         settings.putBoolean(KEY_SHOW_PROJECTED_USAGE, show)
-        settings.putLong(updatedAtKey(KEY_SHOW_PROJECTED_USAGE), nowMillis())
         _showProjectedUsage.value = show
     }
 
     fun setEmailPrivacyMode(mode: EmailPrivacyMode) {
         settings.putString(KEY_EMAIL_PRIVACY_MODE, mode.name)
-        settings.putLong(updatedAtKey(KEY_EMAIL_PRIVACY_MODE), nowMillis())
         _emailPrivacyMode.value = mode
     }
 
     fun setAccountSortMode(mode: AccountSortMode) {
         if (_accountSortMode.value == mode) return
         settings.putString(KEY_ACCOUNT_SORT_MODE, mode.name)
-        settings.putLong(updatedAtKey(KEY_ACCOUNT_SORT_MODE), nowMillis())
         _accountSortMode.value = mode
     }
 
@@ -98,26 +99,22 @@ class AppPreferences(
         val distinct = keys.distinct()
         if (_accountManualOrder.value == distinct) return
         settings.putString(KEY_ACCOUNT_MANUAL_ORDER, encodeAccountOrder(distinct))
-        settings.putLong(updatedAtKey(KEY_ACCOUNT_MANUAL_ORDER), nowMillis())
         _accountManualOrder.value = distinct
     }
 
     fun setAccountSortReversed(reversed: Boolean) {
         if (_accountSortReversed.value == reversed) return
         settings.putBoolean(KEY_ACCOUNT_SORT_REVERSED, reversed)
-        settings.putLong(updatedAtKey(KEY_ACCOUNT_SORT_REVERSED), nowMillis())
         _accountSortReversed.value = reversed
     }
 
     fun setSinkExhaustedAccounts(enabled: Boolean) {
         settings.putBoolean(KEY_SINK_EXHAUSTED_ACCOUNTS, enabled)
-        settings.putLong(updatedAtKey(KEY_SINK_EXHAUSTED_ACCOUNTS), nowMillis())
         _sinkExhaustedAccounts.value = enabled
     }
 
     fun setDashboardLayout(layout: DashboardLayout) {
         settings.putString(KEY_DASHBOARD_LAYOUT, layout.name)
-        settings.putLong(updatedAtKey(KEY_DASHBOARD_LAYOUT), nowMillis())
         _dashboardLayout.value = layout
     }
 
@@ -131,105 +128,6 @@ class AppPreferences(
     }
 
     private fun phoneAliasKey(source: String) = "phone_alias_" + base64UrlNoPadding(sha256(source.encodeToByteArray()))
-
-    fun exportForSync(): CloudSyncPreferencesRecord {
-        return CloudSyncPreferencesRecord(
-            themeMode = CloudSyncStringPreference(
-                value = _themeMode.value.name,
-                updatedAtEpochMillis = preferenceUpdatedAt(KEY_THEME)
-            ),
-            autoRefreshMinutes = CloudSyncIntPreference(
-                value = _autoRefreshMinutes.value,
-                updatedAtEpochMillis = preferenceUpdatedAt(KEY_AUTO_REFRESH)
-            ),
-            usageDisplayMode = CloudSyncStringPreference(
-                value = _usageDisplayMode.value.name,
-                updatedAtEpochMillis = preferenceUpdatedAt(KEY_USAGE_DISPLAY_MODE)
-            ),
-            showProjectedUsage = CloudSyncBooleanPreference(
-                value = _showProjectedUsage.value,
-                updatedAtEpochMillis = preferenceUpdatedAt(KEY_SHOW_PROJECTED_USAGE)
-            ),
-            emailPrivacyMode = CloudSyncStringPreference(
-                value = _emailPrivacyMode.value.name,
-                updatedAtEpochMillis = preferenceUpdatedAt(KEY_EMAIL_PRIVACY_MODE)
-            ),
-            accountSortMode = CloudSyncStringPreference(
-                value = _accountSortMode.value.name,
-                updatedAtEpochMillis = preferenceUpdatedAt(KEY_ACCOUNT_SORT_MODE)
-            ),
-            accountManualOrder = CloudSyncStringPreference(
-                value = encodeAccountOrder(_accountManualOrder.value),
-                updatedAtEpochMillis = preferenceUpdatedAt(KEY_ACCOUNT_MANUAL_ORDER)
-            ),
-            accountSortReversed = CloudSyncBooleanPreference(
-                value = _accountSortReversed.value,
-                updatedAtEpochMillis = preferenceUpdatedAt(KEY_ACCOUNT_SORT_REVERSED)
-            ),
-            sinkExhaustedAccounts = CloudSyncBooleanPreference(
-                value = _sinkExhaustedAccounts.value,
-                updatedAtEpochMillis = preferenceUpdatedAt(KEY_SINK_EXHAUSTED_ACCOUNTS)
-            ),
-            dashboardLayout = CloudSyncStringPreference(
-                value = _dashboardLayout.value.name,
-                updatedAtEpochMillis = preferenceUpdatedAt(KEY_DASHBOARD_LAYOUT)
-            )
-        )
-    }
-
-    fun importForSync(preferences: CloudSyncPreferencesRecord) {
-        // Account imports can suspend before preferences are applied. Preserve newer local edits.
-        val merged = mergePreferences(exportForSync(), preferences)
-        merged.themeMode?.let {
-            val value = runCatching { ThemeMode.valueOf(it.value) }.getOrNull() ?: return@let
-            importString(KEY_THEME, value.name, it.updatedAtEpochMillis)
-            _themeMode.value = value
-        }
-        merged.autoRefreshMinutes?.let {
-            importInt(KEY_AUTO_REFRESH, it.value.coerceAtLeast(0), it.updatedAtEpochMillis)
-            _autoRefreshMinutes.value = it.value.coerceAtLeast(0)
-        }
-        merged.usageDisplayMode?.let {
-            val value = runCatching { UsageDisplayMode.valueOf(it.value) }.getOrNull() ?: return@let
-            importString(KEY_USAGE_DISPLAY_MODE, value.name, it.updatedAtEpochMillis)
-            _usageDisplayMode.value = value
-        }
-        merged.showProjectedUsage?.let {
-            settings.putBoolean(KEY_SHOW_PROJECTED_USAGE, it.value)
-            settings.putLong(updatedAtKey(KEY_SHOW_PROJECTED_USAGE), it.updatedAtEpochMillis)
-            _showProjectedUsage.value = it.value
-        }
-        merged.emailPrivacyMode?.let {
-            val value = runCatching { EmailPrivacyMode.valueOf(it.value) }.getOrNull() ?: return@let
-            importString(KEY_EMAIL_PRIVACY_MODE, value.name, it.updatedAtEpochMillis)
-            _emailPrivacyMode.value = value
-        }
-        merged.accountSortMode?.let {
-            val value = runCatching { AccountSortMode.valueOf(it.value) }.getOrNull() ?: return@let
-            importString(KEY_ACCOUNT_SORT_MODE, value.name, it.updatedAtEpochMillis)
-            _accountSortMode.value = value
-        }
-        merged.accountManualOrder?.let {
-            val value = decodeAccountOrder(it.value) ?: return@let
-            importString(KEY_ACCOUNT_MANUAL_ORDER, encodeAccountOrder(value), it.updatedAtEpochMillis)
-            _accountManualOrder.value = value
-        }
-        merged.accountSortReversed?.let {
-            settings.putBoolean(KEY_ACCOUNT_SORT_REVERSED, it.value)
-            settings.putLong(updatedAtKey(KEY_ACCOUNT_SORT_REVERSED), it.updatedAtEpochMillis)
-            _accountSortReversed.value = it.value
-        }
-        merged.sinkExhaustedAccounts?.let {
-            settings.putBoolean(KEY_SINK_EXHAUSTED_ACCOUNTS, it.value)
-            settings.putLong(updatedAtKey(KEY_SINK_EXHAUSTED_ACCOUNTS), it.updatedAtEpochMillis)
-            _sinkExhaustedAccounts.value = it.value
-        }
-        merged.dashboardLayout?.let {
-            val value = runCatching { DashboardLayout.valueOf(it.value) }.getOrNull() ?: return@let
-            importString(KEY_DASHBOARD_LAYOUT, value.name, it.updatedAtEpochMillis)
-            _dashboardLayout.value = value
-        }
-    }
 
     private fun loadThemeMode(): ThemeMode {
         val raw = settings.getStringOrNull(KEY_THEME) ?: return ThemeMode.System
@@ -276,25 +174,13 @@ class AppPreferences(
         return runCatching { DashboardLayout.valueOf(raw) }.getOrDefault(DashboardLayout.Compact)
     }
 
-    private fun importString(key: String, value: String, updatedAtEpochMillis: Long) {
-        settings.putString(key, value)
-        settings.putLong(updatedAtKey(key), updatedAtEpochMillis)
-    }
-
-    private fun importInt(key: String, value: Int, updatedAtEpochMillis: Long) {
-        settings.putInt(key, value)
-        settings.putLong(updatedAtKey(key), updatedAtEpochMillis)
-    }
-
-    private fun preferenceUpdatedAt(key: String): Long {
-        return settings.getLongOrNull(updatedAtKey(key)) ?: 0L
-    }
-
-    private fun nowMillis(): Long = Clock.System.now().toEpochMilliseconds()
-
-    private fun updatedAtKey(key: String): String = "${key}_updated_at"
-
     private companion object {
+        val retiredDropboxKeys = listOf(
+            "cloud_sync_dropbox_token_v1",
+            "cloud_sync_dropbox_rev_v1",
+            "cloud_sync_device_id_v1",
+            "cloud_sync_tombstones_v1",
+        )
         const val KEY_THEME = "pref_theme_mode"
         const val KEY_AUTO_REFRESH = "pref_auto_refresh_minutes"
         const val KEY_USAGE_DISPLAY_MODE = "pref_usage_display_mode"

@@ -60,15 +60,20 @@ def reveal(label, prefix=False):
     def move(down):
         start, end = (.75, .40) if down else (.40, .75)
         call('shell', 'input', 'swipe', str(w//3), str(int(h*start)), str(w//3), str(int(h*end)), '360')
-    down, previous = not label.startswith(('All providers (', 'Computer ', 'Share from', 'Hide phone', 'Forget computer')), None
+    down, previous = not label.startswith(('All providers (', 'Open settings')), None
     deadline = time.monotonic() + 85
     while time.monotonic() < deadline:
         ns = nodes()
-        bottom = .968 if any('Close details' in labels(n) for n in ns) else .91
+        close = next((n for n in ns if n.get('content-desc') in ('Close details', 'Close computer settings')), None)
+        bottom = .968 if close is not None else .91
         for n in ns:
             if any((v.startswith(label) if prefix else v == label) for v in labels(n)):
                 _, y, _, b = map(int, re.findall(r'\d+', n.get('bounds')))
                 if b > y and .04*h < (b+y)/2 < bottom*h: return n
+        # Wait for asynchronous notes in a short sheet; swiping its scrim can dismiss it.
+        if close is not None and int(re.findall(r'\d+', close.get('bounds'))[3]) > .40*h:
+            time.sleep(.2)
+            continue
         seen = [(labels(n), n.get('bounds')) for n in ns]
         if seen == previous: down = not down
         previous = seen
@@ -131,8 +136,11 @@ def main(action, *args):
         tap(reveal(f'Refresh on computer · {args[0]} · ', prefix=True))
     elif action == 'close':
         tap(find('Close details'))
+    elif action == 'computer':
+        main('tap', 'Open settings'); main('tap', 'My computer')
     elif action == 'tap':
-        tap(reveal(args[0]))
+        text = args[0]
+        tap(find(text) if text in ('Add account', 'Close computer settings') else reveal(text, prefix=text == 'My computer'))
     elif action == 'collected':
         print(next(v.split(' · ')[-1] for v in labels(reveal('Collected ·', prefix=True)) if v.startswith('Collected ·')))
     elif action == 'capture':

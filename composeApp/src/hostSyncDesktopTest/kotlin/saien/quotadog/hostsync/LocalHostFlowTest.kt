@@ -43,6 +43,8 @@ class LocalHostFlowTest {
             }
             return out.trim()
         }
+        fun closeComputer() { phone("tap", "Close computer settings") }
+        fun checkConnection(note: String) { phone("computer"); phone("expect", note); closeComputer() }
         fun click(label: String) {
             desktop.waitUntil(15_000) { desktop.onAllNodesWithText(label).fetchSemanticsNodes().isNotEmpty() }
             desktop.onNodeWithText(label).performScrollTo().performClick()
@@ -59,6 +61,7 @@ class LocalHostFlowTest {
             buttons[index].performScrollTo().performClick()
         }
         fun pair() {
+            phone("tap", "Add account"); phone("tap", "Connect my computer")
             click("Pair a phone")
             desktop.waitUntil(15_000) { desktop.onAllNodesWithTag("pairing-qr").fetchSemanticsNodes().isNotEmpty() }
             val code = desktop.onNodeWithTag("pairing-qr").performScrollTo()
@@ -71,12 +74,16 @@ class LocalHostFlowTest {
             val keychain = profile.resolve("host-sync.keychain-db").also { check(it.isFile) }
             assertEquals(0, ProcessBuilder("/usr/bin/security", "lock-keychain", keychain.absolutePath).start().waitFor())
             click("Allow this phone")
-            phone("expect", "Computer connected", "No accounts shared. Choose a workspace on your computer.")
+            phone("expect", "Computer connected", "No accounts shared. Choose accounts for this phone in your computer’s sharing settings.")
+            phone("capture", "computer"); closeComputer()
+            phone("expect", "No accounts yet"); phone("absent", "My computer", "Share from this phone", "Forget computer…")
             phone("absent", "Devin", "Refresh on computer")
         }
         try {
             evidence.mkdirs(); evidence.resolve("host-sync-results.txt").writeText("")
-            phone("reset"); phone("expect", "No accounts yet", "Open QR image"); phone("capture", "start")
+            phone("reset"); phone("expect", "No accounts yet"); phone("absent", "My computer", "Scan QR", "Open QR image"); phone("capture", "start")
+            phone("tap", "Open settings"); phone("expect", "Appearance"); phone("capture", "settings-entry")
+            phone("tap", "My computer"); phone("expect", "Open QR image"); phone("capture", "pairing-entry"); closeComputer()
             desktop.setContent { LocalHostDashboard(f) }
             click("Enable host"); pair(); phone("capture", "empty")
             record("Two screens matched; desktop approved; authenticated new session had zero shared accounts.")
@@ -89,13 +96,22 @@ class LocalHostFlowTest {
             phone("capture", "view"); record("View only: daily used 25%, weekly used 75%, USD 2.50; unrelated 97% source absent. Provider count=1.")
 
             grant("Allow refresh"); phone("expect", "Refresh on computer"); phone("close")
-            phone("row-refresh", "Devin"); phone("expect", "Updated by computer"); phone("absent", "Close details")
+            val timeoutNote = "No refresh confirmation from your computer. You can retry."
+            upstream("hold", true)
+            try {
+                phone("row-refresh", "Devin")
+                phone("expect", timeoutNote)
+                phone("absent", "Close details", "Close computer settings")
+                phone("capture", "refresh-timeout")
+                assertEquals("2", upstream("count"))
+            } finally { upstream("release", true) }
+            checkConnection("Updated by computer")
+            phone("absent", timeoutNote)
             phone("open", "Devin"); phone("expect", "38% used")
             assertEquals("2", upstream("count")); val collected = phone("collected")
             phone("capture", "updated"); record("One phone tap: personal GetUserStatus count=2; daily used 38%; collected=$collected.")
 
-            upstream("fail", true); phone("tap", "Refresh on computer"); phone("close"); phone("expect", "Refresh failed on computer")
-            phone("open", "Devin"); phone("expect", "38% used")
+            upstream("fail", true); phone("tap", "Refresh on computer"); phone("expect", "Refresh failed on computer", "38% used")
             assertEquals(collected, phone("collected")); assertEquals("3", upstream("count"))
             phone("capture", "failed")
             record("Provider failure: count=3; 38% and original collection time preserved.")
@@ -104,7 +120,8 @@ class LocalHostFlowTest {
             desktop.waitUntil(5_000) { upstream("count") == "4" }
             click("Pause host"); phone("expect", "Offline", "38% used"); phone("absent", "Refresh on computer")
             assertEquals(collected, phone("collected")); phone("capture", "offline")
-            phone("restart"); phone("expect", "Computer unavailable"); phone("open", "Devin")
+            phone("restart"); checkConnection("Computer unavailable"); phone("absent", "Forget computer…", "Close computer settings")
+            phone("capture", "offline-list"); phone("open", "Devin")
             phone("expect", "38% used"); assertEquals(collected, phone("collected"))
             upstream("release", true); click("Enable host")
             desktop.waitUntil(10_000) { f.host.state.value.online || f.host.state.value.saveFailed }
@@ -127,21 +144,21 @@ class LocalHostFlowTest {
                 record("AVD default network lost and restored with only emulated mobile data. Fresh view-only grant, no QR or additional query. Transport was still adb reverse, NOT a public carrier test.")
             } finally { phone("network", "wifi") }
 
-            grant("Not shared"); phone("expect", "No accounts shared. Choose a workspace on your computer.")
+            grant("Not shared"); phone("expect", "Share an account from QuotaDog on your Mac, or add one on this phone.")
             phone("absent", "Devin", "Refresh on computer")
             grant("View only"); phone("open", "Devin"); phone("expect", "53% used", "View only"); click("Revoke phone")
-            phone("expect", "Pairing revoked by computer", "No accounts yet"); phone("absent", "Devin")
+            phone("expect", "No accounts yet"); phone("absent", "Devin", "Close computer settings"); checkConnection("Pairing revoked by computer")
             phone("capture", "revoked")
-            phone("restart"); phone("expect", "Connect your computer", "No accounts yet")
+            phone("restart"); phone("expect", "No accounts yet"); checkConnection("Connect your computer")
             assertEquals("4", upstream("count")); assertEquals("1", upstream("unshared-count"))
             record("Unshare removed card; regrant was view-only; online revocation and cold restart left zero remote accounts. Final counts: personal=4, unshared=1.")
 
             pair(); grant("View only"); phone("open", "Devin"); phone("expect", "53% used"); phone("close")
-            click("Pause host"); phone("expect", "Computer unavailable"); click("Revoke phone"); click("Enable host")
-            phone("expect", "Relay did not accept this pairing", "75% used"); phone("absent", "Refresh on computer")
-            phone("tap", "Forget computer…"); phone("tap", "Cancel"); phone("open", "Devin"); phone("expect", "53% used"); phone("close")
-            phone("tap", "Forget computer…"); phone("expect", "Remove from phone"); phone("capture", "forget")
-            phone("tap", "Remove from phone"); phone("expect", "Computer disconnected", "No accounts yet"); phone("absent", "Devin")
+            click("Pause host"); checkConnection("Computer unavailable"); click("Revoke phone"); click("Enable host")
+            checkConnection("Relay did not accept this pairing"); phone("expect", "75% used"); phone("absent", "Refresh on computer")
+            phone("computer"); phone("tap", "Forget computer…"); phone("tap", "Cancel"); closeComputer(); phone("open", "Devin"); phone("expect", "53% used"); phone("close")
+            phone("computer"); phone("tap", "Forget computer…"); phone("expect", "Remove from phone"); phone("capture", "forget")
+            phone("tap", "Remove from phone"); phone("expect", "Computer disconnected"); closeComputer(); phone("expect", "No accounts yet"); phone("absent", "Devin")
             assertEquals("4", upstream("count")); assertEquals("1", upstream("unshared-count"))
             record("Offline revoke: relay refused the previous ticket. Only explicit forget erased the offline phone's last reading; no upstream query.")
 
@@ -163,7 +180,7 @@ class LocalHostFlowTest {
                 phone("close")
                 record("$id: shared by Mac settings; phone displayed $expected; $n simultaneous sources.")
             }
-            phone("reveal", "All providers (8)"); phone("capture", "multi")
+            phone("reveal", "Open settings"); phone("expect", "All providers (8)"); phone("absent", "Share from this phone", "Forget computer…"); phone("capture", "multi")
             assertEquals("4", upstream("count")); assertEquals("1", upstream("unshared-count"))
             record("All eight remain shared together. The second, unshared Devin login was not queried by the phone.")
             desktop.onNodeWithText("Choose which accounts this phone can view or refresh on this Mac.").performScrollTo()
@@ -174,14 +191,14 @@ class LocalHostFlowTest {
             fun calls(name: String) = upstream("provider-counts/$name").toInt()
             val before = calls("codex-phone"); val macCount = calls("codex-mac")
             phone("local-codex", input = """{"accessToken":"fixture-codex-phone","refreshToken":"","expiresAtEpochMillis":4102444800000}""")
-            phone("expect", "Computer connected", "All providers (8)")
+            phone("expect", "All providers (8)"); checkConnection("Computer connected")
             desktop.waitUntil(5_000) { calls("codex-phone") == before + 1 }
             check(f.host.state.value.phones.single().cards.isEmpty()) { "Local phone account shared without a grant" }
-            phone("reveal", "Computer connected"); phone("tap", "Codex (1)"); phone("absent", "Amp")
+            phone("tap", "Codex (1)"); phone("absent", "Amp")
             phone("open", "Codex"); phone("expect", "Collected by this phone", "This phone", "My computer", "View only", "Refresh on this device")
             phone("capture", "merged"); phone("close")
-            phone("tap", "Share from this phone"); phone("tap", "Allow refresh")
-            phone("capture", "outgoing")
+            phone("computer"); phone("tap", "Share from this phone"); phone("tap", "Allow refresh")
+            phone("capture", "outgoing"); closeComputer()
             desktop.waitUntil(10_000) { f.host.state.value.phones.single().cards.singleOrNull()?.reading != null }
             desktop.onNodeWithText("Source details (2)").assertExists()
             // Retire the Mac credential. Its grant vanishes, but the independently logged-in
@@ -193,16 +210,17 @@ class LocalHostFlowTest {
             assertEquals(macCount, calls("codex-mac"))
             click("Codex (1)"); desktop.onNodeWithText("Refresh on phone").performScrollTo()
             captureDesktop("mac-phone", desktop.onRoot())
-            phone("tap", "Hide phone sharing"); phone("tap", "All providers (8)")
+            phone("tap", "All providers (8)")
             record("Phone Codex: independent login merged into one card. Explicit reverse grant put it on the Mac. After Mac login removal, one Mac click queried only the phone (+1, Mac +0); the phone kept all eight dashboard entries.")
             val ref = f.host.state.value.phones.single().cards.single().ref
-            f.host.pause(); phone("expect", "Computer unavailable"); phone("restart"); phone("expect", "Computer unavailable")
-            f.host.enable(); phone("expect", "Computer connected")
+            f.host.pause(); checkConnection("Computer unavailable"); phone("restart"); phone("expect", "All providers (8)")
+            f.host.enable()
             desktop.waitUntil(10_000) { f.host.state.value.phones.single().let { it.online && it.cards.singleOrNull()?.let { c -> c.ref == ref && c.access == Access.Refresh } == true } }
             val onReconnect = calls("codex-phone")
             click("Refresh on phone")
             desktop.waitUntil(10_000) { calls("codex-phone") == onReconnect + 1 && f.host.state.value.phones.single().busyRefs.isEmpty() }
             assertEquals(macCount, calls("codex-mac"))
+            phone("absent", "Close computer settings", "Share from this phone")
             record("Cold phone restart preserved the same explicit reverse grant; a Mac tap fetched again on the phone without re-pairing or re-granting access.")
         } finally {
             qr.delete(); try { phone("clean") } finally { f.deleteFixture() }

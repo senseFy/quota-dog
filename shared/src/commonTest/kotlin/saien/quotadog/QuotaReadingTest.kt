@@ -34,6 +34,16 @@ class QuotaReadingTest {
         return r
     }
 
+    @Test fun verifiedIdentityKeepsItsPairScopedMatchAcrossVersions() {
+        val pair = "01".repeat(32)
+        val reading = ProviderUsageSnapshot(ProviderId.CODEX, AuthState.LoggedIn, emptyList(), now,
+            loginTag = "local-login", quotaIdentity = """["subscriber","workspace"]""")
+        // HMAC-SHA256 of the v2 match message using the decoded pairing key.
+        assertEquals("1ef06c1181c864654e99013156f1ad97b8d2f114d079f34d75d888903cfb275d", matchForPair(pair, reading))
+        assertNotEquals(matchForPair(pair, reading), matchForPair("02".repeat(32), reading))
+        assertNull(matchForPair(pair, reading.copy(loginTag = null)))
+    }
+
     @Test fun futureOrReplayedReadingsCannotDisplaceTheLatestAuthorizedObservation() {
         val ref = "ab".repeat(16)
         val source = SharedSource(ref, ProviderId.GROK, Access.View)

@@ -163,7 +163,7 @@ class HostAuthorizationTest {
                 assertFalse(local.isCompleted)
                 a.refresh(cards.getValue(ProviderId.DEVIN).ref) // View-only: must not start a query.
                 upstream("release", true); assertTrue(local.await())
-                b.state.first { it.note == "Updated by computer" }
+                b.state.first { it.note == PhoneNotice.Updated }
                 a.state.first { s -> s.cards.any { it.provider == ProviderId.DEVIN && it.reading!!.collectedAt > allowed.reading!!.collectedAt } }
                 assertEquals(before + 1, upstream("count").toInt())
             } finally { upstream("release", true) }
@@ -196,7 +196,7 @@ class HostAuthorizationTest {
             host.refreshPhone(one, fromPhone.ref)
             host.state.first { s -> s.phones.single { it.id == one }.cards.single().reading!!.collectedAt > initial }
             assertEquals(baseline.getValue("codex-phone") + 1, counts()["codex-phone"])
-            a.refresh(cards.getValue(ProviderId.CURSOR).ref); a.state.first { it.note == "Updated by computer" }
+            a.refresh(cards.getValue(ProviderId.CURSOR).ref); a.state.first { it.note == PhoneNotice.Updated }
             val after = counts()
             assertEquals(baseline + ("cursor-mac" to baseline.getValue("cursor-mac") + 1) + ("codex-phone" to baseline.getValue("codex-phone") + 1), after)
             a.useNetwork(null); a.state.first { !it.online }; a.useNetwork(2)
@@ -208,7 +208,7 @@ class HostAuthorizationTest {
                 s.phones.single { it.id == one }.let { it.online && predicate(it.cards) }
             }.phones.single { it.id == one }.cards
             av.failBefore = "host"; a.choose(mobile, reverse, Access.Off)
-            a.state.first { !it.online && it.note.startsWith("Sharing paused") }
+            a.state.first { !it.online && it.note == PhoneNotice.Paused }
             a.choose(mobile, phoneDevin, Access.Refresh)
             val devinRef = phoneCards { it.singleOrNull()?.provider == ProviderId.DEVIN }.single().ref
 
@@ -225,7 +225,7 @@ class HostAuthorizationTest {
 
             a.choose(mobile, reverse, Access.Refresh); phoneCards { it.size == 2 }
             av.failBefore = "host"; a.choose(mobile, reverse, Access.View)
-            a.state.first { !it.online && it.note.startsWith("Sharing paused") }
+            a.state.first { !it.online && it.note == PhoneNotice.Paused }
             a.close(); a = PhoneSync(client(), phoneKey, av)
             assertEquals(Access.View, a.state.value.grants[reverse]?.access, "A locked vault restored a withdrawn permission")
             a.bindStore(mobile); a.useNetwork(4)
@@ -339,15 +339,15 @@ class HostAuthorizationTest {
             host.enable(); host.state.first { it.online }; phone.useNetwork(1)
             // Phone persisted its ticket, but the Mac never received Stored.
             phoneVault.failAfter = "host"; approveNewInvitation()
-            phone.state.first { it.note.startsWith("Pairing did not finish") }
+            phone.state.first { it.note == PhoneNotice.PairingFailed }
             phone.close(); phone = newPhone(); assertFalse(phone.state.value.paired); phone.useNetwork(2)
-            phone.state.first { !it.paired && it.note.contains("scan a new invitation") }
+            phone.state.first { !it.paired && it.note == PhoneNotice.PairingUnconfirmed }
             assertTrue(host.state.value.phones.isEmpty())
             // On the new scan the Mac persists trust, but stops before registering the verifier.
             hostVault.failAfter = "phones"; approveNewInvitation()
             host.state.first { it.saveFailed && !it.online }; host.close(); host = newHost()
             host.enable(); phone.state.first { it.paired && it.online } // Fresh pinned session, no second scan.
-            host.revoke(host.state.value.phones.single().id); phone.state.first { !it.paired && it.note.contains("revoked") }
+            host.revoke(host.state.value.phones.single().id); phone.state.first { !it.paired && it.note == PhoneNotice.Revoked }
         } } finally { phone.close(); host.close() }
     }
 }

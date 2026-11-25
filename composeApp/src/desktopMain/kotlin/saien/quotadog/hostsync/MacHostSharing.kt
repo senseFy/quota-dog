@@ -50,7 +50,7 @@ internal fun HostState.dashboardPeers(host: DesktopHost): List<DashboardPeer> = 
 @Composable
 internal fun rememberMacHostSharing(store: QuotaDogStore, preferences: AppPreferences): MacHostSharing {
     val settings = remember { createPreferenceSettings() }
-    val optIn = "host_sync_enabled_v1" // Device-local, never included in Dropbox preferences.
+    val optIn = "host_sync_enabled_v1"
     var enabled by remember { mutableStateOf(settings.getBoolean(optIn, false)) }
     // A previously paired, paused Mac can show its last received readings without connecting.
     var load by remember { mutableStateOf(settings.hasKey(optIn)) }

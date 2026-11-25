@@ -22,15 +22,32 @@ class RelayTicketRejected : IOException()
     val pair get() = digest(token.encodeToByteArray())
     val cards get() = incoming?.cards ?: listOfNotNull(card?.toCard())
 }
-data class PhoneState(val paired: Boolean = false, val online: Boolean = false, val digits: String? = null,
-    val cards: List<SharedCard> = emptyList(), val busyRefs: Set<String> = emptySet(), val note: String = "Connect your computer",
-    val pairId: String? = null, val grants: Map<AccountKey, GrantPermission> = emptyMap(), val workspaceGrants: Map<AccountKey, GrantPermission> = emptyMap(),
-    val legacy: Boolean = false, val clockConflict: Boolean = false)
+
+enum class PhoneNotice {
+    Connect, Paused, ForgetFailed, Disconnected, NetworkRequired, InvalidQr, Verifying, PairingFailed,
+    TicketRejected, UpdateRequired, LegacyConnected, Compare, Connected, Updated, Denied, Busy, Failed,
+    Revoked, Unavailable, PairingUnconfirmed, Refreshing, RefreshUnconfirmed,
+}
+
+data class PhoneState(
+    val paired: Boolean = false,
+    val online: Boolean = false,
+    val digits: String? = null,
+    val cards: List<SharedCard> = emptyList(),
+    val busyRefs: Set<String> = emptySet(),
+    val note: PhoneNotice = PhoneNotice.Connect,
+    val pairId: String? = null,
+    val grants: Map<AccountKey, GrantPermission> = emptyMap(),
+    val workspaceGrants: Map<AccountKey, GrantPermission> = emptyMap(),
+    val legacy: Boolean = false,
+    val clockConflict: Boolean = false,
+    // Timed-out request ID → grant ref. Kept only for this session so a late reply can settle it.
+    val unconfirmed: Map<String, String> = emptyMap(),
+)
 
 // This device-local record contains only opaque grant refs and permission levels. It is writable
 // independently of the sealed pairing. Neither record alone authorizes a phone-owned source.
 const val PHONE_GRANT_LIMITS = "phone-grant-limits-v1"
-private const val PAUSED = "Sharing paused. Unlock the phone and reopen QuotaDog to retry."
 
 class PhoneSync(private val client: HttpClient, private val identity: DeviceIdentity, private val vault: SyncVault) : AutoCloseable {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO.limitedParallelism(1))
@@ -89,7 +106,7 @@ class PhoneSync(private val client: HttpClient, private val identity: DeviceIden
         if (!limitsSaved || !pairingSaved) {
             saved = candidate // Unrelated edits and reconnects must retry this intent, not the old permissions.
             storagePaused = true; running?.cancel()
-            ui.value = savedState().copy(note = PAUSED)
+            ui.value = savedState().copy(note = PhoneNotice.Paused)
             return false
         }
         storagePaused = false
@@ -123,38 +140,38 @@ class PhoneSync(private val client: HttpClient, private val identity: DeviceIden
             reconnect() // A newer network or a pause can arrive during cancellation; use the latest.
         }
     } }
-    private suspend fun clearPairing(note: String): Boolean {
+    private suspend fun clearPairing(note: PhoneNotice): Boolean {
         running?.cancelAndJoin(); running = null
         saved?.takeIf { it.outgoing.entries.isNotEmpty() || storagePaused }?.let {
             if (!saveGrants(it, LocalShares(it.outgoing.revision + 1))) return false
         }
         try { save(null) } catch (_: Exception) {
-            ui.value = ui.value.copy(online = false, busyRefs = emptySet(), note = "Could not remove pairing. Unlock the phone and retry.")
+            ui.value = savedState().copy(note = PhoneNotice.ForgetFailed)
             return false
         }
         storagePaused = false
         ui.value = PhoneState(note = note)
         return true
     }
-    fun forget() { scope.launch { clearPairing("Computer disconnected") } }
+    fun forget() { scope.launch { clearPairing(PhoneNotice.Disconnected) } }
     fun cancelPairing() { scope.launch {
         if (saved?.confirmed == true) return@launch
-        clearPairing("Connect your computer")
+        clearPairing(PhoneNotice.Connect)
     } }
     fun pair(qr: String) { scope.launch {
         if (saved?.confirmed == true || (saved == null && running?.isActive == true)) return@launch
-        if (network == null) { ui.value = PhoneState(note = "Connect to a network and scan again"); return@launch }
+        if (network == null) { ui.value = PhoneState(note = PhoneNotice.NetworkRequired); return@launch }
         val invite = Invite.parse(qr)
-        if (invite == null) { ui.value = PhoneState(note = "Not a QuotaDog pairing QR"); return@launch }
+        if (invite == null) { ui.value = PhoneState(note = PhoneNotice.InvalidQr); return@launch }
         if (saved != null) {
-            if (!clearPairing("Connect your computer")) return@launch // Replace an unfinished ticket.
-            if (network == null) { ui.value = PhoneState(note = "Connect to a network and scan again"); return@launch }
+            if (!clearPairing(PhoneNotice.Connect)) return@launch // Replace an unfinished ticket.
+            if (network == null) { ui.value = PhoneState(note = PhoneNotice.NetworkRequired); return@launch }
         }
         running = scope.launch {
-            ui.value = PhoneState(note = "Verifying computer…")
+            ui.value = PhoneState(note = PhoneNotice.Verifying)
             try { withTimeout(300_000) { talk(invite, null) } }
             catch (e: Exception) { currentCoroutineContext().ensureActive(); localFailure("enrollment", e) }
-            if (saved == null) ui.value = PhoneState(note = "Pairing did not finish. Open a new invitation.")
+            if (saved == null) ui.value = PhoneState(note = PhoneNotice.PairingFailed)
             running = null
             reconnect()
         }
@@ -172,7 +189,7 @@ class PhoneSync(private val client: HttpClient, private val identity: DeviceIden
                 catch (e: Exception) {
                     currentCoroutineContext().ensureActive()
                     if (host.confirmed && generateSequence<Throwable>(e) { it.cause }.any { it is RelayTicketRejected }) {
-                        ui.value = ui.value.copy(paired = true, online = false, busyRefs = emptySet(), note = "Relay did not accept this pairing")
+                        ui.value = savedState().copy(note = PhoneNotice.TicketRejected)
                         break
                     }
                     localFailure("reconnect", e)
@@ -203,12 +220,22 @@ class PhoneSync(private val client: HttpClient, private val identity: DeviceIden
                 var legacyOnly = false
                 var receivedManifest = false
                 var compared = false
+                fun withGrants(cards: List<SharedCard>): PhoneState {
+                    val allowed = cards.filter { it.access == Access.Refresh }.mapTo(mutableSetOf()) { it.ref }
+                    link.pending.values.retainAll(allowed)
+                    if (legacyPending?.second !in allowed) legacyPending = null
+                    return ui.value.copy(
+                        cards = cards,
+                        busyRefs = ui.value.busyRefs.intersect(allowed),
+                        unconfirmed = ui.value.unconfirmed.filterValues { it in allowed },
+                    )
+                }
                 fun receiveLegacy(msg: Msg.Manifest) {
                     val old = checkNotNull(saved)
                     if (old.incoming != null) {
                         // A downgraded Mac cannot withdraw the v2 list. Keep the cache and don't
                         // send a v2 request to an endpoint that can't interpret its permissions.
-                        ui.value = savedState().copy(note = "Update QuotaDog on your computer to resume sharing", legacy = true)
+                        ui.value = savedState().copy(note = PhoneNotice.UpdateRequired, legacy = true)
                         receivedManifest = true; return
                     }
                     if (msg.revision < old.revision) return
@@ -220,8 +247,7 @@ class PhoneSync(private val client: HttpClient, private val identity: DeviceIden
                     if (!old.confirmed || old.card != card || old.revision != msg.revision) save(old.copy(revision = msg.revision, card = card, confirmed = true))
                     if (!receivedManifest) connected()
                     receivedManifest = true; session = tls
-                    ui.value = ui.value.copy(paired = true, online = true, cards = saved!!.cards, legacy = true,
-                        note = "Update QuotaDog on your computer to share more accounts")
+                    ui.value = withGrants(saved!!.cards).copy(paired = true, online = true, legacy = true, note = PhoneNotice.LegacyConnected)
                 }
                 while (true) {
                     val messages = if (invite == null && !receivedManifest) withTimeout(10_000) { read() } else read()
@@ -229,7 +255,7 @@ class PhoneSync(private val client: HttpClient, private val identity: DeviceIden
                         if (invite != null) when (msg) {
                             is Msg.Compare -> {
                                 check(!compared && msg.digits.matches(Regex("[0-9]{6}")))
-                                compared = true; ui.value = PhoneState(digits = msg.digits, note = "Compare both screens")
+                                compared = true; ui.value = PhoneState(digits = msg.digits, note = PhoneNotice.Compare)
                             }
                             is Msg.Grant -> {
                                 check(compared && saved == null && msg.token.isHex(32))
@@ -250,10 +276,10 @@ class PhoneSync(private val client: HttpClient, private val identity: DeviceIden
                                 check(msg.revision >= received.revision || receivedManifest)
                                 val next = received.manifest(msg)
                                 if (old.incoming != next || !old.confirmed) save(old.copy(card = null, revision = -1, incoming = next, confirmed = true))
-                                val note = if (!receivedManifest || received.revision != next.revision) "Computer connected" else ui.value.note
+                                val note = if (!receivedManifest || received.revision != next.revision) PhoneNotice.Connected else ui.value.note
                                 if (!receivedManifest) connected()
                                 receivedManifest = true; link.receivedManifest = true; session = tls
-                                ui.value = ui.value.copy(paired = true, online = true, digits = null, cards = next.cards, note = note, legacy = false,
+                                ui.value = withGrants(next.cards).copy(paired = true, online = true, digits = null, note = note, legacy = false,
                                     clockConflict = next.clockConflict)
                             }
                             is Msg.Observation -> {
@@ -272,16 +298,22 @@ class PhoneSync(private val client: HttpClient, private val identity: DeviceIden
                             }
                             is Msg.Result -> if (!receivedManifest && msg.id == "1" && msg.status == RefreshStatus.Denied && stream == null) {
                                 legacyOnly = true; receiveLegacy(checkNotNull(legacy))
-                            } else if (receivedManifest && (link.pending.remove(msg.id) != null || legacyPending == msg.id)) {
-                                if (legacyPending == msg.id) legacyPending = null
-                                ui.value = ui.value.copy(busyRefs = link.pending.values.toSet(), note = when (msg.status) {
-                                    RefreshStatus.Updated -> "Updated by computer"
-                                    RefreshStatus.Denied -> "Refresh not permitted"
-                                    RefreshStatus.Busy -> "Computer is already refreshing"
-                                    RefreshStatus.Failed -> "Refresh failed on computer"
-                                })
+                            } else if (receivedManifest) {
+                                val ref = link.pending.remove(msg.id) ?: legacyPending?.takeIf { it.first == msg.id }?.second
+                                    ?: ui.value.unconfirmed[msg.id] ?: continue
+                                if (legacyPending?.first == msg.id) legacyPending = null
+                                ui.value = ui.value.copy(
+                                    busyRefs = ui.value.busyRefs - ref,
+                                    unconfirmed = ui.value.unconfirmed - msg.id,
+                                    note = when (msg.status) {
+                                        RefreshStatus.Updated -> PhoneNotice.Updated
+                                        RefreshStatus.Denied -> PhoneNotice.Denied
+                                        RefreshStatus.Busy -> PhoneNotice.Busy
+                                        RefreshStatus.Failed -> PhoneNotice.Failed
+                                    },
+                                )
                             }
-                            Msg.Revoked -> { save(null); ui.value = PhoneState(note = "Pairing revoked by computer"); return@coroutineScope }
+                            Msg.Revoked -> { save(null); ui.value = PhoneState(note = PhoneNotice.Revoked); return@coroutineScope }
                             else -> error("Unexpected sync message")
                         }
                     }
@@ -296,12 +328,16 @@ class PhoneSync(private val client: HttpClient, private val identity: DeviceIden
 
     private fun disconnected() {
         val host = saved ?: return
-        ui.value = savedState().copy(note = if (storagePaused) PAUSED else if (host.confirmed) "Computer unavailable"
-            else "Pairing not confirmed. Reconnecting, or scan a new invitation.")
+        val note = when {
+            storagePaused -> PhoneNotice.Paused
+            host.confirmed -> PhoneNotice.Unavailable
+            else -> PhoneNotice.PairingUnconfirmed
+        }
+        ui.value = savedState().copy(note = note)
     }
 
     private var legacySequence = 1L
-    private var legacyPending: String? = null
+    private var legacyPending: Pair<String, String>? = null // request ID → ref, one outstanding on a v1 host
     fun refresh(ref: String) { scope.launch {
         val card = ui.value.cards.find { it.ref == ref && it.access == Access.Refresh } ?: return@launch
         val ch = session ?: return@launch
@@ -309,13 +345,21 @@ class PhoneSync(private val client: HttpClient, private val identity: DeviceIden
         val link = stream
         val id = if (link == null) {
             if (!ui.value.legacy || legacyPending != null) return@launch
-            (++legacySequence).toString().also { ch.send(Msg.Refresh(ref, it, host.revision)); legacyPending = it }
+            (++legacySequence).toString().also { ch.send(Msg.Refresh(ref, it, host.revision)); legacyPending = it to ref }
         } else link.request(card, host.incoming?.revision ?: return@launch) ?: return@launch
-        ui.value = ui.value.copy(busyRefs = ui.value.busyRefs + ref, note = "Refreshing on computer…")
+        ui.value = ui.value.copy(
+            busyRefs = ui.value.busyRefs + ref,
+            unconfirmed = ui.value.unconfirmed.filterValues { it != ref },
+            note = PhoneNotice.Refreshing,
+        )
         delay(30_000)
-        if (session === ch && (link?.pending?.remove(id) != null || legacyPending == id)) {
-            if (legacyPending == id) legacyPending = null
-            ui.value = ui.value.copy(busyRefs = ui.value.busyRefs - ref, note = "Refresh not confirmed")
+        if (session === ch && (link?.pending?.remove(id) != null || legacyPending?.first == id)) {
+            if (legacyPending?.first == id) legacyPending = null
+            ui.value = ui.value.copy(
+                busyRefs = ui.value.busyRefs - ref,
+                unconfirmed = ui.value.unconfirmed + (id to ref),
+                note = PhoneNotice.RefreshUnconfirmed,
+            )
         }
     } }
     override fun close() { scope.cancel(); client.close() }

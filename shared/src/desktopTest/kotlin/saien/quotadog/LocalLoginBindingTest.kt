@@ -36,6 +36,23 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class LocalLoginBindingTest {
+    @Test fun aFailedFirstReadingStillIdentifiesTheCurrentLocalLogin() = runBlocking {
+        Fixture { 503 to "{}" }.use { f ->
+            val key = f.tokens.save(ProviderId.CODEX, token("first"))
+            f.store.detectAll()
+            val first = f.store.state.value.accounts.getValue(key)
+            assertNull(first.snapshot)
+            assertEquals(AuthState.Error, first.authState)
+            assertEquals("owner@example.invalid", first.loginEmail)
+
+            f.tokens.save(key, token("replacement").copy(email = "other@example.invalid"))
+            assertFalse(f.store.refresh(key))
+            val replacement = f.store.state.value.accounts.getValue(key)
+            assertNull(replacement.snapshot)
+            assertEquals("other@example.invalid", replacement.loginEmail)
+        }
+    }
+
     @Test fun localAndGrantedRefreshJoinOneQueryAndObserveItsSuccessOrFailure() = runBlocking {
         for (remoteFirst in listOf(false, true)) for (ok in listOf(false, true)) {
             val entered = CompletableDeferred<Unit>()
@@ -76,8 +93,8 @@ class LocalLoginBindingTest {
                     withTimeout(5_000) { entered.await() }
                     when (mutation) {
                         "delete" -> f.store.delete(key)
-                        "replace" -> f.tokens.importTokenForSync(key, token("replacement"), 1)
-                        else -> { f.tokens.deleteForSync(key); f.tokens.importTokenForSync(key, original, 1) }
+                        "replace" -> f.tokens.save(key, token("replacement"))
+                        else -> { f.tokens.delete(key); f.tokens.save(key, original) }
                     }
                     assertNotEquals(login, f.store.currentLogin(key))
                     // The new login does not have to wait for the obsolete HTTP operation.
@@ -136,14 +153,15 @@ class LocalLoginBindingTest {
         }
     }
 
-    @Test fun dropboxClaudeCredentialsCannotCreateAMatchWithoutLocalOAuthProofOfBothIds() = runBlocking {
+    @Test fun legacyClaudeCredentialsCannotCreateAMatchWithoutLocalOAuthProofOfBothIds() = runBlocking {
         Fixture { r ->
             200 to if (!r.path.endsWith("/token")) claudeUsage else if ("partial" in r.body) {
                 """{"access_token":"first","refresh_token":"full","expires_in":1,"account":{"uuid":"$user"}}"""
             } else """{"access_token":"second","account":{"uuid":"$user"},"organization":{"uuid":"$orgA"}}"""
         }.use { f ->
-            val key = AccountKey(ProviderId.CLAUDE_CODE, "old-sync-id")
-            f.tokens.importTokenForSync(key, token("restored", true).copy(refreshToken = "partial", accountId = orgA, principalId = user), 10)
+            f.tokens.importLegacyFile(ProviderId.CLAUDE_CODE, token("legacy", true).copy(refreshToken = "partial", accountId = orgA, principalId = user))
+            val key = f.tokens.list().single().accountKey
+            assertNull(f.tokens.load(key)?.principalId)
             val grant = assertNotNull(f.store.currentLogin(key))
             assertTrue(f.store.refresh(key, grant))
             assertNull(f.store.state.value.accounts[key]?.snapshot?.quotaIdentity)

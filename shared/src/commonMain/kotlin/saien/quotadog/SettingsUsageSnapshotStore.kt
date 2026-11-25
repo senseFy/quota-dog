@@ -1,7 +1,6 @@
 package saien.quotadog
 
 import com.russhwolf.settings.Settings
-import kotlinx.datetime.Clock
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
@@ -21,51 +20,23 @@ class SettingsUsageSnapshotStore(
     }
 
     fun save(accountKey: AccountKey, snapshot: ProviderUsageSnapshot) {
-        save(accountKey, snapshot, Clock.System.now().toEpochMilliseconds())
-    }
-
-    fun save(accountKey: AccountKey, snapshot: ProviderUsageSnapshot, updatedAtEpochMillis: Long) {
         val encoded = if (phoneDisplay) json.encodePhoneSnapshot(snapshot) else json.encodeToString(ProviderUsageSnapshot.serializer(), snapshot)
         settings.putString(key(accountKey), encoded)
-        settings.putLong(updatedAtKey(accountKey), updatedAtEpochMillis)
-        upsertIndex(accountKey)
     }
 
     fun delete(accountKey: AccountKey) {
-        settings.remove(key(accountKey))
-        settings.remove(updatedAtKey(accountKey))
-        // Legacy suffix used before key-length tightening.
-        settings.remove("${key(accountKey)}_updated_at")
-        saveIndex(loadIndex().filterNot { it.providerId == accountKey.providerId && it.accountId == accountKey.accountId })
-    }
+        val key = key(accountKey)
+        settings.remove(key)
+        settings.remove("${key}_ts")
+        settings.remove("${key}_updated_at")
 
-    fun exportSnapshotsForSync(): List<CloudSyncAccountRecord> {
-        return loadIndex().mapNotNull { ref ->
-            val accountKey = AccountKey(ref.providerId, ref.accountId)
-            val snapshot = load(accountKey) ?: return@mapNotNull null
-            CloudSyncAccountRecord(
-                providerId = accountKey.providerId,
-                accountId = accountKey.accountId,
-                snapshot = CloudSyncSnapshotValue(
-                    value = snapshot,
-                    updatedAtEpochMillis = snapshotUpdatedAt(accountKey, snapshot)
-                )
-            )
+        // Older versions also indexed snapshots by account ID. Forget the deleted ID there
+        // without enumerating readings or creating an index on a fresh install.
+        val encoded = settings.getStringOrNull(LEGACY_INDEX) ?: return
+        val index = runCatching { json.decodeFromString<LegacySnapshotIndex>(encoded) }.getOrNull() ?: return
+        if (accountKey in index.accounts) {
+            settings.putString(LEGACY_INDEX, json.encodeToString(index.copy(accounts = index.accounts.filterNot { it == accountKey })))
         }
-    }
-
-    fun importSnapshotForSync(
-        accountKey: AccountKey,
-        snapshot: ProviderUsageSnapshot,
-        updatedAtEpochMillis: Long
-    ) {
-        save(accountKey, snapshot, updatedAtEpochMillis)
-    }
-
-    fun deleteForSync(accountKey: AccountKey, throughEpochMillis: Long) {
-        val snapshot = load(accountKey) ?: return
-        if (snapshotUpdatedAt(accountKey, snapshot) > throughEpochMillis) return
-        delete(accountKey)
     }
 
     private fun key(accountKey: AccountKey): String {
@@ -75,51 +46,10 @@ class SettingsUsageSnapshotStore(
         return "usage_snapshot_v1_${accountKey.providerId.name.lowercase()}_$digest"
     }
 
-    private fun updatedAtKey(accountKey: AccountKey): String {
-        // Keep under java.util.prefs MAX_KEY_LENGTH (80).
-        // e.g. usage_snapshot_v1_antigravity_<43> is already 73 chars; "_updated_at" overflows.
-        return "${key(accountKey)}_ts"
-    }
-
-    private fun snapshotUpdatedAt(accountKey: AccountKey, snapshot: ProviderUsageSnapshot): Long {
-        return settings.getLongOrNull(updatedAtKey(accountKey))
-            ?: settings.getLongOrNull("${key(accountKey)}_updated_at")
-            ?: snapshot.collectedAt.toEpochMilliseconds()
-    }
-
-    private fun upsertIndex(accountKey: AccountKey) {
-        val current = loadIndex()
-        if (current.any { it.providerId == accountKey.providerId && it.accountId == accountKey.accountId }) return
-        saveIndex(current + StoredSnapshotRef(accountKey.providerId, accountKey.accountId))
-    }
-
-    private fun loadIndex(): List<StoredSnapshotRef> {
-        if (!settings.hasKey(KEY_INDEX)) return emptyList()
-        val encoded = settings.getString(KEY_INDEX, "")
-        return runCatching {
-            json.decodeFromString(StoredSnapshotIndex.serializer(), encoded).accounts
-        }.getOrDefault(emptyList())
-    }
-
-    private fun saveIndex(accounts: List<StoredSnapshotRef>) {
-        settings.putString(
-            KEY_INDEX,
-            json.encodeToString(StoredSnapshotIndex.serializer(), StoredSnapshotIndex(accounts.distinct()))
-        )
-    }
-
     private companion object {
-        const val KEY_INDEX = "usage_snapshot_accounts_v1"
+        const val LEGACY_INDEX = "usage_snapshot_accounts_v1"
     }
 }
 
 @Serializable
-private data class StoredSnapshotIndex(
-    val accounts: List<StoredSnapshotRef> = emptyList()
-)
-
-@Serializable
-private data class StoredSnapshotRef(
-    val providerId: ProviderId,
-    val accountId: String
-)
+private data class LegacySnapshotIndex(val accounts: List<AccountKey> = emptyList())

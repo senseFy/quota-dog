@@ -1,6 +1,9 @@
 package saien.quotadog
 
 import com.russhwolf.settings.MapSettings
+import kotlinx.coroutines.runBlocking
+import kotlinx.datetime.Instant
+import kotlinx.serialization.json.Json
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -17,13 +20,10 @@ class AppPreferencesTest {
         preferences.setSinkExhaustedAccounts(false)
 
         assertFalse(AppPreferences(settings).sinkExhaustedAccounts.value)
-        val imported = AppPreferences(MapSettings())
-        imported.importForSync(preferences.exportForSync())
-        assertFalse(imported.sinkExhaustedAccounts.value)
     }
 
     @Test
-    fun dashboardLayoutDefaultsToCompactAndSyncsTheNewestChoice() {
+    fun dashboardLayoutDefaultsToCompactAndPersistsTheChosenLayout() {
         val settings = MapSettings()
         val preferences = AppPreferences(settings)
 
@@ -32,15 +32,6 @@ class AppPreferencesTest {
         preferences.setDashboardLayout(DashboardLayout.FoldFull)
 
         assertEquals(DashboardLayout.FoldFull, AppPreferences(settings).dashboardLayout.value)
-        val other = AppPreferences(MapSettings())
-        other.importForSync(preferences.exportForSync())
-        assertEquals(DashboardLayout.FoldFull, other.dashboardLayout.value)
-
-        // An older edit from another device does not replace the local choice.
-        preferences.importForSync(
-            CloudSyncPreferencesRecord(dashboardLayout = CloudSyncStringPreference("OneLine", 1))
-        )
-        assertEquals(DashboardLayout.FoldFull, preferences.dashboardLayout.value)
     }
 
     @Test
@@ -76,28 +67,20 @@ class AppPreferencesTest {
     }
 
     @Test
-    fun importsAndExportsPreferencesForSync() {
+    fun displayAndRefreshChoicesPersistLocally() {
         val settings = MapSettings()
         val preferences = AppPreferences(settings)
 
-        preferences.importForSync(
-            CloudSyncPreferencesRecord(
-                themeMode = CloudSyncStringPreference("Dark", 10),
-                autoRefreshMinutes = CloudSyncIntPreference(15, 20),
-                usageDisplayMode = CloudSyncStringPreference("Remaining", 30),
-                showProjectedUsage = CloudSyncBooleanPreference(true, 40),
-                emailPrivacyMode = CloudSyncStringPreference("Masked", 50)
-            )
-        )
+        preferences.setThemeMode(ThemeMode.Dark)
+        preferences.setAutoRefreshMinutes(15)
+        preferences.setUsageDisplayMode(UsageDisplayMode.Remaining)
+        preferences.setEmailPrivacyMode(EmailPrivacyMode.Masked)
 
-        val exported = preferences.exportForSync()
-        assertEquals(ThemeMode.Dark, preferences.themeMode.value)
-        assertEquals(15, preferences.autoRefreshMinutes.value)
-        assertEquals(UsageDisplayMode.Remaining, preferences.usageDisplayMode.value)
-        assertTrue(preferences.showProjectedUsage.value)
-        assertEquals(EmailPrivacyMode.Masked, preferences.emailPrivacyMode.value)
-        assertEquals(10, exported.themeMode?.updatedAtEpochMillis)
-        assertEquals(50, exported.emailPrivacyMode?.updatedAtEpochMillis)
+        val restored = AppPreferences(settings)
+        assertEquals(ThemeMode.Dark, restored.themeMode.value)
+        assertEquals(15, restored.autoRefreshMinutes.value)
+        assertEquals(UsageDisplayMode.Remaining, restored.usageDisplayMode.value)
+        assertEquals(EmailPrivacyMode.Masked, restored.emailPrivacyMode.value)
     }
 
     @Test
@@ -114,81 +97,48 @@ class AppPreferencesTest {
         assertFalse(preferences.accountSortReversed.value)
 
         preferences.setAccountSortMode(AccountSortMode.Manual)
-        preferences.setAccountManualOrder(order)
+        preferences.setAccountManualOrder(order + order.first())
         preferences.setAccountSortReversed(true)
 
         val restored = AppPreferences(settings)
         assertEquals(AccountSortMode.Manual, restored.accountSortMode.value)
         assertEquals(order, restored.accountManualOrder.value)
         assertTrue(restored.accountSortReversed.value)
-
-        val exported = restored.exportForSync()
-        assertEquals("Manual", exported.accountSortMode?.value)
-        assertEquals(encodeAccountOrder(order), exported.accountManualOrder?.value)
-
-        val imported = AppPreferences(MapSettings())
-        imported.importForSync(exported)
-        assertEquals(AccountSortMode.Manual, imported.accountSortMode.value)
-        assertEquals(order, imported.accountManualOrder.value)
-        assertTrue(imported.accountSortReversed.value)
     }
 
     @Test
-    fun staleSyncDoesNotOverwriteLocalSortPreferences() {
-        val settings = MapSettings()
-        val preferences = AppPreferences(settings)
-        val order = listOf(AccountKey(ProviderId.CODEX, "a"), AccountKey(ProviderId.GROK, "b"))
-        val current = CloudSyncPreferencesRecord(
-            accountSortMode = CloudSyncStringPreference("Manual", 200),
-            accountManualOrder = CloudSyncStringPreference(encodeAccountOrder(order), 200),
-            accountSortReversed = CloudSyncBooleanPreference(true, 200),
+    fun upgradeDiscardsOnlyTheFourDropboxSettingsWithoutApplyingTombstones() = runBlocking {
+        val key = AccountKey(ProviderId.CODEX, "fixture-row")
+        val digest = base64UrlNoPadding(sha256("CODEX:fixture-row".encodeToByteArray()))
+        val index = """{"accounts":[{"providerId":"CODEX","accountId":"fixture-row"}]}"""
+        val token = OAuthTokenBundle("fixture-bearer", "fixture-refresh", expiresAtEpochMillis = 300,
+            lastRefreshEpochMillis = 123, loginGeneration = "saved-grant", quotaIdentityHash = "saved-target")
+        val reading = ProviderUsageSnapshot(ProviderId.CODEX, AuthState.LoggedIn,
+            listOf(UsageWindow("primary", "Quota", 0.4, null)), Instant.fromEpochMilliseconds(100))
+
+        // Co-locate even the account and pairing fixtures: compare every unrelated value byte for byte.
+        val kept = mapOf<String, Any>(
+            "oauth_token_accounts_v1" to index, "oauth_token_v1_codex_$digest" to Json.encodeToString(token),
+            "usage_snapshot_accounts_v1" to index, "usage_snapshot_v1_codex_$digest" to Json.encodeToString(reading),
+            "pref_account_sort_mode" to "Manual", "pref_account_manual_order" to index, "pref_theme_mode" to "Dark",
+            "host_sync_enabled_v1" to true, "phones" to "fixture-pairing",
+            "cloud_sync_unrelated_key" to "not-owned", "unrelated_updated_at" to 17L,
         )
-        preferences.importForSync(current)
-
-        // A captured sync snapshot may be older or share a millisecond with a later edit.
-        for (timestamp in listOf(100L, 200L)) {
-            preferences.importForSync(
-                CloudSyncPreferencesRecord(
-                    accountSortMode = CloudSyncStringPreference("Name", timestamp),
-                    accountManualOrder = CloudSyncStringPreference(encodeAccountOrder(order.reversed()), timestamp),
-                    accountSortReversed = CloudSyncBooleanPreference(false, timestamp),
-                ),
-            )
-
-            val restored = AppPreferences(settings)
-            assertEquals(AccountSortMode.Manual, restored.accountSortMode.value)
-            assertEquals(order, restored.accountManualOrder.value)
-            assertTrue(restored.accountSortReversed.value)
-            assertEquals(current.accountManualOrder, restored.exportForSync().accountManualOrder)
+        val disk = kept.toMutableMap().apply {
+            put("cloud_sync_dropbox_token_v1", """{"accessToken":"obsolete","refreshToken":"obsolete","accountId":"fixture","expiresAtEpochMillis":300}""")
+            put("cloud_sync_dropbox_rev_v1", "old-revision")
+            put("cloud_sync_device_id_v1", "old-device")
+            put("cloud_sync_tombstones_v1", """{"accounts":[{"providerId":"CODEX","accountId":"fixture-row","deletedAtEpochMillis":999}]}""")
         }
-
-        preferences.importForSync(
-            CloudSyncPreferencesRecord(
-                accountSortMode = CloudSyncStringPreference("RefreshTime", 300),
-                accountManualOrder = CloudSyncStringPreference(encodeAccountOrder(order.reversed()), 300),
-                accountSortReversed = CloudSyncBooleanPreference(false, 300),
-            ),
-        )
-        assertEquals(AccountSortMode.RefreshTime, preferences.accountSortMode.value)
-        assertEquals(order.reversed(), preferences.accountManualOrder.value)
-        assertFalse(preferences.accountSortReversed.value)
-    }
-
-    @Test
-    fun invalidManualOrderSyncDoesNotClearTheSavedOrder() {
-        val preferences = AppPreferences(MapSettings())
-        val order = listOf(AccountKey(ProviderId.DROID, "kept"))
-        preferences.setAccountManualOrder(order)
-
-        preferences.importForSync(
-            CloudSyncPreferencesRecord(
-                accountManualOrder = CloudSyncStringPreference(
-                    "{",
-                    preferences.exportForSync().accountManualOrder!!.updatedAtEpochMillis + 1,
-                )
-            )
-        )
-
-        assertEquals(order, preferences.accountManualOrder.value)
+        val settings = MapSettings(disk)
+        repeat(2) {
+            val preferences = AppPreferences(settings)
+            assertEquals(kept, disk)
+            assertEquals(ThemeMode.Dark, preferences.themeMode.value)
+            assertEquals(AccountSortMode.Manual, preferences.accountSortMode.value)
+            assertEquals(listOf(key), preferences.accountManualOrder.value)
+            assertEquals(listOf(StoredToken(key, token)), SettingsTokenStore(settings).list())
+            assertEquals(reading, SettingsUsageSnapshotStore(settings).load(key))
+        }
     }
 }
