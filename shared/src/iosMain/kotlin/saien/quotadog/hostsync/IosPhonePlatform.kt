@@ -73,7 +73,11 @@ fun IosPhonePlatform.openPhoneSync(): PhoneSync? {
     }
     val client = HttpClient(Darwin) {
         followRedirects = false
-        install(WebSockets) { maxFrameSize = 65_536 }
+        install(WebSockets) {
+            maxFrameSize = 65_536
+            // A handover can leave the path satisfied but the old socket unreachable.
+            pingIntervalMillis = 60_000
+        }
         engine {
             val delegate = RelaySocketDelegate(KtorNSURLSessionDelegate())
             val config = NSURLSessionConfiguration.ephemeralSessionConfiguration.apply {

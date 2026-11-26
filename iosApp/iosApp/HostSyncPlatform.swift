@@ -164,14 +164,12 @@ private enum HostSyncKeychain {
     }
 }
 
-/// Opaque generations, not socket handles. Restart the monitor after backgrounding so an old
-/// satisfied path is never replayed on wake. NWPath equality compares path contents.
+/// A satisfied path is permission to connect, not the identity of the live WebSocket.
+/// VPN route updates can change NWPath without interrupting that socket.
 @MainActor private final class HostSyncNetwork: NSObject {
     private var listener: IosSyncNetworkListener?
     private var monitor: NWPathMonitor?
-    private var lastPath: NWPath?
-    private var reported = false
-    private var generation: Int64 = 0
+    private var lastAvailable: Bool?
 
     func start(_ listener: IosSyncNetworkListener) {
         guard self.listener !== listener else { return }
@@ -190,7 +188,7 @@ private enum HostSyncKeychain {
         monitor.pathUpdateHandler = { [weak self, weak monitor] path in
             DispatchQueue.main.async {
                 guard let self, let monitor, self.monitor === monitor else { return }
-                self.report(path.status == .satisfied ? path : nil)
+                self.report(available: path.status == .satisfied)
             }
         }
         monitor.start(queue: .main)
@@ -199,15 +197,13 @@ private enum HostSyncKeychain {
     @objc private func background(_ notification: Notification? = nil) {
         monitor?.cancel()
         monitor = nil
-        report(nil)
+        report(available: false)
     }
 
-    private func report(_ path: NWPath?) {
-        guard !reported || lastPath != path else { return }
-        reported = true
-        lastPath = path
-        if path != nil { generation += 1 }
-        listener?.networkChanged(handle: path == nil ? 0 : generation)
+    private func report(available: Bool) {
+        guard lastAvailable != available else { return }
+        lastAvailable = available
+        listener?.networkChanged(handle: available ? 1 : 0)
     }
 
     func stop() {
@@ -215,7 +211,6 @@ private enum HostSyncKeychain {
         monitor?.cancel()
         monitor = nil
         listener = nil
-        lastPath = nil
-        reported = false
+        lastAvailable = nil
     }
 }
